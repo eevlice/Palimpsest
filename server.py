@@ -29,11 +29,15 @@ os.makedirs(PROJECTS_DIR, exist_ok=True)
 
 MODELS = {
     "Opus 4.8": "claude-opus-4-8",
+    "Sonnet 5": "claude-sonnet-5",
     "Sonnet 4.6": "claude-sonnet-4-6",
     "Haiku 4.5": "claude-haiku-4-5-20251001",
 }
 PRICES = {
     "claude-opus-4-8":          {"in": 5.0,  "out": 25.0, "cache_write": 6.25, "cache_read": 0.50},
+    # Sonnet 5 bills at $2/$10 until 2026-08-31, then at the list price below.
+    # Costs shown for it are therefore high by ~a third until then.
+    "claude-sonnet-5":          {"in": 3.0,  "out": 15.0, "cache_write": 3.75, "cache_read": 0.30},
     "claude-sonnet-4-6":        {"in": 3.0,  "out": 15.0, "cache_write": 3.75, "cache_read": 0.30},
     "claude-haiku-4-5-20251001":{"in": 1.0,  "out": 5.0,  "cache_write": 1.25, "cache_read": 0.10},
 }
@@ -76,6 +80,11 @@ def call_cached(client, model, system_text, standing_context, per_call_text, max
     resp = client.messages.create(
         model=model,
         max_tokens=max_tokens,
+        # Sonnet 5 turns adaptive thinking on by default; the others leave it off
+        # when unset. Disable it everywhere so max_tokens is spent on translation,
+        # not reasoning, and behaviour is identical across models. Passed via
+        # extra_body so it works on the older anthropic SDK too.
+        extra_body={"thinking": {"type": "disabled"}},
         system=[{
             "type": "text",
             "text": system_text,
@@ -105,6 +114,7 @@ def call_simple(client, model, system, user, max_tokens=8192):
     """Non-cached call for setup pass."""
     resp = client.messages.create(
         model=model, max_tokens=max_tokens,
+        extra_body={"thinking": {"type": "disabled"}},
         system=system, messages=[{"role": "user", "content": user}],
     )
     text = "".join(b.text for b in resp.content if b.type == "text").strip()
