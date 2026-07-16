@@ -111,9 +111,12 @@
   .tgt-area{display:flex;flex-direction:column;gap:8px;}
   .tgt-edit{min-height:120px;overflow:hidden;}
   .placeholder{color:var(--ink-soft);font-style:italic;}
-  .seg-actions{display:flex;gap:8px;align-items:center;flex-wrap:nowrap;width:100%;}
+  .seg-actions{display:flex;gap:8px;align-items:center;flex-wrap:wrap;width:100%;}
   .seg-actions .seg-btn{white-space:nowrap;flex:0 0 auto;}
-  .seg-actions .seg-model{flex:1 1 auto;min-width:0;}
+  /* the only flexible item in the row, so it absorbs every shortfall. A fixed
+     basis keeps it readable when space is tight without letting it swallow a
+     whole line once the row wraps. */
+  .seg-actions .seg-model{flex:1 1 130px;min-width:130px;}
   .seg-actions .seg-cost{flex:0 0 auto;margin-left:auto;white-space:nowrap;}
   .seg-btn{font-family:'Spline Sans Mono',monospace;font-size:11px;letter-spacing:.08em;
     text-transform:uppercase;padding:6px 12px;cursor:pointer;border:1px solid var(--rule);
@@ -210,9 +213,9 @@
     .rail-item.active{border-color:var(--pencil);color:var(--ink);}
     #btn-rail-mobile{display:block !important;}
     /* per-paragraph actions: one cohesive responsive line */
-    .seg-actions{flex-wrap:nowrap;gap:6px;}
+    .seg-actions{flex-wrap:wrap;gap:6px;}
     .seg-actions .seg-btn{flex:0 0 auto;padding:6px 9px;}
-    .seg-actions .seg-model{flex:1 1 auto;min-width:0;}
+    .seg-actions .seg-model{flex:1 1 110px;min-width:110px;}
   }
   .header-nav{display:flex;gap:6px;flex:0 0 auto;}
   .provider-row{border:1px solid var(--rule);background:rgba(255,255,255,.4);
