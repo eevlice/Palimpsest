@@ -235,9 +235,9 @@
 
 <div class="wrap">
   <header>
-    <div class="header-top">
+    <div class="header-top" id="header-top">
       <h1>Palimpsest</h1>
-      <div class="header-nav">
+      <div class="header-nav" id="header-nav">
         <button class="tb icon-only" id="btn-settings-nav" onclick="openSettings()" title="API anahtarları"><svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><circle cx="8" cy="15" r="4"/><path d="M10.8 12.2 20 3"/><path d="m17 6 3 3"/><path d="m14 9 2 2"/></svg></button>
         <button class="tb icon-only" id="btn-spending-nav" onclick="openSpending()" title="Harcamalar"><svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><line x1="6" y1="20" x2="6" y2="10"/><line x1="12" y1="20" x2="12" y2="4"/><line x1="18" y1="20" x2="18" y2="14"/></svg></button>
       </div>
@@ -307,12 +307,11 @@
     <div class="ws-bar">
       <button class="tb icon-only" id="home-btn" title="Projelere dön">←</button>
       <span class="ws-divider"></span>
-      <div class="ws-tools">
+      <div class="ws-tools" id="ws-tools">
         <button class="tb icon-only" id="btn-glossary" title="Sözlük"><svg viewBox="0 0 24 24" width="15" height="15" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 7v14"/><path d="M3 18a1 1 0 0 1-1-1V4a1 1 0 0 1 1-1h5a4 4 0 0 1 4 4 4 4 0 0 1 4-4h5a1 1 0 0 1 1 1v13a1 1 0 0 1-1 1h-6a3 3 0 0 0-3 3 3 3 0 0 0-3-3z"/></svg></button>
         <button class="tb icon-only" id="btn-rules" title="Kurallar"><svg viewBox="0 0 24 24" width="15" height="15" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><path d="m3 17 2 2 4-4"/><path d="m3 7 2 2 4-4"/><path d="M13 6h8"/><path d="M13 12h8"/><path d="M13 18h8"/></svg></button>
         <button class="tb icon-only" id="btn-brief" title="Özet &amp; stil"><svg viewBox="0 0 24 24" width="15" height="15" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><path d="M15 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V7Z"/><path d="M14 2v4a2 2 0 0 0 2 2h4"/><path d="M10 9H8"/><path d="M16 13H8"/><path d="M16 17H8"/></svg></button>
         <button class="tb icon-only" id="btn-merge-mode" title="Paragrafları birleştir"><svg viewBox="0 0 24 24" width="15" height="15" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><path d="M9 17H7A5 5 0 0 1 7 7h2"/><path d="M15 7h2a5 5 0 1 1 0 10h-2"/><line x1="8" y1="12" x2="16" y2="12"/></svg></button>
-        <span class="ws-divider"></span>
         <button class="tb icon-only" id="export" title="Çeviriyi dışa aktar"><svg viewBox="0 0 24 24" width="15" height="15" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 15V3"/><path d="m7 10 5 5 5-5"/><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/></svg></button>
       </div>
       <div class="ws-status">
@@ -630,6 +629,9 @@ $('start').onclick=()=>{
 function showScreen(id){
   ['home','review','workspace','settings','spending'].forEach(s=>$(s).classList.add('hidden'));
   $(id).classList.remove('hidden');window.scrollTo({top:0,behavior:'smooth'});
+  // The workspace has a toolbar to sit in; every other screen only has the
+  // header, so the nav rides along rather than being duplicated.
+  (id==='workspace' ? $('ws-tools') : $('header-top')).appendChild($('header-nav'));
 }
 let _prevScreen='home';
 function closeToHome(){ showScreen(_prevScreen); }
