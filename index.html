@@ -410,9 +410,10 @@ let P=null,fileObj=null,saveTimer=null,winStart=0,EDIT_IDX=null;
 const WIN=10;
 let MODEL_CATALOG=[]; // [{provider,label,has_key,models:[{id,label,effort}]}]
 const EFFORT_LABEL={off:'Kapalı',low:'Düşük',medium:'Orta',high:'Yüksek'};
-// Filled-circle progression: how full the circle is = how much thinking. Keeps
-// the per-paragraph row narrow enough to stay on one line.
-const EFFORT_GLYPH={off:'○',low:'◔',medium:'◑',high:'●'};
+// Count of dots = how much thinking. One repeated glyph rather than a set of
+// distinct ones (○◔◑●): the mono font lacks the partial circles, so the browser
+// fell back per character and they rendered at clashing sizes.
+const EFFORT_GLYPH={off:'–',low:'•',medium:'••',high:'•••'};
 
 // --- inline SVG icons (stroke uses currentColor so they theme correctly) ---
 const ICON={
@@ -1119,7 +1120,6 @@ function renderWindow(){
           <button class="seg-btn primary" onclick="approveSeg(${i})" title="Bu paragrafı onayla">${ICON.check}${P.approved[i]?'':'<span>Onayla</span>'}</button>
           ${modelSelector(i)}${effortSelector(i)}
           <button class="seg-btn icon" onclick="runSeg(${i})" title="Yeniden çevir (makine)">${ICON.rerun}</button>
-          <button class="seg-btn icon" onclick="writeSeg(${i})" title="Kendi çevirimі yaz">${ICON.pencil}</button>
           ${costTag}
         </div>`;
     }else{
@@ -1231,7 +1231,6 @@ window.runSeg=async(i)=>{
         <button class="seg-btn primary" onclick="approveSeg(${i})" title="Bu paragrafı onayla">${ICON.check}<span>Approve</span></button>
         ${modelSelector(i)}${effortSelector(i)}
         <button class="seg-btn icon" onclick="runSeg(${i})" title="Yeniden çevir (makine)">${ICON.rerun}</button>
-        <button class="seg-btn icon" onclick="writeSeg(${i})" title="Kendi çevirimі yaz">${ICON.pencil}</button>
         <span class="seg-cost">$${data.cost.toFixed(4)}${cacheInfo}</span>
       </div>`;
     // restore selected model + effort in the new dropdowns
