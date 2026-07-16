@@ -9,7 +9,7 @@
   body{margin:0;background:var(--paper);color:var(--ink);
     font-family:'Newsreader',Georgia,serif;font-size:17px;line-height:1.6;}
   .wrap{max-width:1080px;margin:0 auto;padding:48px 28px 140px;}
-  header{border-bottom:1.5px solid var(--ink);padding-bottom:14px;margin-bottom:20px;}
+  header{padding-bottom:14px;margin-bottom:20px;}
   .header-top{display:flex;align-items:center;justify-content:space-between;gap:16px;}
   h1{font-family:'Fraunces',serif;font-weight:600;font-size:26px;
     line-height:1;margin:0;letter-spacing:-.02em;}
@@ -68,7 +68,7 @@
   .pa:hover{border-color:var(--ink);color:var(--ink);}
   .pa.danger:hover{border-color:var(--pencil);color:var(--pencil);}
   .ws-bar{display:flex;align-items:center;gap:6px;flex-wrap:wrap;
-    border-bottom:1px solid var(--rule);padding-bottom:12px;margin-bottom:16px;}
+    padding-bottom:12px;margin-bottom:16px;}
   .ws-divider{width:1px;height:18px;background:var(--rule);margin:0 4px;flex:0 0 auto;}
   .ws-tools{display:flex;gap:6px;}
   .ws-status{display:flex;align-items:center;gap:6px;margin-left:auto;
@@ -196,7 +196,7 @@
     .seg{grid-template-columns:1fr;}
     .ws-layout{grid-template-columns:1fr;}
     /* toolbar: status group wraps to its own full-width line below the tools */
-    .ws-status{flex:1 1 100%;order:1;justify-content:flex-start;margin-left:0;}
+    .ws-status{flex:1 1 100%;order:1;justify-content:flex-end;}
     .ws-bar{gap:8px 10px;}
     /* rail = collapsible multi-column chip grid, lives under the tracker */
     .rail{position:static;max-height:42vh;overflow-y:auto;border-right:none;
