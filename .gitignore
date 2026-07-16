@@ -1,0 +1,14 @@
+# Your Anthropic API key. Never commit this.
+key.txt
+
+# Your books. Each is a JSON file the app writes as you work.
+projects/
+
+# Python
+__pycache__/
+*.py[cod]
+venv/
+.venv/
+
+# macOS
+.DS_Store

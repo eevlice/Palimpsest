@@ -1,0 +1,1094 @@
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Palimpsest</title>
+<style>
+  @import url('https://fonts.googleapis.com/css2?family=Fraunces:opsz,wght@9..144,400;9..144,500;9..144,600&family=Spline+Sans+Mono:wght@400;500&family=Newsreader:ital,opsz,wght@0,6..72,400;0,6..72,500;1,6..72,400&display=swap');
+  :root{--paper:#f3ede1;--paper-deep:#eae1d0;--ink:#211c16;--ink-soft:#5c5447;
+    --rule:#cdc1ac;--pencil:#b23a2e;--pencil-soft:#c8695e;--thread:#3f6151;}
+  *{box-sizing:border-box;}
+  body{margin:0;background:var(--paper);color:var(--ink);
+    font-family:'Newsreader',Georgia,serif;font-size:17px;line-height:1.6;}
+  .wrap{max-width:1080px;margin:0 auto;padding:48px 28px 140px;}
+  header{border-bottom:1.5px solid var(--ink);padding-bottom:20px;margin-bottom:30px;}
+  .eyebrow{font-family:'Spline Sans Mono',monospace;font-size:11px;letter-spacing:.22em;
+    text-transform:uppercase;color:var(--pencil);margin:0 0 8px;}
+  h1{font-family:'Fraunces',serif;font-weight:600;font-size:clamp(36px,6vw,58px);
+    line-height:1;margin:0;letter-spacing:-.02em;}
+  .sub{color:var(--ink-soft);margin:12px 0 0;max-width:58ch;}
+  label{font-family:'Spline Sans Mono',monospace;font-size:11px;letter-spacing:.14em;
+    text-transform:uppercase;color:var(--ink-soft);display:block;margin-bottom:6px;}
+  input,select,textarea{font-family:'Newsreader',serif;font-size:16px;color:var(--ink);
+    background:rgba(255,255,255,.5);border:1px solid var(--rule);border-radius:0;
+    padding:11px 13px;width:100%;}
+  input:focus,select:focus,textarea:focus{outline:2px solid var(--thread);outline-offset:1px;background:#fffdf8;}
+  textarea{resize:vertical;line-height:1.6;}
+  .mono{font-family:'Spline Sans Mono',monospace;font-size:14px;}
+  .mono-sm{font-family:'Spline Sans Mono',monospace;font-size:13px;}
+  .row{display:grid;grid-template-columns:repeat(3,1fr);gap:18px;margin-bottom:22px;}
+  .row2{display:grid;grid-template-columns:1fr 1fr;gap:18px;margin-bottom:0;}
+  .run-full{width:100%;text-align:center;}
+  .field{display:flex;flex-direction:column;}
+  button.run{font-family:'Spline Sans Mono',monospace;font-size:13px;letter-spacing:.12em;
+    text-transform:uppercase;background:var(--ink);color:var(--paper);border:none;
+    padding:14px 28px;cursor:pointer;transition:background .15s;}
+  button.run:hover{background:var(--pencil);}
+  button.run:disabled{opacity:.5;cursor:wait;}
+  .tb{font-family:'Spline Sans Mono',monospace;font-size:11px;letter-spacing:.1em;
+    text-transform:uppercase;background:none;border:1px solid var(--rule);color:var(--ink-soft);
+    padding:6px 12px;cursor:pointer;}
+  .tb:hover{border-color:var(--ink);color:var(--ink);}
+  .tb.active{border-color:var(--thread);color:var(--thread);}
+  .drop{border:1.5px dashed var(--rule);padding:38px;text-align:center;cursor:pointer;
+    background:rgba(255,255,255,.3);transition:border-color .15s,background .15s;margin-bottom:22px;}
+  .drop:hover,.drop.over{border-color:var(--pencil);background:#fffdf8;}
+  .drop p{margin:6px 0 0;color:var(--ink-soft);}
+  .drop .big{font-family:'Fraunces',serif;font-size:22px;color:var(--ink);}
+  .meta{font-family:'Spline Sans Mono',monospace;font-size:12px;color:var(--ink-soft);}
+  .loading{font-family:'Spline Sans Mono',monospace;font-size:13px;color:var(--ink-soft);}
+  .loading::after{content:'▍';animation:blink 1s steps(2) infinite;}
+  @keyframes blink{50%{opacity:0;}}
+  .err{font-family:'Spline Sans Mono',monospace;font-size:13px;color:var(--pencil);
+    border:1px solid var(--pencil-soft);background:rgba(178,58,46,.06);padding:14px 16px;margin-top:16px;}
+  .note{font-family:'Spline Sans Mono',monospace;font-size:12px;color:var(--thread);
+    border:1px solid var(--thread);background:rgba(63,97,81,.06);padding:12px 14px;margin-bottom:20px;}
+  .hidden{display:none;}
+  .panel-title{font-family:'Fraunces',serif;font-weight:500;font-size:24px;
+    border-bottom:1px solid var(--rule);padding-bottom:7px;margin:30px 0 14px;
+    display:flex;align-items:baseline;gap:12px;}
+  .panel-title .n{font-family:'Spline Sans Mono',monospace;font-size:12px;color:var(--pencil);}
+  .save-pill{font-family:'Spline Sans Mono',monospace;font-size:11px;color:var(--thread);}
+  .proj{display:flex;align-items:center;gap:14px;border-bottom:1px solid var(--rule);padding:14px 0;}
+  .proj .pname{font-family:'Fraunces',serif;font-size:20px;cursor:pointer;}
+  .proj .pname:hover{color:var(--pencil);}
+  .proj .pmeta{font-family:'Spline Sans Mono',monospace;font-size:11px;color:var(--ink-soft);margin-left:auto;}
+  .proj-actions{display:flex;gap:6px;margin-left:14px;}
+  .pa{font-family:'Spline Sans Mono',monospace;font-size:10px;letter-spacing:.06em;
+    text-transform:uppercase;border:1px solid var(--rule);background:none;color:var(--ink-soft);
+    padding:4px 9px;cursor:pointer;}
+  .pa:hover{border-color:var(--ink);color:var(--ink);}
+  .pa.danger:hover{border-color:var(--pencil);color:var(--pencil);}
+  .ws-bar{display:flex;align-items:center;gap:12px;flex-wrap:wrap;
+    border-bottom:1px solid var(--rule);padding-bottom:12px;margin-bottom:6px;}
+  .ws-bar .meta{margin-left:auto;}
+  .ws-title{font-family:'Fraunces',serif;font-weight:500;font-size:20px;margin-right:8px;}
+  .drawer{background:rgba(255,255,255,.45);border:1px solid var(--rule);
+    padding:16px 18px;margin-bottom:14px;animation:slideDown .2s ease;}
+  @keyframes slideDown{from{opacity:0;transform:translateY(-6px);}to{opacity:1;transform:none;}}
+  .drawer label{margin-top:12px;}.drawer label:first-child{margin-top:0;}
+  .ws-layout{display:grid;grid-template-columns:84px 1fr;gap:18px;align-items:start;}
+  .rail{position:sticky;top:18px;max-height:calc(100vh - 120px);overflow-y:auto;
+    border-right:1px solid var(--rule);padding-right:8px;}
+  .rail-jump{font-family:'Spline Sans Mono',monospace;font-size:10px;letter-spacing:.06em;
+    text-transform:uppercase;border:1px solid var(--rule);background:none;color:var(--ink-soft);
+    padding:7px 8px;cursor:pointer;width:100%;margin-bottom:10px;line-height:1.3;}
+  .rail-jump:hover{border-color:var(--pencil);color:var(--pencil);}
+  .rail-item{display:flex;align-items:center;justify-content:center;gap:6px;
+    font-family:'Spline Sans Mono',monospace;font-size:11px;color:var(--ink-soft);
+    padding:3px 5px;cursor:pointer;border-left:2px solid transparent;}
+  .rail-item:hover{background:rgba(255,255,255,.5);}
+  .rail-item.active{border-left-color:var(--pencil);color:var(--ink);background:rgba(255,255,255,.6);}
+  .dot{width:7px;height:7px;border-radius:50%;flex:0 0 auto;background:var(--rule);}
+  .dot.translated{background:var(--pencil-soft);}
+  .dot.approved{background:var(--thread);}
+  .wn-btn{font-family:'Spline Sans Mono',monospace;font-size:11px;letter-spacing:.08em;
+    text-transform:uppercase;border:1px solid var(--rule);background:none;color:var(--ink-soft);
+    padding:6px 12px;cursor:pointer;}
+  .wn-btn:hover:not(:disabled){border-color:var(--ink);color:var(--ink);}
+  .wn-btn:disabled{opacity:.35;cursor:default;}
+  .wn-label{font-family:'Spline Sans Mono',monospace;font-size:11px;color:var(--ink-soft);}
+  .seg{border-bottom:1px solid var(--rule);padding:20px 0;display:grid;
+    grid-template-columns:1fr 1fr;gap:22px;}
+  .seg.done{background:rgba(63,97,81,.06);margin:0 -10px;padding-left:10px;padding-right:10px;}
+  .seg .src{font-size:17px;line-height:1.65;color:var(--ink-soft);white-space:pre-wrap;}
+  .seg-num{font-family:'Spline Sans Mono',monospace;font-size:11px;color:var(--pencil);
+    grid-column:1 / -1;margin-bottom:-6px;}
+  .tgt-area{display:flex;flex-direction:column;gap:8px;}
+  .tgt-edit{min-height:120px;overflow:hidden;}
+  .placeholder{color:var(--ink-soft);font-style:italic;}
+  .seg-actions{display:flex;gap:8px;align-items:center;flex-wrap:nowrap;width:100%;}
+  .seg-actions .seg-btn{white-space:nowrap;flex:0 0 auto;}
+  .seg-actions .seg-model{flex:1 1 auto;min-width:0;}
+  .seg-actions .seg-cost{flex:0 0 auto;margin-left:auto;white-space:nowrap;}
+  .seg-btn{font-family:'Spline Sans Mono',monospace;font-size:11px;letter-spacing:.08em;
+    text-transform:uppercase;padding:6px 12px;cursor:pointer;border:1px solid var(--rule);
+    background:none;color:var(--ink-soft);}
+  .seg-btn.primary{background:var(--ink);color:var(--paper);border-color:var(--ink);}
+  .seg-btn.primary:hover{background:var(--pencil);border-color:var(--pencil);}
+  .seg-btn:hover{border-color:var(--ink);color:var(--ink);}
+  .seg-btn:disabled{opacity:.4;cursor:wait;}
+  .seg-cost{font-family:'Spline Sans Mono',monospace;font-size:11px;color:var(--ink-soft);}
+  .merge-join{grid-column:1 / -1;display:flex;justify-content:center;margin-top:6px;}
+  .merge-btn{display:inline-flex;align-items:center;gap:6px;font-family:'Spline Sans Mono',monospace;
+    font-size:10px;letter-spacing:.06em;text-transform:uppercase;border:1px dashed var(--rule);
+    background:none;color:var(--ink-soft);padding:4px 12px;cursor:pointer;}
+  .merge-btn:hover{border-color:var(--thread);color:var(--thread);border-style:solid;}
+  .merge-btn.undo{border-color:var(--pencil-soft);color:var(--pencil);}
+  .rail-item.merge-sel{background:rgba(178,58,46,.12);border-left-color:var(--pencil);color:var(--pencil);}
+  .merge-confirm{display:flex;align-items:center;gap:10px;padding:10px 14px;
+    background:rgba(178,58,46,.07);border:1px solid var(--pencil-soft);margin-bottom:12px;
+    font-family:'Spline Sans Mono',monospace;font-size:12px;color:var(--pencil);}
+  .merge-confirm button{font-family:'Spline Sans Mono',monospace;font-size:11px;
+    letter-spacing:.06em;text-transform:uppercase;padding:5px 12px;cursor:pointer;border:1px solid;}
+  .merge-confirm .mc-go{background:var(--pencil);color:var(--paper);border-color:var(--pencil);}
+  .merge-confirm .mc-go:hover{background:var(--ink);}
+  .merge-confirm .mc-cancel{background:none;color:var(--ink-soft);border-color:var(--rule);}
+  .merge-confirm .mc-cancel:hover{border-color:var(--ink);color:var(--ink);}
+  #btn-merge-mode.active{border-color:var(--pencil);color:var(--pencil);}
+  .merge-btn.undo:hover{border-color:var(--pencil);color:var(--pencil);background:rgba(178,58,46,.05);}
+  .merge-join{gap:8px;}
+  .undo-merge{font-family:'Spline Sans Mono',monospace;font-size:11px;letter-spacing:.06em;
+    text-transform:uppercase;border:1px solid var(--pencil-soft);background:none;color:var(--pencil);
+    padding:6px 12px;cursor:pointer;}
+  .undo-merge:hover{background:rgba(178,58,46,.06);}
+  .seg-btn svg{display:block;}
+  .seg-btn.icon{padding:7px 9px;}
+  .seg-btn.primary{display:inline-flex;align-items:center;gap:6px;}
+  .seg-btn.primary svg{margin:0;}
+  .seg-cache{font-family:'Spline Sans Mono',monospace;font-size:10px;color:var(--thread);}
+  /* glossary list */
+  .glist{margin:10px 0 0;border:1px solid var(--rule);background:rgba(255,255,255,.4);
+    max-height:280px;overflow-y:auto;}
+  .glist-row{display:grid;grid-template-columns:1fr 1fr auto;align-items:center;
+    gap:10px;padding:10px 12px;border-bottom:1px solid var(--rule);cursor:pointer;
+    transition:background .1s;}
+  .glist-row:last-child{border-bottom:none;}
+  .glist-row:hover{background:rgba(255,255,255,.7);}
+  .glist-row.active{background:#fffdf8;box-shadow:inset 2px 0 0 var(--thread);}
+  .glist-src{font-family:'Spline Sans Mono',monospace;font-size:13px;color:var(--ink);}
+  .glist-tgt{font-family:'Spline Sans Mono',monospace;font-size:13px;color:var(--thread);}
+  .glist-tgt.empty{color:var(--rule);font-style:italic;}
+  .glist-x{border:none;background:none;color:var(--pencil-soft);font-size:15px;
+    cursor:pointer;padding:0 4px;line-height:1;flex:0 0 auto;}
+  .glist-x:hover{color:var(--pencil);}
+  .glist-empty{padding:12px;font-family:'Spline Sans Mono',monospace;font-size:12px;
+    color:var(--ink-soft);}
+  #chip-cancel{background:none;color:var(--ink-soft);border-color:var(--rule);}
+  #chip-cancel:hover{border-color:var(--pencil);color:var(--pencil);background:none;}
+  .chip-add{display:flex;gap:8px;align-items:center;margin-bottom:14px;padding:12px;
+    background:rgba(255,255,255,.7);border:1px solid var(--thread);}
+  .chip-add input{font-size:14px;padding:9px 11px;flex:1 1 0;min-width:0;}
+  .chip-eq{font-family:'Spline Sans Mono',monospace;color:var(--ink-soft);flex:0 0 auto;}
+  .chip-add button{font-family:'Spline Sans Mono',monospace;font-size:12px;text-transform:uppercase;
+    letter-spacing:.06em;border:1px solid var(--ink);background:var(--ink);color:var(--paper);
+    padding:9px 16px;cursor:pointer;flex:0 0 auto;}
+  .chip-add button:hover{background:var(--pencil);border-color:var(--pencil);}
+  /* progress tracker */
+  .tracker{display:flex;align-items:center;gap:14px;margin:0 0 16px;padding:12px 16px;
+    background:rgba(255,255,255,.4);border:1px solid var(--rule);}
+  .tracker-bar{flex:1;height:8px;background:var(--paper-deep);position:relative;overflow:hidden;}
+  .tracker-fill-appr{position:absolute;left:0;top:0;bottom:0;background:var(--thread);transition:width .3s;}
+  .tracker-fill-trans{position:absolute;left:0;top:0;bottom:0;background:var(--pencil-soft);
+    opacity:.5;transition:width .3s;}
+  .tracker-label{font-family:'Spline Sans Mono',monospace;font-size:11px;color:var(--ink-soft);white-space:nowrap;}
+  /* centered nav */
+  .window-nav{display:flex;align-items:center;gap:14px;margin:4px 0 10px;justify-content:center;}
+  .export-bar{position:sticky;bottom:0;background:var(--paper-deep);
+    border-top:1.5px solid var(--ink);padding:14px 0;margin-top:20px;
+    display:flex;gap:18px;align-items:center;justify-content:center;}
+  .seg-model{font-family:'Spline Sans Mono',monospace;font-size:11px;color:var(--ink);
+    background:rgba(255,255,255,.5);border:1px solid var(--rule);padding:5px 8px;cursor:pointer;}
+  @media(max-width:760px){
+    .row{grid-template-columns:1fr;}
+    .row2{grid-template-columns:1fr 1fr;}
+    .seg{grid-template-columns:1fr;}
+    .ws-layout{grid-template-columns:1fr;}
+    /* toolbar: tidy uniform buttons, title on its own full-width line */
+    .ws-bar{gap:8px 10px;align-items:baseline;}
+    /* top line: title on left; cost + saved together on the right, same line */
+    .ws-title{order:-3;flex:1 1 100%;margin:0 0 2px;font-size:22px;}
+    .ws-bar .meta{order:-2;flex:0 0 auto;margin-left:auto;text-align:right;}
+    .ws-bar .save-pill{order:-1;flex:0 0 auto;text-align:right;margin-left:8px;}
+    .ws-bar .tb{flex:1 1 auto;text-align:center;}
+    /* rail = collapsible multi-column chip grid, lives under the tracker */
+    .rail{position:static;max-height:42vh;overflow-y:auto;border-right:none;
+      border:1px solid var(--rule);background:rgba(255,255,255,.5);
+      padding:10px;margin-bottom:16px;display:none;}
+    .rail.open{display:block;}
+    .rail.open #rail-items{display:grid;
+      grid-template-columns:repeat(auto-fill,minmax(54px,1fr));gap:6px;}
+    .rail-item{justify-content:center;padding:7px 4px;border-left:none;
+      border:1px solid var(--rule);background:rgba(255,255,255,.5);}
+    .rail-item.active{border-color:var(--pencil);color:var(--ink);}
+    #btn-rail-mobile{display:block !important;}
+    /* per-paragraph actions: one cohesive responsive line */
+    .seg-actions{flex-wrap:nowrap;gap:6px;}
+    .seg-actions .seg-btn{flex:0 0 auto;padding:6px 9px;}
+    .seg-actions .seg-model{flex:1 1 auto;min-width:0;}
+  }
+</style>
+
+<div class="wrap">
+  <header>
+    <p class="eyebrow">Bağlam duyarlı kitap çevirisi</p>
+    <h1>Palimpsest</h1>
+    <p class="sub">Bir kitap bırak. Senin kontrolündeki özeti oluşturmak için bir kez okur, ardından paragraf paragraf çevirir — her zaman bağlamla birlikte. Her şey kendiliğinden kaydedilir.</p>
+  </header>
+  <div id="nokey" class="note hidden">API anahtarı bulunamadı. Anthropic anahtarını uygulama klasöründeki <b>key.txt</b> dosyasına ekle, ardından sayfayı yenile.</div>
+
+  <!-- ========== HOME ========== -->
+  <section id="home">
+    <div class="panel-title">Projeler</div>
+    <div id="project-list"><p class="meta">No saved projects yet.</p></div>
+    <div class="panel-title" style="margin-top:36px;">Yeni proje başlat</div>
+    <div class="field" style="margin-bottom:18px;">
+      <label for="pname">Proje adı</label>
+      <input id="pname" placeholder="örn. Aşk-ı Memnu">
+    </div>
+    <div class="row2">
+      <div class="field"><label for="src">Kaynak dil</label>
+        <input id="src" list="langs" value="English"></div>
+      <div class="field"><label for="tgt">Hedef dil</label>
+        <input id="tgt" list="langs" value="Turkish"></div>
+    </div>
+    <datalist id="langs">
+      <option value="English"><option value="Turkish"><option value="German">
+      <option value="French"><option value="Spanish"><option value="Italian">
+      <option value="Portuguese"><option value="Dutch"><option value="Russian">
+      <option value="Arabic"><option value="Persian"><option value="Greek">
+      <option value="Japanese"><option value="Korean"><option value="Chinese">
+      <option value="Polish"><option value="Swedish"><option value="Ukrainian">
+      <option value="Hebrew"><option value="Hindi"><option value="Latin">
+      <option value="Ottoman Turkish">
+    </datalist>
+    <div class="field" style="margin:18px 0;">
+      <label for="model">Model</label>
+      <select id="model"></select>
+    </div>
+    <div class="drop" id="drop">
+      <p class="big">Kitabını buraya bırak</p>
+      <p>ya da seç — .txt, .md veya .docx</p>
+      <input type="file" id="file" accept=".txt,.md,.docx" class="hidden">
+    </div>
+    <button class="run run-full" id="analyze" disabled>Kitabı oku ve bağlamı oluştur</button>
+    <div class="meta" id="setup-status" style="margin-top:12px;"></div>
+    <div id="setup-err"></div>
+  </section>
+
+  <!-- ========== CONTEXT REVIEW ========== -->
+  <section id="review" class="hidden">
+    <div class="panel-title"><span class="n">02</span> Bağlamı gözden geçir</div>
+    <p class="sub" style="margin-bottom:20px;">İstediğini düzenle. Bunların tamamı her paragrafla birlikte taşınır.</p>
+    <label for="synopsis">Özet — ses, ton, korunacaklar</label>
+    <textarea id="synopsis" style="min-height:140px;"></textarea>
+    <label for="terms" style="margin-top:18px;">Sözlük — isimler, terimler, ifadeler (kaynak = hedef, satır satır)</label>
+    <textarea id="terms" class="mono" style="min-height:150px;"></textarea>
+    <label for="rules" style="margin-top:18px;">Kurallar — katı kısıtlamalar, satır satır</label>
+    <textarea id="rules" class="mono" style="min-height:70px;" placeholder="örn. Şapkalı â kullanma&#10;'siz' formu kullan, asla 'sen' değil&#10;İngilizce marka adlarını çevirme"></textarea>
+    <label for="style" style="margin-top:18px;">Stil örneği — eşleştirilecek hedef dil metni (isteğe bağlı)</label>
+    <textarea id="style" style="min-height:80px;" placeholder="Sesini yansıtmak istediğin hedef dilde bir paragraf yapıştır."></textarea>
+    <div style="margin-top:22px;display:flex;gap:16px;align-items:center;">
+      <button class="run" id="start">Onayla ve çeviriye başla</button>
+      <span class="meta" id="review-meta"></span>
+    </div>
+  </section>
+
+  <!-- ========== WORKSPACE ========== -->
+  <section id="workspace" class="hidden">
+    <div class="ws-bar">
+      <button class="tb" id="home-btn">← Projeler</button>
+      <span class="ws-title" id="ws-title"></span>
+      <button class="tb" id="btn-glossary">Sözlük</button>
+      <button class="tb" id="btn-rules">Kurallar</button>
+      <button class="tb" id="btn-brief">Özet &amp; stil</button>
+      <button class="tb" id="btn-merge-mode" title="Select two paragraphs to merge">⊕ Birleştir</button>
+      <span class="meta" id="running-cost"></span>
+      <span class="save-pill" id="save-pill"></span>
+    </div>
+    <div class="drawer hidden" id="drawer-glossary">
+      <div style="display:flex;align-items:center;gap:12px;margin-bottom:10px;">
+        <label style="margin:0;">Sözlük</label>
+        <button class="undo-merge" id="clean-gloss" style="margin-left:auto;color:var(--thread);border-color:var(--thread);">✦ Sözlüğü temizle</button>
+        <span class="meta" id="clean-status"></span>
+      </div>
+      <div class="chip-add">
+        <input class="k" id="chip-src" placeholder="kaynak terim">
+        <span class="chip-eq">=</span>
+        <input id="chip-tgt" placeholder="hedef terim">
+        <button id="chip-add-btn">Ekle</button>
+        <button id="chip-cancel" style="display:none;">İptal</button>
+      </div>
+      <div class="glist" id="chip-list"></div>
+    </div>
+    <div class="drawer hidden" id="drawer-rules">
+      <label>Kurallar — katı kısıtlamalar, satır satır</label>
+      <textarea id="d-rules" class="mono-sm" style="min-height:90px;"></textarea>
+    </div>
+    <div class="drawer hidden" id="drawer-brief">
+      <label>Özet</label><textarea id="d-syn" style="min-height:80px;"></textarea>
+      <label>Stil örneği</label><textarea id="d-style" style="min-height:60px;"></textarea>
+    </div>
+    <div class="tracker">
+      <div class="tracker-bar">
+        <div class="tracker-fill-trans" id="tk-trans"></div>
+        <div class="tracker-fill-appr" id="tk-appr"></div>
+      </div>
+      <span class="tracker-label" id="tk-label"></span>
+    </div>
+    <button class="tb run-full" id="btn-rail-mobile" style="display:none;margin-bottom:12px;">¶ Paragraflar</button>
+    <div id="merge-confirm-bar"></div>
+    <div class="ws-layout">
+      <nav class="rail">
+        <div id="rail-items"></div>
+      </nav>
+      <div>
+        <div class="window-nav">
+          <button class="wn-btn" id="prev-win">← Önceki</button>
+          <span class="wn-label" id="win-label"></span>
+          <button class="wn-btn" id="next-win">Sonraki →</button>
+        </div>
+        <div id="segments"></div>
+        <div class="window-nav" style="margin-top:28px;">
+          <button class="wn-btn" id="prev-win2">← Önceki</button>
+          <span class="wn-label" id="win-label2"></span>
+          <button class="wn-btn" id="next-win2">Sonraki →</button>
+        </div>
+      </div>
+    </div>
+    <div class="export-bar">
+      <button class="run" id="export">Çeviriyi dışa aktar</button>
+      <span class="meta" id="export-meta"></span>
+    </div>
+  </section>
+</div>
+
+<script>
+const $=id=>document.getElementById(id);
+const esc=s=>(s||'').replace(/[&<>]/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;'}[c]));
+
+let P=null,fileObj=null,saveTimer=null,winStart=0;
+const WIN=10;
+let MODEL_LIST=[];
+
+// --- inline SVG icons (stroke uses currentColor so they theme correctly) ---
+const ICON={
+  check:'<svg viewBox="0 0 24 24" width="15" height="15" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round"><polyline points="20 6 9 17 4 12"/></svg>',
+  rerun:'<svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><polyline points="23 4 23 10 17 10"/><path d="M20.49 15a9 9 0 1 1-2.12-9.36L23 10"/></svg>',
+  pencil:'<svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 20h9"/><path d="M16.5 3.5a2.12 2.12 0 0 1 3 3L7 19l-4 1 1-4Z"/></svg>',
+  translate:'<svg viewBox="0 0 24 24" width="15" height="15" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><path d="m5 8 6 6"/><path d="m4 14 6-6 2-3"/><path d="M2 5h12"/><path d="M7 2h1"/><path d="m22 22-5-10-5 10"/><path d="M14 18h6"/></svg>',
+  merge:'<svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><polyline points="8 7 12 11 16 7"/><polyline points="8 13 12 17 16 13"/></svg>'
+};
+
+// ================================================================
+// INIT
+// ================================================================
+fetch('/key_status').then(r=>r.json()).then(d=>{if(!d.has_key)$('nokey').classList.remove('hidden');});
+fetch('/models').then(r=>r.json()).then(list=>{
+  MODEL_LIST=list;
+  const sel=$('model');
+  list.forEach(n=>{const o=document.createElement('option');o.textContent=n;sel.appendChild(o);});
+  const bal=list.find(n=>n.toLowerCase().includes('sonnet'));sel.value=bal||list[0];
+  window.__defaultModel=bal||list[0];
+  // If a project is already open, re-render now that models are ready
+  if(P&&P.segments&&P.segments.length){
+    renderRail(); renderWindow(); updateProgress();
+  }
+});
+refreshProjects();
+
+// ================================================================
+// PROJECTS
+// ================================================================
+function refreshProjects(){
+  fetch('/projects').then(r=>r.json()).then(list=>{
+    const c=$('project-list');
+    if(!list.length){c.innerHTML='<p class="meta">No saved projects yet.</p>';return;}
+    c.innerHTML='';
+    list.forEach(p=>{
+      const d=document.createElement('div');d.className='proj';
+      const nm=document.createElement('span');nm.className='pname';nm.textContent=p.name;
+      nm.onclick=()=>openProject(p.id);
+      const meta=document.createElement('span');meta.className='pmeta';
+      meta.textContent=`${p.done}/${p.count} ¶ · ${p.updated||''}`;
+      const acts=document.createElement('span');acts.className='proj-actions';
+      acts.innerHTML=`<button class="pa" data-a="rename">Yeniden adlandır</button>`+
+        `<button class="pa" data-a="dup">Çoğalt</button>`+
+        `<button class="pa" data-a="export">Dışa aktar</button>`+
+        `<button class="pa danger" data-a="del">Sil</button>`;
+      acts.querySelector('[data-a=rename]').onclick=()=>renameProject(p);
+      acts.querySelector('[data-a=dup]').onclick=()=>duplicateProject(p);
+      acts.querySelector('[data-a=export]').onclick=()=>exportProject(p.id);
+      acts.querySelector('[data-a=del]').onclick=()=>deleteProject(p);
+      d.appendChild(nm);d.appendChild(meta);d.appendChild(acts);c.appendChild(d);
+    });
+  });
+}
+function openProject(pid){
+  fetch('/project/'+encodeURIComponent(pid)).then(r=>r.json()).then(d=>{P=normalizeProject(d);enterWorkspace();});
+}
+function renameProject(p){
+  const name=prompt('Rename this book:',p.name);if(name===null)return;const t=name.trim();if(!t)return;
+  fetch('/rename',{method:'POST',headers:{'Content-Type':'application/json'},
+    body:JSON.stringify({id:p.id,name:t})}).then(()=>refreshProjects());
+}
+function duplicateProject(p){
+  fetch('/duplicate',{method:'POST',headers:{'Content-Type':'application/json'},
+    body:JSON.stringify({id:p.id})}).then(()=>refreshProjects());
+}
+function deleteProject(p){
+  if(!confirm(`Delete "${p.name}"?\n\nMoves to _trash folder — recoverable.`))return;
+  fetch('/delete',{method:'POST',headers:{'Content-Type':'application/json'},
+    body:JSON.stringify({id:p.id})}).then(()=>refreshProjects());
+}
+function exportProject(pid){
+  fetch('/project/'+encodeURIComponent(pid)).then(r=>r.json()).then(d=>{
+    const out=d.segments.map((s,i)=>d.finals[i]!==null?d.finals[i]:'[UNTRANSLATED] '+s).join('\n\n');
+    const blob=new Blob([out],{type:'text/plain;charset=utf-8'});
+    const a=document.createElement('a');a.href=URL.createObjectURL(blob);
+    a.download=d.name.replace(/[^a-z0-9]+/gi,'_')+'.'+d.target_lang.toLowerCase()+'.txt';a.click();
+  });
+}
+
+// ================================================================
+// FILE DROP + SETUP
+// ================================================================
+const drop=$('drop'),fileInput=$('file');
+drop.onclick=()=>fileInput.click();
+drop.ondragover=e=>{e.preventDefault();drop.classList.add('over');};
+drop.ondragleave=()=>drop.classList.remove('over');
+drop.ondrop=e=>{e.preventDefault();drop.classList.remove('over');
+  if(e.dataTransfer.files.length){fileInput.files=e.dataTransfer.files;pickFile();}};
+fileInput.onchange=pickFile;
+function pickFile(){
+  fileObj=fileInput.files[0];
+  if(fileObj){drop.querySelector('.big').textContent=fileObj.name;
+    drop.querySelector('p:not(.big)').textContent='ready';$('analyze').disabled=false;}
+}
+
+$('analyze').onclick=async()=>{
+  if(!fileObj)return;
+  const name=$('pname').value.trim()||fileObj.name.replace(/\.[^.]+$/,'');
+  $('analyze').disabled=true;$('setup-err').innerHTML='';
+  $('setup-status').innerHTML='<span class="loading">Reading the whole book</span>';
+  const fd=new FormData();
+  fd.append('file',fileObj);fd.append('source_lang',$('src').value);
+  fd.append('target_lang',$('tgt').value);fd.append('model',$('model').value);
+  try{
+    const res=await fetch('/setup',{method:'POST',body:fd});
+    const data=await res.json();
+    if(!res.ok){$('setup-err').innerHTML=`<div class="err">${esc(data.error)}</div>`;
+      $('analyze').disabled=false;$('setup-status').textContent='';return;}
+    P={id:'p_'+Date.now(),name,source_lang:$('src').value,target_lang:$('tgt').value,
+      model:(($('model').value)||'Sonnet 4.6'),segments:data.segments,
+      finals:new Array(data.segments.length).fill(null),
+      approved:new Array(data.segments.length).fill(false),
+      synopsis:data.synopsis,terms:data.terms,rules:'',style:'',cost:0};
+    $('synopsis').value=data.synopsis;$('terms').value=data.terms;$('rules').value='';$('style').value='';
+    $('setup-status').textContent='';
+    $('review-meta').textContent=`${data.count} paragraphs · context read $${data.setup_cost.toFixed(4)}`;
+    showScreen('review');
+  }catch(e){$('setup-err').innerHTML=`<div class="err">Server unreachable.</div>`;
+    $('analyze').disabled=false;$('setup-status').textContent='';}
+};
+
+$('start').onclick=()=>{
+  P.synopsis=$('synopsis').value;P.terms=$('terms').value;
+  P.rules=$('rules').value;P.style=$('style').value;
+  P=normalizeProject(P);
+  enterWorkspace();save();
+};
+
+// ================================================================
+// SCREENS
+// ================================================================
+function showScreen(id){
+  ['home','review','workspace'].forEach(s=>$(s).classList.add('hidden'));
+  $(id).classList.remove('hidden');window.scrollTo({top:0,behavior:'smooth'});
+}
+$('home-btn').onclick=()=>{
+  P=null;fileObj=null;$('analyze').disabled=true;$('pname').value='';
+  drop.querySelector('.big').textContent='Drop your book here';
+  drop.querySelector('p:not(.big)').textContent='or click to choose — .txt, .md, or .docx';
+  showScreen('home');refreshProjects();
+};
+
+// ================================================================
+// DRAWERS
+// ================================================================
+function toggleDrawer(id,btnId){
+  const d=$(id),b=$(btnId),open=d.classList.contains('hidden');
+  ['drawer-glossary','drawer-rules','drawer-brief'].forEach(x=>$(x).classList.add('hidden'));
+  ['btn-glossary','btn-rules','btn-brief'].forEach(x=>$(x).classList.remove('active'));
+  if(open){d.classList.remove('hidden');b.classList.add('active');}
+}
+$('btn-glossary').onclick=()=>toggleDrawer('drawer-glossary','btn-glossary');
+$('btn-rules').onclick=()=>toggleDrawer('drawer-rules','btn-rules');
+$('btn-brief').onclick=()=>toggleDrawer('drawer-brief','btn-brief');
+$('btn-merge-mode').onclick=toggleMergeMode;
+
+// ---- mobile rail toggle ----
+function closeRailMobile(){
+  const r=document.querySelector('.rail');
+  if(r) r.classList.remove('open');
+  const b=$('btn-rail-mobile'); if(b) b.classList.remove('active');
+}
+$('btn-rail-mobile').onclick=()=>{
+  const r=document.querySelector('.rail');
+  if(!r) return;
+  r.classList.toggle('open');
+  $('btn-rail-mobile').classList.toggle('active', r.classList.contains('open'));
+};
+
+// ================================================================
+// WORKSPACE
+// ================================================================
+// ---- glossary chips ----
+function parseTerms(str){
+  // returns array of {src,tgt} from "src = tgt" lines
+  return (str||'').split('\n').map(l=>l.trim()).filter(Boolean).map(l=>{
+    const i=l.indexOf('=');
+    if(i<0) return {src:l,tgt:''};
+    return {src:l.slice(0,i).trim(), tgt:l.slice(i+1).trim()};
+  });
+}
+function termsToString(arr){
+  return arr.map(t=>t.tgt?`${t.src} = ${t.tgt}`:`${t.src} = `).join('\n');
+}
+function renderChips(){
+  const list=$('chip-list'); if(!list) return;
+  const arr=parseTerms(P.terms).sort((a,b)=>
+    a.src.toLowerCase().localeCompare(b.src.toLowerCase()));
+  P.terms=termsToString(arr);
+  list.innerHTML='';
+  if(!arr.length){
+    list.innerHTML='<div class="glist-empty">Henüz sözlük terimi yok.</div>';
+    return;
+  }
+  arr.forEach((t,idx)=>{
+    const row=document.createElement('div');
+    row.className='glist-row'+(EDIT_IDX===idx?' active':'');
+    row.innerHTML=
+      `<span class="glist-src">${esc(t.src)}</span>`+
+      `<span class="glist-tgt${t.tgt?'':' empty'}">${t.tgt?esc(t.tgt):'—'}</span>`+
+      `<button class="glist-x" title="remove">×</button>`;
+    row.querySelector('.glist-src').onclick=()=>loadChipForEdit(idx);
+    row.querySelector('.glist-tgt').onclick=()=>loadChipForEdit(idx);
+    row.querySelector('.glist-x').onclick=(e)=>{
+      e.stopPropagation();
+      const a=parseTerms(P.terms); a.splice(idx,1);
+      if(EDIT_IDX===idx) resetEditRow();
+      P.terms=termsToString(a); renderChips(); queueSave();
+    };
+    list.appendChild(row);
+  });
+}
+
+function loadChipForEdit(idx){
+  const arr=parseTerms(P.terms);
+  const t=arr[idx]; if(!t) return;
+  EDIT_IDX=idx;
+  $('chip-src').value=t.src;
+  $('chip-tgt').value=t.tgt;
+  $('chip-add-btn').textContent='Update';
+  $('chip-cancel').style.display='inline-block';
+  renderChips();
+  $('chip-src').focus();
+  // scroll the edit row into view if needed
+  $('chip-src').scrollIntoView({block:'nearest',behavior:'smooth'});
+}
+
+function resetEditRow(){
+  EDIT_IDX=null;
+  $('chip-src').value='';
+  $('chip-tgt').value='';
+  $('chip-add-btn').textContent='Add';
+  $('chip-cancel').style.display='none';
+}
+
+function commitEditRow(){
+  const src=$('chip-src').value.trim();
+  if(!src){ resetEditRow(); renderChips(); return; }
+  const tgt=$('chip-tgt').value.trim();
+  const a=parseTerms(P.terms);
+  if(EDIT_IDX!==null && a[EDIT_IDX]){
+    a[EDIT_IDX]={src,tgt};         // update existing
+  }else{
+    a.push({src,tgt});             // add new
+  }
+  P.terms=termsToString(a);
+  resetEditRow();
+  renderChips(); queueSave();
+  $('chip-src').focus();
+}
+
+async function cleanGlossary(){
+  if(!P.terms||!P.terms.trim()){ $('clean-status').textContent='temizlenecek bir şey yok'; return; }
+  const btn=$('clean-gloss'); btn.disabled=true;
+  $('clean-status').innerHTML='<span class="loading">cleaning</span>';
+  try{
+    const res=await fetch('/clean_glossary',{method:'POST',
+      headers:{'Content-Type':'application/json'},
+      body:JSON.stringify({model:P.model,source_lang:P.source_lang,
+        target_lang:P.target_lang,terms:P.terms,synopsis:P.synopsis})});
+    const data=await res.json();
+    if(!res.ok){ $('clean-status').textContent=data.error||'başarısız'; btn.disabled=false; return; }
+    const before=parseTerms(P.terms).length;
+    P.terms=data.terms;
+    const after=parseTerms(P.terms).length;
+    if(data.cost) P.cost=(P.cost||0)+data.cost;
+    renderChips(); updateProgress(); queueSave();
+    $('clean-status').textContent=`${before} → ${after} terms · $${(data.cost||0).toFixed(4)}`;
+  }catch(e){ $('clean-status').textContent='sunucuya ulaşılamıyor'; }
+  finally{ btn.disabled=false; }
+}
+
+function autoGrow(el){
+  if(!el) return;
+  el.style.height='auto';
+  el.style.height=(el.scrollHeight+4)+'px';
+}
+
+function normalizeProject(p){
+  // Ensure all parallel arrays exist and are the right length.
+  const n = p.segments ? p.segments.length : 0;
+  if(!Array.isArray(p.finals) || p.finals.length!==n)
+    p.finals = new Array(n).fill(null);
+  if(!Array.isArray(p.approved) || p.approved.length!==n)
+    p.approved = new Array(n).fill(false);
+  // Normalize: empty string finals should be null (untranslated)
+  p.finals = p.finals.map(f => (f===''||f===undefined) ? null : f);
+  // Ensure approved is boolean array
+  p.approved = p.approved.map(a => a===true);
+  if(!p.segCost) p.segCost={};
+  if(p.cost===undefined||p.cost===null) p.cost=0;
+  // Rebuild total cost from per-segment costs if total is missing
+  if(p.cost===0 && p.segCost && Object.keys(p.segCost).length>0){
+    p.cost=Object.values(p.segCost).reduce((a,b)=>a+(b||0),0);
+  }
+  p._undo = p._undo||null;
+  return p;
+}
+
+function enterWorkspace(){
+  showScreen('workspace');
+  // Set simple text content first — always safe
+  try{ $('ws-title').textContent=P.name; }catch(e){}
+  try{ if($('running-cost'))$('running-cost').textContent=`$${(P.cost||0).toFixed(4)}`; }catch(e){}
+  // Populate drawers safely
+  try{
+    $('d-rules').value=P.rules||'';
+    $('d-syn').value=P.synopsis||'';
+    $('d-style').value=P.style||'';
+    [['d-rules','rules'],['d-syn','synopsis'],['d-style','style']].forEach(([el,key])=>{
+      $(el).oninput=()=>{P[key]=$(el).value;queueSave();};
+    });
+  }catch(e){}
+  // Wire glossary drawer buttons safely
+  try{
+    renderChips();
+    if($('chip-add-btn')) $('chip-add-btn').onclick=commitEditRow;
+    if($('chip-cancel')) $('chip-cancel').onclick=()=>{resetEditRow();renderChips();};
+    if($('clean-gloss')) $('clean-gloss').onclick=cleanGlossary;
+    if($('chip-src')) $('chip-src').onkeydown=e=>{if(e.key==='Enter'){e.preventDefault();$('chip-tgt').focus();}else if(e.key==='Escape'){resetEditRow();renderChips();}};
+    if($('chip-tgt')) $('chip-tgt').onkeydown=e=>{if(e.key==='Enter'){e.preventDefault();commitEditRow();}else if(e.key==='Escape'){resetEditRow();renderChips();}};
+  }catch(e){}
+  // Render the workspace — deferred so DOM is fully painted
+  winStart=0;
+  setTimeout(()=>{
+    try{ renderRail(); }catch(e){ console.error('renderRail:',e); }
+    try{ renderWindow(); }catch(e){ console.error('renderWindow:',e); }
+    try{ updateUndoBar(); }catch(e){}
+    try{ updateProgress(); }catch(e){}
+  }, 100);
+}
+
+// ================================================================
+// RAIL + WINDOW
+// ================================================================
+function statusOf(i){
+  if(P.approved[i])return 'approved';
+  if(P.finals[i]!==null)return 'translated';
+  return '';
+}
+function padWidth(){ return String(P.segments.length).length; }
+function renderRail(){
+  const r=$('rail-items');r.innerHTML='';
+  const w=padWidth();
+  P.segments.forEach((_,i)=>{
+    const it=document.createElement('div');
+    const isMergeSel=MERGE_SEL.includes(i);
+    it.className='rail-item'+((i>=winStart&&i<winStart+WIN)?' active':'')+(isMergeSel?' merge-sel':'');
+    it.innerHTML=`<span class="dot ${statusOf(i)}"></span>${String(i+1).padStart(w,'0')}`;
+    it.onclick=()=>{
+      if(MERGE_MODE){ mergeSelClick(i); }
+      else{ goToWindow(i); if(window.innerWidth<=760) closeRailMobile(); }
+    };
+    r.appendChild(it);
+  });
+}
+function goToWindow(i){
+  winStart=Math.max(0,Math.min(i-Math.floor(WIN/2),P.segments.length-WIN));
+  if(winStart<0)winStart=0;
+  renderWindow();renderRail();
+}
+
+function defaultModel(){
+  // Always prefer Sonnet 4.6 as the standing default.
+  return MODEL_LIST.find(m=>m.toLowerCase().includes('sonnet')) || MODEL_LIST[0];
+}
+function modelSelector(i){
+  if(!MODEL_LIST||!MODEL_LIST.length){
+    return `<select class="seg-model" id="msel-${i}"><option>Loading...</option></select>`;
+  }
+  const def=defaultModel();
+  let opts='';
+  MODEL_LIST.forEach(m=>{
+    const sel=(m===def)?' selected':'';
+    opts+=`<option${sel}>${esc(m)}</option>`;
+  });
+  return `<select class="seg-model" id="msel-${i}">${opts}</select>`;
+}
+
+// ================================================================
+// MERGE MODE: select any two untranslated paragraphs to merge
+// ================================================================
+let MERGE_MODE=false;
+let MERGE_SEL=[];   // up to 2 indices
+
+function toggleMergeMode(){
+  MERGE_MODE=!MERGE_MODE;
+  MERGE_SEL=[];
+  $('btn-merge-mode').classList.toggle('active',MERGE_MODE);
+  $('merge-confirm-bar').innerHTML='';
+  renderRail();
+  if(MERGE_MODE){
+    $('merge-confirm-bar').innerHTML=
+      '<div class="merge-confirm" style="color:var(--ink-soft);">Select two paragraphs in the rail to merge — untranslated only.</div>';
+  }
+}
+
+function mergeSelClick(i){
+  if(!MERGE_MODE) return;
+  // only untranslated
+  if(P.finals[i]!==null){
+    $('merge-confirm-bar').innerHTML=
+      '<div class="merge-confirm">¶ '+String(i+1).padStart(padWidth(),'0')+
+      ' is already translated — only untranslated paragraphs can be merged.</div>';
+    return;
+  }
+  const pos=MERGE_SEL.indexOf(i);
+  if(pos>=0){
+    MERGE_SEL.splice(pos,1);  // deselect
+  }else if(MERGE_SEL.length<2){
+    MERGE_SEL.push(i);
+  }else{
+    // replace the older selection with the new pick
+    MERGE_SEL=[MERGE_SEL[1],i];
+  }
+  renderRail();
+  updateMergeConfirmBar();
+}
+
+function updateMergeConfirmBar(){
+  const bar=$('merge-confirm-bar');
+  if(!MERGE_MODE){ bar.innerHTML=''; return; }
+  if(MERGE_SEL.length===0){
+    bar.innerHTML='<div class="merge-confirm" style="color:var(--ink-soft);">Select two paragraphs in the rail to merge — untranslated only.</div>';
+    return;
+  }
+  if(MERGE_SEL.length===1){
+    const w=padWidth();
+    bar.innerHTML='<div class="merge-confirm">¶ '+String(MERGE_SEL[0]+1).padStart(w,'0')+
+      ' selected — now select a second paragraph.</div>';
+    return;
+  }
+  // two selected
+  const [a,b]=[Math.min(...MERGE_SEL),Math.max(...MERGE_SEL)];
+  const w=padWidth();
+  const pa='¶ '+String(a+1).padStart(w,'0'), pb='¶ '+String(b+1).padStart(w,'0');
+  const skip=b-a-1;
+  const skipNote=skip>0?` (${skip} paragraph${skip>1?'s':''} between them stay${skip>1?'':'s'} in place)`:' (bitişik)';
+  bar.innerHTML=`<div class="merge-confirm">${pa} + ${pb} → merged into ${pa}${skipNote}
+    <button class="mc-go" onclick="executeMerge()">Merge</button>
+    <button class="mc-cancel" onclick="cancelMerge()">İptal</button>
+  </div>`;
+}
+
+function cancelMerge(){
+  MERGE_SEL=[];
+  MERGE_MODE=false;
+  $('btn-merge-mode').classList.remove('active');
+  $('merge-confirm-bar').innerHTML='';
+  renderRail();
+}
+
+function executeMerge(){
+  if(MERGE_SEL.length!==2) return;
+  const [a,b]=[Math.min(...MERGE_SEL),Math.max(...MERGE_SEL)];
+  // guard: both must still be untranslated
+  if(P.finals[a]!==null||P.finals[b]!==null){
+    $('merge-confirm-bar').innerHTML+='<div class="merge-confirm">One of the selected paragraphs was already translated.</div>';
+    return;
+  }
+  // snapshot for undo (single-level — overrides any prior undo)
+  P._undo={
+    type:'merge', index:a,
+    segments:P.segments.slice(), finals:P.finals.slice(),
+    approved:P.approved.slice(), segCost:Object.assign({},P.segCost||{})
+  };
+  // join b's text into a with a space, then remove b
+  P.segments[a]=P.segments[a]+' '+P.segments[b];
+  P.segments.splice(b,1);
+  P.finals.splice(b,1);
+  P.approved.splice(b,1);
+  // reindex segCost: keys > b shift down by 1
+  if(P.segCost){
+    const nc={};
+    Object.keys(P.segCost).forEach(k=>{
+      const n=+k;
+      if(n<b) nc[n]=P.segCost[k];
+      else if(n>b) nc[n-1]=P.segCost[k];
+      // n===b is removed
+    });
+    P.segCost=nc;
+  }
+  // exit merge mode
+  MERGE_SEL=[];
+  MERGE_MODE=false;
+  $('btn-merge-mode').classList.remove('active');
+  $('merge-confirm-bar').innerHTML='';
+  // ensure the merged paragraph is visible
+  goToWindow(a);
+  renderRail(); updateProgress(); updateUndoBar(); queueSave();
+}
+
+function canMerge(i){
+  // both this and next must exist, both untranslated
+  if(i>=P.segments.length-1) return false;
+  return P.finals[i]===null && P.finals[i+1]===null;
+}
+
+window.mergeDown=(i)=>{
+  if(!canMerge(i)) return;
+  // snapshot for single-level undo
+  P._undo={
+    type:'merge', index:i,
+    firstLen:P.segments[i].length,
+    segments:P.segments.slice(),
+    finals:P.finals.slice(),
+    approved:P.approved.slice(),
+    segCost:Object.assign({},P.segCost||{})
+  };
+  // join source with a space
+  P.segments[i]=P.segments[i]+' '+P.segments[i+1];
+  P.segments.splice(i+1,1);
+  P.finals.splice(i+1,1);
+  P.approved.splice(i+1,1);
+  // shift segCost keys above i+1 down by one
+  if(P.segCost){
+    const nc={};
+    Object.keys(P.segCost).forEach(k=>{
+      const n=+k;
+      if(n<i+1) nc[n]=P.segCost[k];
+      else if(n>i+1) nc[n-1]=P.segCost[k];
+    });
+    P.segCost=nc;
+  }
+  renderWindow();renderRail();updateProgress();updateUndoBar();queueSave();
+};
+
+window.undoMerge=()=>{
+  if(!P._undo||P._undo.type!=='merge') return;
+  P.segments=P._undo.segments;
+  P.finals=P._undo.finals;
+  P.approved=P._undo.approved;
+  P.segCost=P._undo.segCost;
+  P._undo=null;
+  renderWindow();renderRail();updateProgress();updateUndoBar();queueSave();
+};
+
+function updateUndoBar(){ /* undo now renders inline on the merged paragraph */ }
+
+function renderWindow(){
+  const c=$('segments');
+  if(!c){ console.error('PALIMPSEST: #segments not found'); return; }
+  c.innerHTML='';
+  if(!P||!P.segments||!P.segments.length){ return; }
+  const end=Math.min(winStart+WIN,P.segments.length);
+  if(winStart>=P.segments.length){ winStart=0; return renderWindow(); }
+  try{
+  for(let i=winStart;i<end;i++){
+    const div=document.createElement('div');
+    div.className='seg'+(P.approved[i]?' done':'');div.id='seg-'+i;
+    let right;
+    if(P.finals[i]!==null){
+      const costTag=(P.segCost&&P.segCost[i]!=null)?`<span class="seg-cost">$${P.segCost[i].toFixed(4)}</span>`:'';
+      right=`<textarea class="tgt-edit" id="edit-${i}">${esc(P.finals[i])}</textarea>
+        <div class="seg-actions">
+          <button class="seg-btn primary" onclick="approveSeg(${i})" title="Bu paragrafı onayla">${ICON.check}<span>${P.approved[i]?'Onaylandı':'Onayla'}</span></button>
+          ${modelSelector(i)}
+          <button class="seg-btn icon" onclick="runSeg(${i})" title="Yeniden çevir (makine)">${ICON.rerun}</button>
+          <button class="seg-btn icon" onclick="writeSeg(${i})" title="Kendi çevirimі yaz">${ICON.pencil}</button>
+          ${costTag}
+        </div>`;
+    }else{
+      right=`<div class="placeholder">Henüz çevrilmedi.</div>
+        <div class="seg-actions">
+          ${modelSelector(i)}
+          <button class="seg-btn primary" onclick="runSeg(${i})" title="Makine ile çevir">${ICON.translate}<span>Translate</span></button>
+          <button class="seg-btn icon" onclick="writeSeg(${i})" title="Kendi çevirimі yaz">${ICON.pencil}</button>
+        </div>`;
+    }
+    let mergeCtl='';
+    const isUndoTarget = P._undo&&P._undo.type==='merge'&&P._undo.index===i;
+    if(canMerge(i)||isUndoTarget){
+      let inner='';
+      if(canMerge(i)){
+        inner+=`<button class="merge-btn" onclick="mergeDown(${i})" title="Bu paragrafı bir sonrakiyle birleştir">${ICON.merge}Merge with next</button>`;
+      }
+      if(isUndoTarget){
+        inner+=`<button class="merge-btn undo" onclick="undoMerge()" title="Bu paragrafı oluşturan birleştirmeyi geri al">↶ Birleştirmeyi geri al</button>`;
+      }
+      mergeCtl=`<div class="merge-join">${inner}</div>`;
+    }
+    div.innerHTML=`<div class="seg-num">¶ ${String(i+1).padStart(padWidth(),'0')}</div>
+      <div class="src">${esc(P.segments[i])}</div><div class="tgt-area">${right}</div>${mergeCtl}`;
+    c.appendChild(div);
+    if(P.finals[i]!==null){
+      const ed=$('edit-'+i);ed.oninput=()=>{P.finals[i]=ed.value;autoGrow(ed);queueSave();};
+    }
+  }
+  }catch(err){ console.error('renderWindow:',err); return; }
+  const last=Math.min(winStart+WIN,P.segments.length);
+  const lbl=`¶ ${winStart+1}–${last} of ${P.segments.length}`;
+  $('win-label').textContent=lbl;
+  if($('win-label2'))$('win-label2').textContent=lbl;
+  const atStart=winStart<=0, atEnd=winStart+WIN>=P.segments.length;
+  $('prev-win').disabled=atStart;$('next-win').disabled=atEnd;
+  if($('prev-win2')){$('prev-win2').disabled=atStart;$('next-win2').disabled=atEnd;}
+  // auto-size all visible translation boxes to fit their content
+  for(let i=winStart;i<last;i++){ autoGrow($('edit-'+i)); }
+}
+
+function pageEarlier(){winStart=Math.max(0,winStart-WIN);renderWindow();renderRail();window.scrollTo({top:0,behavior:'smooth'});}
+function pageLater(){
+  winStart=Math.min(P.segments.length-1,winStart+WIN);
+  if(winStart>P.segments.length-WIN)winStart=Math.max(0,P.segments.length-WIN);
+  renderWindow();renderRail();window.scrollTo({top:0,behavior:'smooth'});
+}
+$('prev-win').onclick=pageEarlier;$('next-win').onclick=pageLater;
+$('prev-win2').onclick=pageEarlier;$('next-win2').onclick=pageLater;
+
+
+// ================================================================
+// TRANSLATE + WRITE + APPROVE
+// ================================================================
+function memoryString(uptoIndex){
+  const pairs=[];
+  for(let j=0;j<uptoIndex&&pairs.length<6;j++){
+    if(P.approved[j]&&P.finals[j]){
+      pairs.push(P.segments[j].slice(0,120)+' => '+P.finals[j].slice(0,120));
+    }
+  }
+  return pairs.join('\n');
+}
+
+function getSegModel(i){
+  const sel=$('msel-'+i);
+  return sel?sel.value:P.model;
+}
+
+window.writeSeg=(i)=>{
+  const area=$('seg-'+i).querySelector('.tgt-area');
+  area.innerHTML=`<textarea class="tgt-edit" id="edit-${i}" placeholder="Çevirinizi yazın…"></textarea>
+    <div class="seg-actions">
+      <button class="seg-btn primary" onclick="approveSeg(${i})" title="Bu paragrafı onayla">${ICON.check}<span>Approve</span></button>
+      ${modelSelector(i)}
+      <button class="seg-btn icon" onclick="runSeg(${i})" title="Bunun yerine makine ile çevir">${ICON.translate}</button>
+    </div>`;
+  P.finals[i]='';P.approved[i]=false;
+  const wed=$('edit-'+i);wed.oninput=()=>{P.finals[i]=wed.value;autoGrow(wed);queueSave();};
+  $('edit-'+i).focus();
+  renderRail();queueSave();
+};
+
+window.runSeg=async(i)=>{
+  const area=$('seg-'+i).querySelector('.tgt-area');
+  const btn=area.querySelector('.seg-btn.primary')||area.querySelector('.seg-btn');
+  btn.disabled=true;btn.textContent='Translating…';
+  const segModel=getSegModel(i);
+  const payload={model:segModel,source_lang:P.source_lang,target_lang:P.target_lang,
+    synopsis:P.synopsis,terms:P.terms,rules:P.rules||'',style_sample:P.style,
+    text:P.segments[i],before:i>0?P.segments[i-1]:'',
+    after:i<P.segments.length-1?P.segments[i+1]:'',memory:memoryString(i)};
+  try{
+    const res=await fetch('/translate_simple',{method:'POST',
+      headers:{'Content-Type':'application/json'},body:JSON.stringify(payload)});
+    const data=await res.json();
+    if(!res.ok){btn.disabled=false;btn.textContent='Retry';
+      area.insertAdjacentHTML('beforeend',`<div class="err">${esc(data.error)}</div>`);return;}
+    P.cost+=data.cost;P.finals[i]=data.final;P.approved[i]=false;
+    if(!P.segCost)P.segCost={};
+    P.segCost[i]=data.cost;
+    const tk=data.tokens||{};
+    const cacheInfo=tk.cache_read?` · cache ✓`:'';
+    area.innerHTML=`<textarea class="tgt-edit" id="edit-${i}">${esc(data.final)}</textarea>
+      <div class="seg-actions">
+        <button class="seg-btn primary" onclick="approveSeg(${i})" title="Bu paragrafı onayla">${ICON.check}<span>Approve</span></button>
+        ${modelSelector(i)}
+        <button class="seg-btn icon" onclick="runSeg(${i})" title="Yeniden çevir (makine)">${ICON.rerun}</button>
+        <button class="seg-btn icon" onclick="writeSeg(${i})" title="Kendi çevirimі yaz">${ICON.pencil}</button>
+        <span class="seg-cost">$${data.cost.toFixed(4)}${cacheInfo}</span>
+      </div>`;
+    // restore selected model in new dropdown
+    const newSel=$('msel-'+i);if(newSel)newSel.value=segModel;
+    const ned=$('edit-'+i);ned.oninput=()=>{P.finals[i]=ned.value;autoGrow(ned);queueSave();};autoGrow(ned);
+    $('seg-'+i).classList.remove('done');
+    updateProgress();renderRail();queueSave();
+  }catch(e){btn.disabled=false;btn.textContent='Retry';
+    area.insertAdjacentHTML('beforeend',`<div class="err">Server unreachable.</div>`);}
+};
+
+window.approveSeg=(i)=>{
+  const ed=$('edit-'+i);if(ed)P.finals[i]=ed.value;
+  P.approved[i]=true;
+  $('seg-'+i).classList.add('done');
+  const btn=$('seg-'+i).querySelector('.seg-btn.primary');
+  if(btn){const sp=btn.querySelector('span');if(sp)sp.textContent='Onaylandı';}
+  updateProgress();renderRail();queueSave();
+};
+
+// ================================================================
+// PROGRESS + SAVE + EXPORT
+// ================================================================
+function updateProgress(){
+  if(!P||!P.segments) return;
+  const total=P.segments.length;
+  const finals=Array.isArray(P.finals)?P.finals:[];
+  const approved=Array.isArray(P.approved)?P.approved:[];
+  const done=finals.filter(x=>x!==null&&x!==undefined&&x!=='').length;
+  const appr=approved.filter(Boolean).length;
+  if($('running-cost'))$('running-cost').textContent=`$${(P.cost||0).toFixed(4)}`;
+  const pa=total?Math.round(appr/total*100):0;
+  const pt=total?Math.round(done/total*100):0;
+  const tkAppr=$('tk-appr'), tkTrans=$('tk-trans'), tkLabel=$('tk-label');
+  if(tkAppr) tkAppr.style.width=pa+'%';
+  if(tkTrans) tkTrans.style.width=pt+'%';
+  if(tkLabel) tkLabel.textContent=`${appr} onaylı · ${done} çevrildi · ${total} toplam (${pa}%)`;
+}
+function queueSave(){clearTimeout(saveTimer);saveTimer=setTimeout(save,800);}
+function save(){
+  if(!P)return;
+  $('save-pill').textContent='kaydediliyor…';
+  fetch('/save',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(P)})
+    .then(r=>r.json()).then(d=>{
+      if(d.ok){
+        const t=new Date();
+        const hh=String(t.getHours()).padStart(2,'0');
+        const mm=String(t.getMinutes()).padStart(2,'0');
+        const dd=String(t.getDate()).padStart(2,'0');
+        const mo=String(t.getMonth()+1).padStart(2,'0');
+        $('save-pill').textContent=`saved ✓ ${dd}.${mo} ${hh}:${mm}`;
+      }else{
+        $('save-pill').textContent='kaydetme başarısız';
+      }
+    })
+    .catch(()=>{$('save-pill').textContent='kaydetme başarısız';});
+}
+$('export').onclick=()=>{
+  const out=P.segments.map((s,i)=>P.finals[i]!==null?P.finals[i]:'[UNTRANSLATED] '+s).join('\n\n');
+  const blob=new Blob([out],{type:'text/plain;charset=utf-8'});
+  const a=document.createElement('a');a.href=URL.createObjectURL(blob);
+  a.download=P.name.replace(/[^a-z0-9]+/gi,'_')+'.'+P.target_lang.toLowerCase()+'.txt';a.click();
+  $('export-meta').textContent=`${P.segments.length} paragraftan ${P.approved.filter(Boolean).length} tanesi dışa aktarıldı`;
+};
+</script>
