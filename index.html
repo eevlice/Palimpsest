@@ -120,12 +120,20 @@
      whole line once the row wraps. */
   .seg-actions .seg-model{flex:1 1 120px;min-width:120px;}
   .seg-actions .seg-cost{flex:0 0 auto;margin-left:auto;white-space:nowrap;}
+  /* one height for every control in the row, whatever its padding */
+  .seg-actions>.seg-btn,.seg-actions>.seg-model,.seg-actions>.seg-effort{
+    height:30px;box-sizing:border-box;}
   .seg-btn{font-family:'Spline Sans Mono',monospace;font-size:11px;letter-spacing:.08em;
     text-transform:uppercase;padding:6px 12px;cursor:pointer;border:1px solid var(--rule);
     background:none;color:var(--ink-soft);}
   .seg-btn.primary{background:var(--ink);color:var(--paper);border-color:var(--ink);}
   .seg-btn.primary:hover{background:var(--pencil);border-color:var(--pencil);}
   .seg-btn:hover{border-color:var(--ink);color:var(--ink);}
+  /* approve carries its state in colour: dark = waiting on you, green = approved */
+  .seg-btn.approve{background:var(--ink);border-color:var(--ink);color:var(--paper);}
+  .seg-btn.approve:hover{background:var(--pencil);border-color:var(--pencil);color:var(--paper);}
+  .seg-btn.approve.on,.seg-btn.approve.on:hover{background:var(--thread);
+    border-color:var(--thread);color:var(--paper);}
   .seg-btn:disabled{opacity:.4;cursor:wait;}
   .seg-cost{font-family:'Spline Sans Mono',monospace;font-size:11px;color:var(--ink-soft);}
   .merge-join{grid-column:1 / -1;display:flex;justify-content:center;margin-top:6px;}
@@ -235,7 +243,16 @@
   .data-table th{color:var(--ink-soft);font-weight:500;text-transform:uppercase;font-size:11px;letter-spacing:.08em;}
   .data-table td.num,.data-table th.num{text-align:right;}
   .total-banner{font-family:'Fraunces',serif;font-size:26px;margin:18px 0;}
-  .seg-actions .seg-effort{flex:0 0 auto;width:auto;min-width:0;text-align:center;padding-right:4px;}
+  /* effort: a 4-step segmented meter, off -> high */
+  .seg-effort{display:inline-flex;flex:0 0 auto;height:30px;box-sizing:border-box;
+    border:1px solid var(--rule);background:rgba(255,255,255,.5);}
+  .seg-effort .ef{width:27px;padding:0;border:none;border-right:1px solid var(--rule);
+    background:none;color:var(--ink-soft);cursor:pointer;
+    display:inline-flex;align-items:center;justify-content:center;}
+  .seg-effort .ef:last-child{border-right:none;}
+  .seg-effort .ef:hover{color:var(--ink);background:rgba(255,255,255,.7);}
+  .seg-effort .ef.on{background:var(--thread);color:var(--paper);}
+  .seg-effort .ef svg{display:block;}
 </style>
 
 <div class="wrap">
@@ -410,10 +427,15 @@ let P=null,fileObj=null,saveTimer=null,winStart=0,EDIT_IDX=null;
 const WIN=10;
 let MODEL_CATALOG=[]; // [{provider,label,has_key,models:[{id,label,effort}]}]
 const EFFORT_LABEL={off:'Kapalı',low:'Düşük',medium:'Orta',high:'Yüksek'};
-// Count of dots = how much thinking. One repeated glyph rather than a set of
-// distinct ones (○◔◑●): the mono font lacks the partial circles, so the browser
-// fell back per character and they rendered at clashing sizes.
-const EFFORT_GLYPH={off:'–',low:'•',medium:'••',high:'•••'};
+// A rising meter, drawn as SVG rather than text: font glyphs for this either
+// clash in size (the mono font covers ○◑● but not ◔) or read as punctuation.
+const S='viewBox="0 0 24 24" width="13" height="13" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round"';
+const EFFORT_ICON={
+  off:`<svg ${S}><line x1="7" y1="12" x2="17" y2="12"/></svg>`,
+  low:`<svg ${S}><line x1="12" y1="18" x2="12" y2="13"/></svg>`,
+  medium:`<svg ${S}><line x1="8" y1="18" x2="8" y2="13"/><line x1="16" y1="18" x2="16" y2="8"/></svg>`,
+  high:`<svg ${S}><line x1="5" y1="18" x2="5" y2="13"/><line x1="12" y1="18" x2="12" y2="8"/><line x1="19" y1="18" x2="19" y2="4"/></svg>`
+};
 
 // --- inline SVG icons (stroke uses currentColor so they theme correctly) ---
 const ICON={
@@ -914,23 +936,25 @@ function modelSelector(i){
   return `<select class="seg-model" id="msel-${i}" onchange="onModelChange(${i})">${opts}</select>`;
 }
 function effortSelector(i){
-  const opts=['off','low','medium','high'].map(e=>
-    `<option value="${e}">${EFFORT_GLYPH[e]}</option>`).join('');
-  return `<select class="seg-model seg-effort" id="esel-${i}" onchange="onEffortChange(${i})"
-    title="Düşünme eforu: ${EFFORT_LABEL.off}">${opts}</select>`;
+  const btns=['off','low','medium','high'].map(e=>
+    `<button type="button" class="ef" data-effort="${e}" title="${EFFORT_LABEL[e]}"
+      onclick="setSegEffort(${i},'${e}')">${EFFORT_ICON[e]}</button>`).join('');
+  return `<div class="seg-effort" id="esel-${i}" data-value="off">${btns}</div>`;
 }
-// Collapsed, the select shows only the glyph; the tooltip carries the word.
-function onEffortChange(i){
-  const s=$('esel-'+i); if(!s) return;
-  s.title='Düşünme eforu: '+(EFFORT_LABEL[s.value]||'');
-}
+// The toggle holds its state in data-value; getSegEffort is the only reader.
+window.setSegEffort=(i,val)=>{
+  const el=$('esel-'+i); if(!el) return;
+  if(!EFFORT_LABEL[val]) val='off';
+  el.dataset.value=val;
+  el.querySelectorAll('.ef').forEach(b=>b.classList.toggle('on', b.dataset.effort===val));
+};
 function onModelChange(i){
   const msel=$('msel-'+i), esel=$('esel-'+i);
   if(!msel||!esel)return;
   const info=findModelInfo(msel.value);
-  esel.classList.toggle('hidden', !(info&&info.effort));
-  if(!(info&&info.effort)) esel.value='off';
-  onEffortChange(i);
+  const supportsEffort=!!(info&&info.effort);
+  esel.classList.toggle('hidden', !supportsEffort);
+  setSegEffort(i, supportsEffort ? (esel.dataset.value||'off') : 'off');
 }
 function getSegModel(i){
   const sel=$('msel-'+i);
@@ -938,7 +962,7 @@ function getSegModel(i){
 }
 function getSegEffort(i){
   const esel=$('esel-'+i);
-  return (esel && !esel.classList.contains('hidden')) ? esel.value : 'off';
+  return (esel && !esel.classList.contains('hidden')) ? (esel.dataset.value||'off') : 'off';
 }
 
 // ================================================================
@@ -1117,7 +1141,7 @@ function renderWindow(){
       const costTag=(P.segCost&&P.segCost[i]!=null)?`<span class="seg-cost">$${P.segCost[i].toFixed(4)}</span>`:'';
       right=`<textarea class="tgt-edit" id="edit-${i}">${esc(P.finals[i])}</textarea>
         <div class="seg-actions">
-          <button class="seg-btn primary" onclick="approveSeg(${i})" title="Bu paragrafı onayla">${ICON.check}${P.approved[i]?'':'<span>Onayla</span>'}</button>
+          <button class="seg-btn icon approve${P.approved[i]?' on':''}" onclick="approveSeg(${i})" title="${P.approved[i]?'Onaylandı':'Bu paragrafı onayla'}">${ICON.check}</button>
           ${modelSelector(i)}${effortSelector(i)}
           <button class="seg-btn icon" onclick="runSeg(${i})" title="Yeniden çevir (makine)">${ICON.rerun}</button>
           ${costTag}
@@ -1148,9 +1172,8 @@ function renderWindow(){
     if(P.finals[i]!==null){
       const ed=$('edit-'+i);ed.oninput=()=>{P.finals[i]=ed.value;autoGrow(ed);queueSave();};
     }
+    if(P.segEffort && P.segEffort[i]) setSegEffort(i,P.segEffort[i]);
     onModelChange(i);
-    const esel=$('esel-'+i);
-    if(esel && P.segEffort && P.segEffort[i]) esel.value=P.segEffort[i];
   }
   }catch(err){ console.error('renderWindow:',err); return; }
   const last=Math.min(winStart+WIN,P.segments.length);
@@ -1191,7 +1214,7 @@ window.writeSeg=(i)=>{
   const area=$('seg-'+i).querySelector('.tgt-area');
   area.innerHTML=`<textarea class="tgt-edit" id="edit-${i}" placeholder="Çevirinizi yazın…"></textarea>
     <div class="seg-actions">
-      <button class="seg-btn primary" onclick="approveSeg(${i})" title="Bu paragrafı onayla">${ICON.check}<span>Approve</span></button>
+      <button class="seg-btn icon approve" onclick="approveSeg(${i})" title="Bu paragrafı onayla">${ICON.check}</button>
       ${modelSelector(i)}${effortSelector(i)}
       <button class="seg-btn icon" onclick="runSeg(${i})" title="Bunun yerine makine ile çevir">${ICON.translate}</button>
     </div>`;
@@ -1228,15 +1251,16 @@ window.runSeg=async(i)=>{
     const cacheInfo=tk.cache_read?`<span class="seg-cache" title="Bağlam önbellekten okundu">${ICON.bolt}</span>`:'';
     area.innerHTML=`<textarea class="tgt-edit" id="edit-${i}">${esc(data.final)}</textarea>
       <div class="seg-actions">
-        <button class="seg-btn primary" onclick="approveSeg(${i})" title="Bu paragrafı onayla">${ICON.check}<span>Approve</span></button>
+        <button class="seg-btn icon approve" onclick="approveSeg(${i})" title="Bu paragrafı onayla">${ICON.check}</button>
         ${modelSelector(i)}${effortSelector(i)}
         <button class="seg-btn icon" onclick="runSeg(${i})" title="Yeniden çevir (makine)">${ICON.rerun}</button>
         <span class="seg-cost">$${data.cost.toFixed(4)}${cacheInfo}</span>
       </div>`;
-    // restore selected model + effort in the new dropdowns
+    // restore selected model + effort in the new controls; onModelChange runs
+    // last so it can still force effort off if the model doesn't support it
     const newSel=$('msel-'+i);if(newSel)newSel.value=segModel;
+    setSegEffort(i,segEffort);
     onModelChange(i);
-    const newEff=$('esel-'+i);if(newEff)newEff.value=segEffort;
     const ned=$('edit-'+i);ned.oninput=()=>{P.finals[i]=ned.value;autoGrow(ned);queueSave();};autoGrow(ned);
     $('seg-'+i).classList.remove('done');
     updateProgress();renderRail();queueSave();
@@ -1248,8 +1272,8 @@ window.approveSeg=(i)=>{
   const ed=$('edit-'+i);if(ed)P.finals[i]=ed.value;
   P.approved[i]=true;
   $('seg-'+i).classList.add('done');
-  const btn=$('seg-'+i).querySelector('.seg-btn.primary');
-  if(btn){const sp=btn.querySelector('span');if(sp)sp.remove();}
+  const btn=$('seg-'+i).querySelector('.seg-btn.approve');
+  if(btn){btn.classList.add('on');btn.title='Onaylandı';}
   updateProgress();renderRail();queueSave();
 };
 
