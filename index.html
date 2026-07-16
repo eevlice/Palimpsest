@@ -82,7 +82,9 @@
   @keyframes slideDown{from{opacity:0;transform:translateY(-6px);}to{opacity:1;transform:none;}}
   .drawer label{margin-top:12px;}.drawer label:first-child{margin-top:0;}
   .ws-layout{display:grid;grid-template-columns:84px 1fr;gap:18px;align-items:start;}
-  .rail{position:sticky;top:18px;max-height:calc(100vh - 120px);overflow-y:auto;
+  /* sticky at top:18px, so leave the same 18px at the bottom - anything more
+     is dead space under the rail */
+  .rail{position:sticky;top:18px;max-height:calc(100vh - 36px);overflow-y:auto;
     border-right:1px solid var(--rule);padding-right:8px;}
   .rail-jump{font-family:'Spline Sans Mono',monospace;font-size:10px;letter-spacing:.06em;
     text-transform:uppercase;border:1px solid var(--rule);background:none;color:var(--ink-soft);
