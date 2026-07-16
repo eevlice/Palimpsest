@@ -31,7 +31,7 @@ PROVIDERS = {
         "effort_kind": "thinking_budget",
         "models": {
             "claude-opus-4-8": {"label": "Opus 4.8", "in": 5.0, "out": 25.0, "cache_write": 6.25, "cache_read": 0.50, "effort": True},
-            "claude-sonnet-5": {"label": "Sonnet 5", "in": 3.0, "out": 15.0, "cache_write": 3.75, "cache_read": 0.30, "effort": True},
+            "claude-sonnet-5": {"label": "Sonnet 5", "in": 3.0, "out": 15.0, "cache_write": 3.75, "cache_read": 0.30, "effort": True, "thinking_style": "adaptive"},
             "claude-sonnet-4-6": {"label": "Sonnet 4.6", "in": 3.0, "out": 15.0, "cache_write": 3.75, "cache_read": 0.30, "effort": True},
             "claude-haiku-4-5-20251001": {"label": "Haiku 4.5", "in": 1.0, "out": 5.0, "cache_write": 1.25, "cache_read": 0.10, "effort": True},
         },
@@ -104,11 +104,17 @@ def _client_for(provider):
 # --------------------------------------------------------------------------
 
 def _call_anthropic(client, model, system_text, standing_context, per_call_text, effort, max_tokens):
-    thinking = {"type": "disabled"}
+    thinking_style = PROVIDERS["anthropic"]["models"][model].get("thinking_style", "budget")
+    extra_body = {"thinking": {"type": "disabled"}}
     if effort != "off":
-        budget = EFFORT_BUDGETS[effort]
-        thinking = {"type": "enabled", "budget_tokens": budget}
-        max_tokens = max(max_tokens, budget + 2048)
+        if thinking_style == "adaptive":
+            # Newer models (e.g. Sonnet 5) don't take budget_tokens - effort is
+            # a sibling top-level field, and "enabled" isn't a valid type for them.
+            extra_body = {"thinking": {"type": "adaptive"}, "output_config": {"effort": effort}}
+        else:
+            budget = EFFORT_BUDGETS[effort]
+            extra_body = {"thinking": {"type": "enabled", "budget_tokens": budget}}
+            max_tokens = max(max_tokens, budget + 2048)
     content = []
     if standing_context:
         content.append({"type": "text", "text": standing_context, "cache_control": {"type": "ephemeral"}})
@@ -116,7 +122,7 @@ def _call_anthropic(client, model, system_text, standing_context, per_call_text,
     resp = client.messages.create(
         model=model,
         max_tokens=max_tokens,
-        extra_body={"thinking": thinking},
+        extra_body=extra_body,
         system=[{"type": "text", "text": system_text, "cache_control": {"type": "ephemeral"}}],
         messages=[{"role": "user", "content": content}],
     )
