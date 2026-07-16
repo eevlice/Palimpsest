@@ -116,7 +116,7 @@
   /* the only flexible item in the row, so it absorbs every shortfall. A fixed
      basis keeps it readable when space is tight without letting it swallow a
      whole line once the row wraps. */
-  .seg-actions .seg-model{flex:1 1 130px;min-width:130px;}
+  .seg-actions .seg-model{flex:1 1 120px;min-width:120px;}
   .seg-actions .seg-cost{flex:0 0 auto;margin-left:auto;white-space:nowrap;}
   .seg-btn{font-family:'Spline Sans Mono',monospace;font-size:11px;letter-spacing:.08em;
     text-transform:uppercase;padding:6px 12px;cursor:pointer;border:1px solid var(--rule);
@@ -153,7 +153,7 @@
   .seg-btn.icon{padding:7px 9px;}
   .seg-btn.primary{display:inline-flex;align-items:center;gap:6px;}
   .seg-btn.primary svg{margin:0;}
-  .seg-cache{font-family:'Spline Sans Mono',monospace;font-size:10px;color:var(--thread);}
+  .seg-cache{color:var(--thread);display:inline-flex;vertical-align:-2px;margin-left:5px;}
   /* glossary list */
   .glist{margin:10px 0 0;border:1px solid var(--rule);background:rgba(255,255,255,.4);
     max-height:280px;overflow-y:auto;}
@@ -233,7 +233,7 @@
   .data-table th{color:var(--ink-soft);font-weight:500;text-transform:uppercase;font-size:11px;letter-spacing:.08em;}
   .data-table td.num,.data-table th.num{text-align:right;}
   .total-banner{font-family:'Fraunces',serif;font-size:26px;margin:18px 0;}
-  .seg-actions .seg-effort{flex:0 0 auto;width:auto;min-width:88px;}
+  .seg-actions .seg-effort{flex:0 0 auto;width:auto;min-width:0;text-align:center;padding-right:4px;}
 </style>
 
 <div class="wrap">
@@ -408,6 +408,9 @@ let P=null,fileObj=null,saveTimer=null,winStart=0,EDIT_IDX=null;
 const WIN=10;
 let MODEL_CATALOG=[]; // [{provider,label,has_key,models:[{id,label,effort}]}]
 const EFFORT_LABEL={off:'Kapalı',low:'Düşük',medium:'Orta',high:'Yüksek'};
+// Filled-circle progression: how full the circle is = how much thinking. Keeps
+// the per-paragraph row narrow enough to stay on one line.
+const EFFORT_GLYPH={off:'○',low:'◔',medium:'◑',high:'●'};
 
 // --- inline SVG icons (stroke uses currentColor so they theme correctly) ---
 const ICON={
@@ -418,7 +421,8 @@ const ICON={
   merge:'<svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><path d="M9 17H7A5 5 0 0 1 7 7h2"/><path d="M15 7h2a5 5 0 1 1 0 10h-2"/><line x1="8" y1="12" x2="16" y2="12"/></svg>',
   book:'<svg viewBox="0 0 24 24" width="15" height="15" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 7v14"/><path d="M3 18a1 1 0 0 1-1-1V4a1 1 0 0 1 1-1h5a4 4 0 0 1 4 4 4 4 0 0 1 4-4h5a1 1 0 0 1 1 1v13a1 1 0 0 1-1 1h-6a3 3 0 0 0-3 3 3 3 0 0 0-3-3z"/></svg>',
   checklist:'<svg viewBox="0 0 24 24" width="15" height="15" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><path d="m3 17 2 2 4-4"/><path d="m3 7 2 2 4-4"/><path d="M13 6h8"/><path d="M13 12h8"/><path d="M13 18h8"/></svg>',
-  filetext:'<svg viewBox="0 0 24 24" width="15" height="15" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><path d="M15 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V7Z"/><path d="M14 2v4a2 2 0 0 0 2 2h4"/><path d="M10 9H8"/><path d="M16 13H8"/><path d="M16 17H8"/></svg>'
+  filetext:'<svg viewBox="0 0 24 24" width="15" height="15" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><path d="M15 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V7Z"/><path d="M14 2v4a2 2 0 0 0 2 2h4"/><path d="M10 9H8"/><path d="M16 13H8"/><path d="M16 17H8"/></svg>',
+  bolt:'<svg viewBox="0 0 24 24" width="11" height="11" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round"><path d="M13 2 3 14h9l-1 8 10-12h-9l1-8Z"/></svg>'
 };
 
 // ================================================================
@@ -907,8 +911,15 @@ function modelSelector(i){
   return `<select class="seg-model" id="msel-${i}" onchange="onModelChange(${i})">${opts}</select>`;
 }
 function effortSelector(i){
-  const opts=['off','low','medium','high'].map(e=>`<option value="${e}">${EFFORT_LABEL[e]}</option>`).join('');
-  return `<select class="seg-model seg-effort" id="esel-${i}" title="Düşünme eforu (yalnızca zor paragraflarda gerekli)">${opts}</select>`;
+  const opts=['off','low','medium','high'].map(e=>
+    `<option value="${e}">${EFFORT_GLYPH[e]}</option>`).join('');
+  return `<select class="seg-model seg-effort" id="esel-${i}" onchange="onEffortChange(${i})"
+    title="Düşünme eforu: ${EFFORT_LABEL.off}">${opts}</select>`;
+}
+// Collapsed, the select shows only the glyph; the tooltip carries the word.
+function onEffortChange(i){
+  const s=$('esel-'+i); if(!s) return;
+  s.title='Düşünme eforu: '+(EFFORT_LABEL[s.value]||'');
 }
 function onModelChange(i){
   const msel=$('msel-'+i), esel=$('esel-'+i);
@@ -916,6 +927,7 @@ function onModelChange(i){
   const info=findModelInfo(msel.value);
   esel.classList.toggle('hidden', !(info&&info.effort));
   if(!(info&&info.effort)) esel.value='off';
+  onEffortChange(i);
 }
 function getSegModel(i){
   const sel=$('msel-'+i);
@@ -1211,7 +1223,7 @@ window.runSeg=async(i)=>{
     if(!P.segEffort)P.segEffort={};
     P.segEffort[i]=segEffort;
     const tk=data.tokens||{};
-    const cacheInfo=tk.cache_read?` · cache ✓`:'';
+    const cacheInfo=tk.cache_read?`<span class="seg-cache" title="Bağlam önbellekten okundu">${ICON.bolt}</span>`:'';
     area.innerHTML=`<textarea class="tgt-edit" id="edit-${i}">${esc(data.final)}</textarea>
       <div class="seg-actions">
         <button class="seg-btn primary" onclick="approveSeg(${i})" title="Bu paragrafı onayla">${ICON.check}<span>Approve</span></button>
