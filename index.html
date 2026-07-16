@@ -129,9 +129,9 @@
   .seg-btn.primary{background:var(--ink);color:var(--paper);border-color:var(--ink);}
   .seg-btn.primary:hover{background:var(--pencil);border-color:var(--pencil);}
   .seg-btn:hover{border-color:var(--ink);color:var(--ink);}
-  /* approve carries its state in colour: dark = waiting on you, green = approved */
-  .seg-btn.approve{background:var(--ink);border-color:var(--ink);color:var(--paper);}
-  .seg-btn.approve:hover{background:var(--pencil);border-color:var(--pencil);color:var(--paper);}
+  /* approve carries its state in colour: pale = waiting on you, green = approved */
+  .seg-btn.approve{background:rgba(255,255,255,.5);border-color:var(--rule);color:var(--ink-soft);}
+  .seg-btn.approve:hover{background:#fffdf8;border-color:var(--ink);color:var(--ink);}
   .seg-btn.approve.on,.seg-btn.approve.on:hover{background:var(--thread);
     border-color:var(--thread);color:var(--paper);}
   .seg-btn:disabled{opacity:.4;cursor:wait;}
@@ -251,7 +251,7 @@
     display:inline-flex;align-items:center;justify-content:center;}
   .seg-effort .ef:last-child{border-right:none;}
   .seg-effort .ef:hover{color:var(--ink);background:rgba(255,255,255,.7);}
-  .seg-effort .ef.on{background:var(--thread);color:var(--paper);}
+  .seg-effort .ef.on{background:var(--paper-deep);color:var(--ink);}
   .seg-effort .ef svg{display:block;}
 </style>
 
