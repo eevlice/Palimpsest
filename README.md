@@ -15,12 +15,19 @@ otomatik olarak kaydeder.
    adresinden kurun. (Windows'ta kurulum sırasında "Add Python to PATH"
    kutusunu işaretleyin.)
 
-2. **API anahtarınızı ekleyin.** `key.txt.example` dosyasını açın, Anthropic
-   anahtarınızı ilk satıra yapıştırın ve dosyanın adını **`key.txt`** olarak
-   değiştirin. Anahtarı https://console.anthropic.com → API keys üzerinden
-   alabilirsiniz. Anahtar bilgisayarınızda kalır.
+2. **API anahtarınızı ekleyin.** Uygulamayı ilk açtığınızda sağ üstteki
+   **API Anahtarları**'na girin ve kullanmak istediğiniz sağlayıcının (Claude,
+   ChatGPT, Gemini) anahtarını yapıştırıp *Kaydet*'e basın. Anahtar,
+   bilgisayarınızda `~/.palimpsest` klasöründe şifreli olarak saklanır ve
+   hiçbir zaman bilgisayarınızın dışına çıkmaz — yalnızca çeviri
+   çağrılarının kendisi ilgili sağlayıcıya gider. Birden fazla sağlayıcının
+   anahtarını aynı anda kaydedebilir ve paragraf paragraf aralarında
+   geçiş yapabilirsiniz.
 
-3. Hepsi bu kadar. Başlatıcı, ihtiyaç duyduğu üç küçük kütüphaneyi ilk
+   (Eski kurulumlardan kalan `key.txt` dosyası varsa, Anthropic için hâlâ
+   çalışmaya devam eder — yeniden anahtar girmeniz gerekmez.)
+
+3. Hepsi bu kadar. Başlatıcı, ihtiyaç duyduğu kütüphaneleri ilk
    çalıştırmada sizin için kurar.
 
 ---
@@ -54,6 +61,11 @@ kapatın ve başlatıcının açtığı küçük terminal penceresini kapatın.
    ekranında sizi bekliyor olur.
 5. **Dışa aktarma**, tamamlanmış çevirinizi bir metin dosyasına yazar.
 
+Zor bir paragrafta modelin daha uzun düşünmesini istiyorsanız, paragrafın
+yanındaki ikinci açılır menüden **Düşük/Orta/Yüksek** efor seçebilirsiniz
+(yalnızca bunu destekleyen modellerde görünür). Varsayılan her zaman
+**Kapalı**'dır — daha yüksek efor ek maliyete yol açar.
+
 ---
 
 ## Çalışmanız nerede tutulur
@@ -66,9 +78,8 @@ Bir projeyi başkasına vermek için tek JSON dosyasını gönderin.
 
 ## Bir şey çalışmazsa
 
-- **"No API key found"** — dosyanın adının tam olarak `key.txt` olduğundan
-  (`key.txt.txt` değil) ve bu klasörde durduğundan emin olun, sonra sayfayı
-  yenileyin.
+- **"No API key found"** — API Anahtarları ekranından en az bir sağlayıcı için
+  anahtar girdiğinizden emin olun, sonra sayfayı yenileyin.
 - **Tarayıcı açılmadı** — http://localhost:5001 adresine elle gidin.
 - **"python not found"** — Python kurulu değil ya da PATH'e eklenmemiş;
   python.org'dan yeniden kurup tekrar deneyin.
@@ -77,8 +88,10 @@ Bir projeyi başkasına vermek için tek JSON dosyasını gönderin.
 
 ## Maliyeti nedir
 
-API çağrıları için doğrudan Anthropic'e ödeme yaparsınız (hiçbir şey
-aradaki başka birinden geçmez). Kitabın tek seferlik bütün-kitap okumasının
-ve her paragrafın maliyeti, ilerledikçe size gösterilir. Tam boy bir roman,
-seçtiğiniz modele göre tipik olarak birkaç dolardan düşük çift haneli
-rakamlara kadar tutar.
+API çağrıları için doğrudan seçtiğiniz sağlayıcıya (Anthropic, OpenAI veya
+Google) ödeme yaparsınız — hiçbir şey aradaki başka birinden geçmez.
+Kitabın tek seferlik bütün-kitap okumasının ve her paragrafın maliyeti,
+ilerledikçe size gösterilir. Tüm zamanların toplam harcamanızı, sağlayıcı
+ve model kırılımıyla, sağ üstteki **Harcamalar** ekranından görebilirsiniz.
+Tam boy bir roman, seçtiğiniz modele göre tipik olarak birkaç dolardan
+düşük çift haneli rakamlara kadar tutar.

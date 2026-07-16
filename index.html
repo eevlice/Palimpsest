@@ -10,8 +10,7 @@
     font-family:'Newsreader',Georgia,serif;font-size:17px;line-height:1.6;}
   .wrap{max-width:1080px;margin:0 auto;padding:48px 28px 140px;}
   header{border-bottom:1.5px solid var(--ink);padding-bottom:20px;margin-bottom:30px;}
-  .eyebrow{font-family:'Spline Sans Mono',monospace;font-size:11px;letter-spacing:.22em;
-    text-transform:uppercase;color:var(--pencil);margin:0 0 8px;}
+  .header-top{display:flex;align-items:center;justify-content:space-between;gap:16px;}
   h1{font-family:'Fraunces',serif;font-weight:600;font-size:clamp(36px,6vw,58px);
     line-height:1;margin:0;letter-spacing:-.02em;}
   .sub{color:var(--ink-soft);margin:12px 0 0;max-width:58ch;}
@@ -35,7 +34,8 @@
   button.run:disabled{opacity:.5;cursor:wait;}
   .tb{font-family:'Spline Sans Mono',monospace;font-size:11px;letter-spacing:.1em;
     text-transform:uppercase;background:none;border:1px solid var(--rule);color:var(--ink-soft);
-    padding:6px 12px;cursor:pointer;}
+    height:30px;box-sizing:border-box;padding:0 12px;cursor:pointer;
+    display:inline-flex;align-items:center;justify-content:center;}
   .tb:hover{border-color:var(--ink);color:var(--ink);}
   .tb.active{border-color:var(--thread);color:var(--thread);}
   .drop{border:1.5px dashed var(--rule);padding:38px;text-align:center;cursor:pointer;
@@ -67,10 +67,16 @@
     padding:4px 9px;cursor:pointer;}
   .pa:hover{border-color:var(--ink);color:var(--ink);}
   .pa.danger:hover{border-color:var(--pencil);color:var(--pencil);}
-  .ws-bar{display:flex;align-items:center;gap:12px;flex-wrap:wrap;
-    border-bottom:1px solid var(--rule);padding-bottom:12px;margin-bottom:6px;}
-  .ws-bar .meta{margin-left:auto;}
-  .ws-title{font-family:'Fraunces',serif;font-weight:500;font-size:20px;margin-right:8px;}
+  .ws-bar{display:flex;align-items:center;gap:6px;flex-wrap:wrap;
+    border-bottom:1px solid var(--rule);padding-bottom:12px;margin-bottom:16px;}
+  .ws-divider{width:1px;height:18px;background:var(--rule);margin:0 4px;flex:0 0 auto;}
+  .ws-tools{display:flex;gap:6px;}
+  .ws-status{display:flex;align-items:center;gap:6px;margin-left:auto;
+    font-family:'Spline Sans Mono',monospace;font-size:11px;color:var(--ink-soft);}
+  .ws-status .save-pill{color:var(--thread);}
+  .ws-title{font-weight:500;}
+  .tb.icon-only{width:30px;padding:0;display:inline-flex;align-items:center;justify-content:center;}
+  .tb.icon-only svg{display:block;}
   .drawer{background:rgba(255,255,255,.45);border:1px solid var(--rule);
     padding:16px 18px;margin-bottom:14px;animation:slideDown .2s ease;}
   @keyframes slideDown{from{opacity:0;transform:translateY(-6px);}to{opacity:1;transform:none;}}
@@ -192,13 +198,9 @@
     .row2{grid-template-columns:1fr 1fr;}
     .seg{grid-template-columns:1fr;}
     .ws-layout{grid-template-columns:1fr;}
-    /* toolbar: tidy uniform buttons, title on its own full-width line */
-    .ws-bar{gap:8px 10px;align-items:baseline;}
-    /* top line: title on left; cost + saved together on the right, same line */
-    .ws-title{order:-3;flex:1 1 100%;margin:0 0 2px;font-size:22px;}
-    .ws-bar .meta{order:-2;flex:0 0 auto;margin-left:auto;text-align:right;}
-    .ws-bar .save-pill{order:-1;flex:0 0 auto;text-align:right;margin-left:8px;}
-    .ws-bar .tb{flex:1 1 auto;text-align:center;}
+    /* toolbar: status group wraps to its own full-width line below the tools */
+    .ws-status{flex:1 1 100%;order:1;justify-content:flex-start;margin-left:0;}
+    .ws-bar{gap:8px 10px;}
     /* rail = collapsible multi-column chip grid, lives under the tracker */
     .rail{position:static;max-height:42vh;overflow-y:auto;border-right:none;
       border:1px solid var(--rule);background:rgba(255,255,255,.5);
@@ -215,15 +217,37 @@
     .seg-actions .seg-btn{flex:0 0 auto;padding:6px 9px;}
     .seg-actions .seg-model{flex:1 1 auto;min-width:0;}
   }
+  .header-nav{display:flex;gap:6px;flex:0 0 auto;}
+  .provider-row{border:1px solid var(--rule);background:rgba(255,255,255,.4);
+    padding:16px 18px;margin-bottom:16px;}
+  .provider-row .prow-top{display:flex;align-items:center;gap:10px;margin-bottom:10px;}
+  .provider-row .plabel{font-family:'Fraunces',serif;font-size:19px;}
+  .pill{font-family:'Spline Sans Mono',monospace;font-size:10px;letter-spacing:.08em;
+    text-transform:uppercase;padding:3px 9px;border:1px solid var(--rule);color:var(--ink-soft);}
+  .pill.on{border-color:var(--thread);color:var(--thread);}
+  .prow-form{display:flex;gap:8px;}
+  .prow-form input{flex:1 1 auto;}
+  .prow-form button{flex:0 0 auto;}
+  .data-table{width:100%;border-collapse:collapse;font-family:'Spline Sans Mono',monospace;font-size:13px;}
+  .data-table th,.data-table td{text-align:left;padding:8px 10px;border-bottom:1px solid var(--rule);}
+  .data-table th{color:var(--ink-soft);font-weight:500;text-transform:uppercase;font-size:11px;letter-spacing:.08em;}
+  .data-table td.num,.data-table th.num{text-align:right;}
+  .total-banner{font-family:'Fraunces',serif;font-size:26px;margin:18px 0;}
+  .seg-actions .seg-effort{flex:0 0 auto;width:auto;min-width:88px;}
 </style>
 
 <div class="wrap">
   <header>
-    <p class="eyebrow">Bağlam duyarlı kitap çevirisi</p>
-    <h1>Palimpsest</h1>
+    <div class="header-top">
+      <h1>Palimpsest</h1>
+      <div class="header-nav">
+        <button class="tb icon-only" id="btn-settings-nav" onclick="openSettings()" title="API anahtarları"><svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><circle cx="8" cy="15" r="4"/><path d="M10.8 12.2 20 3"/><path d="m17 6 3 3"/><path d="m14 9 2 2"/></svg></button>
+        <button class="tb icon-only" id="btn-spending-nav" onclick="openSpending()" title="Harcamalar"><svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><line x1="6" y1="20" x2="6" y2="10"/><line x1="12" y1="20" x2="12" y2="4"/><line x1="18" y1="20" x2="18" y2="14"/></svg></button>
+      </div>
+    </div>
     <p class="sub">Bir kitap bırak. Senin kontrolündeki özeti oluşturmak için bir kez okur, ardından paragraf paragraf çevirir — her zaman bağlamla birlikte. Her şey kendiliğinden kaydedilir.</p>
   </header>
-  <div id="nokey" class="note hidden">API anahtarı bulunamadı. Anthropic anahtarını uygulama klasöründeki <b>key.txt</b> dosyasına ekle, ardından sayfayı yenile.</div>
+  <div id="nokey" class="note hidden">Hiçbir sağlayıcı için API anahtarı bulunamadı. <b>API anahtarları</b> ikonundan bir anahtar ekle.</div>
 
   <!-- ========== HOME ========== -->
   <section id="home">
@@ -285,14 +309,19 @@
   <!-- ========== WORKSPACE ========== -->
   <section id="workspace" class="hidden">
     <div class="ws-bar">
-      <button class="tb" id="home-btn">← Projeler</button>
-      <span class="ws-title" id="ws-title"></span>
-      <button class="tb" id="btn-glossary">Sözlük</button>
-      <button class="tb" id="btn-rules">Kurallar</button>
-      <button class="tb" id="btn-brief">Özet &amp; stil</button>
-      <button class="tb" id="btn-merge-mode" title="Select two paragraphs to merge">⊕ Birleştir</button>
-      <span class="meta" id="running-cost"></span>
-      <span class="save-pill" id="save-pill"></span>
+      <button class="tb icon-only" id="home-btn" title="Projelere dön">←</button>
+      <span class="ws-divider"></span>
+      <div class="ws-tools">
+        <button class="tb icon-only" id="btn-glossary" title="Sözlük"><svg viewBox="0 0 24 24" width="15" height="15" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 7v14"/><path d="M3 18a1 1 0 0 1-1-1V4a1 1 0 0 1 1-1h5a4 4 0 0 1 4 4 4 4 0 0 1 4-4h5a1 1 0 0 1 1 1v13a1 1 0 0 1-1 1h-6a3 3 0 0 0-3 3 3 3 0 0 0-3-3z"/></svg></button>
+        <button class="tb icon-only" id="btn-rules" title="Kurallar"><svg viewBox="0 0 24 24" width="15" height="15" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><path d="m3 17 2 2 4-4"/><path d="m3 7 2 2 4-4"/><path d="M13 6h8"/><path d="M13 12h8"/><path d="M13 18h8"/></svg></button>
+        <button class="tb icon-only" id="btn-brief" title="Özet &amp; stil"><svg viewBox="0 0 24 24" width="15" height="15" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><path d="M15 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V7Z"/><path d="M14 2v4a2 2 0 0 0 2 2h4"/><path d="M10 9H8"/><path d="M16 13H8"/><path d="M16 17H8"/></svg></button>
+        <button class="tb icon-only" id="btn-merge-mode" title="Paragrafları birleştir"><svg viewBox="0 0 24 24" width="15" height="15" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><path d="M9 17H7A5 5 0 0 1 7 7h2"/><path d="M15 7h2a5 5 0 1 1 0 10h-2"/><line x1="8" y1="12" x2="16" y2="12"/></svg></button>
+      </div>
+      <div class="ws-status">
+        <span class="ws-title" id="ws-title"></span> ·
+        <span class="meta" id="running-cost"></span>
+        <span class="save-pill" id="save-pill"></span>
+      </div>
     </div>
     <div class="drawer hidden" id="drawer-glossary">
       <div style="display:flex;align-items:center;gap:12px;margin-bottom:10px;">
@@ -349,15 +378,39 @@
       <span class="meta" id="export-meta"></span>
     </div>
   </section>
+
+  <!-- ========== SETTINGS ========== -->
+  <section id="settings" class="hidden">
+    <div class="panel-title"><button class="tb" onclick="closeToHome()">← Geri</button>&nbsp;API Anahtarları</div>
+    <p class="sub">API anahtarların şifreli olarak yalnızca bu bilgisayarda, <span class="mono-sm">~/.palimpsest</span> altında saklanır. Hiçbir zaman sunucuya veya başka bir yere gönderilmez.</p>
+    <div id="settings-providers"></div>
+  </section>
+
+  <!-- ========== SPENDING ========== -->
+  <section id="spending" class="hidden">
+    <div class="panel-title"><button class="tb" onclick="closeToHome()">← Geri</button>&nbsp;Harcamalar</div>
+    <div class="total-banner" id="spending-total"></div>
+    <div style="overflow-x:auto;">
+      <table class="data-table" id="spending-table">
+        <thead><tr>
+          <th>Sağlayıcı</th><th>Model</th><th class="num">Çağrı</th>
+          <th class="num">Girdi</th><th class="num">Çıktı</th><th class="num">Cache</th><th class="num">Maliyet</th>
+        </tr></thead>
+        <tbody id="spending-rows"></tbody>
+      </table>
+    </div>
+    <p class="meta" id="spending-empty" style="margin-top:14px;"></p>
+  </section>
 </div>
 
 <script>
 const $=id=>document.getElementById(id);
 const esc=s=>(s||'').replace(/[&<>]/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;'}[c]));
 
-let P=null,fileObj=null,saveTimer=null,winStart=0;
+let P=null,fileObj=null,saveTimer=null,winStart=0,EDIT_IDX=null;
 const WIN=10;
-let MODEL_LIST=[];
+let MODEL_CATALOG=[]; // [{provider,label,has_key,models:[{id,label,effort}]}]
+const EFFORT_LABEL={off:'Kapalı',low:'Düşük',medium:'Orta',high:'Yüksek'};
 
 // --- inline SVG icons (stroke uses currentColor so they theme correctly) ---
 const ICON={
@@ -365,25 +418,113 @@ const ICON={
   rerun:'<svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><polyline points="23 4 23 10 17 10"/><path d="M20.49 15a9 9 0 1 1-2.12-9.36L23 10"/></svg>',
   pencil:'<svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 20h9"/><path d="M16.5 3.5a2.12 2.12 0 0 1 3 3L7 19l-4 1 1-4Z"/></svg>',
   translate:'<svg viewBox="0 0 24 24" width="15" height="15" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><path d="m5 8 6 6"/><path d="m4 14 6-6 2-3"/><path d="M2 5h12"/><path d="M7 2h1"/><path d="m22 22-5-10-5 10"/><path d="M14 18h6"/></svg>',
-  merge:'<svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><polyline points="8 7 12 11 16 7"/><polyline points="8 13 12 17 16 13"/></svg>'
+  merge:'<svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><path d="M9 17H7A5 5 0 0 1 7 7h2"/><path d="M15 7h2a5 5 0 1 1 0 10h-2"/><line x1="8" y1="12" x2="16" y2="12"/></svg>',
+  book:'<svg viewBox="0 0 24 24" width="15" height="15" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 7v14"/><path d="M3 18a1 1 0 0 1-1-1V4a1 1 0 0 1 1-1h5a4 4 0 0 1 4 4 4 4 0 0 1 4-4h5a1 1 0 0 1 1 1v13a1 1 0 0 1-1 1h-6a3 3 0 0 0-3 3 3 3 0 0 0-3-3z"/></svg>',
+  checklist:'<svg viewBox="0 0 24 24" width="15" height="15" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><path d="m3 17 2 2 4-4"/><path d="m3 7 2 2 4-4"/><path d="M13 6h8"/><path d="M13 12h8"/><path d="M13 18h8"/></svg>',
+  filetext:'<svg viewBox="0 0 24 24" width="15" height="15" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><path d="M15 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V7Z"/><path d="M14 2v4a2 2 0 0 0 2 2h4"/><path d="M10 9H8"/><path d="M16 13H8"/><path d="M16 17H8"/></svg>'
 };
 
 // ================================================================
 // INIT
 // ================================================================
-fetch('/key_status').then(r=>r.json()).then(d=>{if(!d.has_key)$('nokey').classList.remove('hidden');});
-fetch('/models').then(r=>r.json()).then(list=>{
-  MODEL_LIST=list;
-  const sel=$('model');
-  list.forEach(n=>{const o=document.createElement('option');o.textContent=n;sel.appendChild(o);});
-  const bal=list.find(n=>n.toLowerCase().includes('sonnet'));sel.value=bal||list[0];
-  window.__defaultModel=bal||list[0];
-  // If a project is already open, re-render now that models are ready
-  if(P&&P.segments&&P.segments.length){
-    renderRail(); renderWindow(); updateProgress();
-  }
-});
+function loadCatalog(){
+  return fetch('/models').then(r=>r.json()).then(catalog=>{
+    MODEL_CATALOG=catalog;
+    if(!catalog.some(p=>p.has_key)) $('nokey').classList.remove('hidden');
+    else $('nokey').classList.add('hidden');
+    populateModelSelect($('model'));
+    $('model').value=defaultModel();
+    // If a project is already open, re-render now that models are ready
+    if(P&&P.segments&&P.segments.length){
+      renderRail(); renderWindow(); updateProgress();
+    }
+  });
+}
+function populateModelSelect(sel){
+  sel.innerHTML='';
+  MODEL_CATALOG.forEach(p=>{
+    const grp=document.createElement('optgroup');
+    grp.label=p.label+(p.has_key?'':' (anahtar yok)');
+    p.models.forEach(m=>{
+      const o=document.createElement('option');
+      o.value=p.provider+'::'+m.id;
+      o.textContent=m.label;
+      if(!p.has_key) o.disabled=true;
+      grp.appendChild(o);
+    });
+    sel.appendChild(grp);
+  });
+}
+function findModelInfo(key){
+  const [provider,modelId]=(key||'').split('::');
+  const p=MODEL_CATALOG.find(x=>x.provider===provider);
+  const m=p&&p.models.find(x=>x.id===modelId);
+  return m ? {provider,modelId,label:m.label,effort:m.effort,has_key:p.has_key} : null;
+}
+loadCatalog();
 refreshProjects();
+
+// ================================================================
+// SETTINGS
+// ================================================================
+function renderSettings(){
+  fetch('/keys/status').then(r=>r.json()).then(status=>{
+    const c=$('settings-providers');c.innerHTML='';
+    const labels={anthropic:'Claude (Anthropic)',openai:'ChatGPT (OpenAI)',google:'Gemini (Google)'};
+    Object.keys(labels).forEach(provider=>{
+      const on=!!status[provider];
+      const row=document.createElement('div');row.className='provider-row';
+      row.innerHTML=`
+        <div class="prow-top">
+          <span class="plabel">${labels[provider]}</span>
+          <span class="pill ${on?'on':''}" id="pill-${provider}">${on?'✓ kayıtlı':'kayıtlı değil'}</span>
+        </div>
+        <div class="prow-form">
+          <input type="password" id="key-${provider}" placeholder="${on?'•••• yeni anahtarla değiştir':'API anahtarını yapıştır'}">
+          <button class="tb" id="save-${provider}">Kaydet</button>
+          ${on?`<button class="tb" id="clear-${provider}">Sil</button>`:''}
+        </div>`;
+      c.appendChild(row);
+      $('save-'+provider).onclick=async()=>{
+        const val=$('key-'+provider).value.trim();
+        if(!val)return;
+        await fetch('/keys',{method:'POST',headers:{'Content-Type':'application/json'},
+          body:JSON.stringify({provider,api_key:val})});
+        $('key-'+provider).value='';
+        renderSettings(); loadCatalog();
+      };
+      if(on) $('clear-'+provider).onclick=async()=>{
+        await fetch('/keys/clear',{method:'POST',headers:{'Content-Type':'application/json'},
+          body:JSON.stringify({provider})});
+        renderSettings(); loadCatalog();
+      };
+    });
+  });
+}
+
+// ================================================================
+// SPENDING
+// ================================================================
+function renderSpending(){
+  fetch('/spending').then(r=>r.json()).then(data=>{
+    $('spending-total').textContent=`Toplam: $${data.total_cost.toFixed(4)} · ${data.total_calls} çağrı`;
+    const rows=$('spending-rows');rows.innerHTML='';
+    if(!data.by_model.length){
+      $('spending-empty').textContent='Henüz kayıtlı bir çağrı yok.';
+    }else{
+      $('spending-empty').textContent='';
+      data.by_model.forEach(r=>{
+        const providerLabel=(MODEL_CATALOG.find(p=>p.provider===r.provider)||{}).label||r.provider;
+        const tr=document.createElement('tr');
+        tr.innerHTML=`<td>${esc(providerLabel)}</td><td>${esc(r.model)}</td>
+          <td class="num">${r.calls}</td><td class="num">${r.input}</td>
+          <td class="num">${r.output}</td><td class="num">${r.cache_read}</td>
+          <td class="num">$${r.cost.toFixed(4)}</td>`;
+        rows.appendChild(tr);
+      });
+    }
+  });
+}
 
 // ================================================================
 // PROJECTS
@@ -462,16 +603,17 @@ $('analyze').onclick=async()=>{
   const fd=new FormData();
   fd.append('file',fileObj);fd.append('source_lang',$('src').value);
   fd.append('target_lang',$('tgt').value);fd.append('model',$('model').value);
+  fd.append('name',name);
   try{
     const res=await fetch('/setup',{method:'POST',body:fd});
     const data=await res.json();
     if(!res.ok){$('setup-err').innerHTML=`<div class="err">${esc(data.error)}</div>`;
       $('analyze').disabled=false;$('setup-status').textContent='';return;}
     P={id:'p_'+Date.now(),name,source_lang:$('src').value,target_lang:$('tgt').value,
-      model:(($('model').value)||'Sonnet 4.6'),segments:data.segments,
+      model:($('model').value||defaultModel()),segments:data.segments,
       finals:new Array(data.segments.length).fill(null),
       approved:new Array(data.segments.length).fill(false),
-      synopsis:data.synopsis,terms:data.terms,rules:'',style:'',cost:0};
+      synopsis:data.synopsis,terms:data.terms,rules:'',style:'',cost:0,segEffort:{}};
     $('synopsis').value=data.synopsis;$('terms').value=data.terms;$('rules').value='';$('style').value='';
     $('setup-status').textContent='';
     $('review-meta').textContent=`${data.count} paragraphs · context read $${data.setup_cost.toFixed(4)}`;
@@ -491,8 +633,20 @@ $('start').onclick=()=>{
 // SCREENS
 // ================================================================
 function showScreen(id){
-  ['home','review','workspace'].forEach(s=>$(s).classList.add('hidden'));
+  ['home','review','workspace','settings','spending'].forEach(s=>$(s).classList.add('hidden'));
   $(id).classList.remove('hidden');window.scrollTo({top:0,behavior:'smooth'});
+}
+let _prevScreen='home';
+function closeToHome(){ showScreen(_prevScreen); }
+function openSettings(){
+  _prevScreen = P ? 'workspace' : 'home';
+  renderSettings();
+  showScreen('settings');
+}
+function openSpending(){
+  _prevScreen = P ? 'workspace' : 'home';
+  renderSpending();
+  showScreen('spending');
 }
 $('home-btn').onclick=()=>{
   P=null;fileObj=null;$('analyze').disabled=true;$('pname').value='';
@@ -617,7 +771,7 @@ async function cleanGlossary(){
   try{
     const res=await fetch('/clean_glossary',{method:'POST',
       headers:{'Content-Type':'application/json'},
-      body:JSON.stringify({model:P.model,source_lang:P.source_lang,
+      body:JSON.stringify({model:P.model,id:P.id,name:P.name,source_lang:P.source_lang,
         target_lang:P.target_lang,terms:P.terms,synopsis:P.synopsis})});
     const data=await res.json();
     if(!res.ok){ $('clean-status').textContent=data.error||'başarısız'; btn.disabled=false; return; }
@@ -649,6 +803,7 @@ function normalizeProject(p){
   // Ensure approved is boolean array
   p.approved = p.approved.map(a => a===true);
   if(!p.segCost) p.segCost={};
+  if(!p.segEffort) p.segEffort={};
   if(p.cost===undefined||p.cost===null) p.cost=0;
   // Rebuild total cost from per-segment costs if total is missing
   if(p.cost===0 && p.segCost && Object.keys(p.segCost).length>0){
@@ -722,20 +877,53 @@ function goToWindow(i){
 }
 
 function defaultModel(){
-  // Always prefer Sonnet 4.6 as the standing default.
-  return MODEL_LIST.find(m=>m.toLowerCase().includes('sonnet')) || MODEL_LIST[0];
+  // Prefer Anthropic Sonnet 4.6 among providers that currently have a key.
+  const keyed=MODEL_CATALOG.filter(p=>p.has_key);
+  const pool=keyed.length?keyed:MODEL_CATALOG;
+  const anthropic=pool.find(p=>p.provider==='anthropic');
+  if(anthropic){
+    const sonnet=anthropic.models.find(m=>m.id.includes('sonnet-4-6'));
+    if(sonnet) return 'anthropic::'+sonnet.id;
+  }
+  const first=pool[0];
+  return first ? first.provider+'::'+first.models[0].id : '';
 }
 function modelSelector(i){
-  if(!MODEL_LIST||!MODEL_LIST.length){
+  if(!MODEL_CATALOG.length){
     return `<select class="seg-model" id="msel-${i}"><option>Loading...</option></select>`;
   }
   const def=defaultModel();
   let opts='';
-  MODEL_LIST.forEach(m=>{
-    const sel=(m===def)?' selected':'';
-    opts+=`<option${sel}>${esc(m)}</option>`;
+  MODEL_CATALOG.forEach(p=>{
+    opts+=`<optgroup label="${esc(p.label)}${p.has_key?'':' (anahtar yok)'}">`;
+    p.models.forEach(m=>{
+      const val=p.provider+'::'+m.id;
+      const selected=(val===def)?' selected':'';
+      const disabled=p.has_key?'':' disabled';
+      opts+=`<option value="${val}"${selected}${disabled}>${esc(m.label)}</option>`;
+    });
+    opts+='</optgroup>';
   });
-  return `<select class="seg-model" id="msel-${i}">${opts}</select>`;
+  return `<select class="seg-model" id="msel-${i}" onchange="onModelChange(${i})">${opts}</select>`;
+}
+function effortSelector(i){
+  const opts=['off','low','medium','high'].map(e=>`<option value="${e}">${EFFORT_LABEL[e]}</option>`).join('');
+  return `<select class="seg-model seg-effort" id="esel-${i}" title="Düşünme eforu (yalnızca zor paragraflarda gerekli)">${opts}</select>`;
+}
+function onModelChange(i){
+  const msel=$('msel-'+i), esel=$('esel-'+i);
+  if(!msel||!esel)return;
+  const info=findModelInfo(msel.value);
+  esel.classList.toggle('hidden', !(info&&info.effort));
+  if(!(info&&info.effort)) esel.value='off';
+}
+function getSegModel(i){
+  const sel=$('msel-'+i);
+  return sel?sel.value:P.model;
+}
+function getSegEffort(i){
+  const esel=$('esel-'+i);
+  return (esel && !esel.classList.contains('hidden')) ? esel.value : 'off';
 }
 
 // ================================================================
@@ -914,8 +1102,8 @@ function renderWindow(){
       const costTag=(P.segCost&&P.segCost[i]!=null)?`<span class="seg-cost">$${P.segCost[i].toFixed(4)}</span>`:'';
       right=`<textarea class="tgt-edit" id="edit-${i}">${esc(P.finals[i])}</textarea>
         <div class="seg-actions">
-          <button class="seg-btn primary" onclick="approveSeg(${i})" title="Bu paragrafı onayla">${ICON.check}<span>${P.approved[i]?'Onaylandı':'Onayla'}</span></button>
-          ${modelSelector(i)}
+          <button class="seg-btn primary" onclick="approveSeg(${i})" title="Bu paragrafı onayla">${ICON.check}${P.approved[i]?'':'<span>Onayla</span>'}</button>
+          ${modelSelector(i)}${effortSelector(i)}
           <button class="seg-btn icon" onclick="runSeg(${i})" title="Yeniden çevir (makine)">${ICON.rerun}</button>
           <button class="seg-btn icon" onclick="writeSeg(${i})" title="Kendi çevirimі yaz">${ICON.pencil}</button>
           ${costTag}
@@ -923,7 +1111,7 @@ function renderWindow(){
     }else{
       right=`<div class="placeholder">Henüz çevrilmedi.</div>
         <div class="seg-actions">
-          ${modelSelector(i)}
+          ${modelSelector(i)}${effortSelector(i)}
           <button class="seg-btn primary" onclick="runSeg(${i})" title="Makine ile çevir">${ICON.translate}<span>Translate</span></button>
           <button class="seg-btn icon" onclick="writeSeg(${i})" title="Kendi çevirimі yaz">${ICON.pencil}</button>
         </div>`;
@@ -946,6 +1134,9 @@ function renderWindow(){
     if(P.finals[i]!==null){
       const ed=$('edit-'+i);ed.oninput=()=>{P.finals[i]=ed.value;autoGrow(ed);queueSave();};
     }
+    onModelChange(i);
+    const esel=$('esel-'+i);
+    if(esel && P.segEffort && P.segEffort[i]) esel.value=P.segEffort[i];
   }
   }catch(err){ console.error('renderWindow:',err); return; }
   const last=Math.min(winStart+WIN,P.segments.length);
@@ -982,21 +1173,17 @@ function memoryString(uptoIndex){
   return pairs.join('\n');
 }
 
-function getSegModel(i){
-  const sel=$('msel-'+i);
-  return sel?sel.value:P.model;
-}
-
 window.writeSeg=(i)=>{
   const area=$('seg-'+i).querySelector('.tgt-area');
   area.innerHTML=`<textarea class="tgt-edit" id="edit-${i}" placeholder="Çevirinizi yazın…"></textarea>
     <div class="seg-actions">
       <button class="seg-btn primary" onclick="approveSeg(${i})" title="Bu paragrafı onayla">${ICON.check}<span>Approve</span></button>
-      ${modelSelector(i)}
+      ${modelSelector(i)}${effortSelector(i)}
       <button class="seg-btn icon" onclick="runSeg(${i})" title="Bunun yerine makine ile çevir">${ICON.translate}</button>
     </div>`;
   P.finals[i]='';P.approved[i]=false;
   const wed=$('edit-'+i);wed.oninput=()=>{P.finals[i]=wed.value;autoGrow(wed);queueSave();};
+  onModelChange(i);
   $('edit-'+i).focus();
   renderRail();queueSave();
 };
@@ -1006,7 +1193,9 @@ window.runSeg=async(i)=>{
   const btn=area.querySelector('.seg-btn.primary')||area.querySelector('.seg-btn');
   btn.disabled=true;btn.textContent='Translating…';
   const segModel=getSegModel(i);
-  const payload={model:segModel,source_lang:P.source_lang,target_lang:P.target_lang,
+  const segEffort=getSegEffort(i);
+  const payload={model:segModel,effort:segEffort,id:P.id,name:P.name,
+    source_lang:P.source_lang,target_lang:P.target_lang,
     synopsis:P.synopsis,terms:P.terms,rules:P.rules||'',style_sample:P.style,
     text:P.segments[i],before:i>0?P.segments[i-1]:'',
     after:i<P.segments.length-1?P.segments[i+1]:'',memory:memoryString(i)};
@@ -1019,18 +1208,22 @@ window.runSeg=async(i)=>{
     P.cost+=data.cost;P.finals[i]=data.final;P.approved[i]=false;
     if(!P.segCost)P.segCost={};
     P.segCost[i]=data.cost;
+    if(!P.segEffort)P.segEffort={};
+    P.segEffort[i]=segEffort;
     const tk=data.tokens||{};
     const cacheInfo=tk.cache_read?` · cache ✓`:'';
     area.innerHTML=`<textarea class="tgt-edit" id="edit-${i}">${esc(data.final)}</textarea>
       <div class="seg-actions">
         <button class="seg-btn primary" onclick="approveSeg(${i})" title="Bu paragrafı onayla">${ICON.check}<span>Approve</span></button>
-        ${modelSelector(i)}
+        ${modelSelector(i)}${effortSelector(i)}
         <button class="seg-btn icon" onclick="runSeg(${i})" title="Yeniden çevir (makine)">${ICON.rerun}</button>
         <button class="seg-btn icon" onclick="writeSeg(${i})" title="Kendi çevirimі yaz">${ICON.pencil}</button>
         <span class="seg-cost">$${data.cost.toFixed(4)}${cacheInfo}</span>
       </div>`;
-    // restore selected model in new dropdown
+    // restore selected model + effort in the new dropdowns
     const newSel=$('msel-'+i);if(newSel)newSel.value=segModel;
+    onModelChange(i);
+    const newEff=$('esel-'+i);if(newEff)newEff.value=segEffort;
     const ned=$('edit-'+i);ned.oninput=()=>{P.finals[i]=ned.value;autoGrow(ned);queueSave();};autoGrow(ned);
     $('seg-'+i).classList.remove('done');
     updateProgress();renderRail();queueSave();
@@ -1043,7 +1236,7 @@ window.approveSeg=(i)=>{
   P.approved[i]=true;
   $('seg-'+i).classList.add('done');
   const btn=$('seg-'+i).querySelector('.seg-btn.primary');
-  if(btn){const sp=btn.querySelector('span');if(sp)sp.textContent='Onaylandı';}
+  if(btn){const sp=btn.querySelector('span');if(sp)sp.remove();}
   updateProgress();renderRail();queueSave();
 };
 

@@ -2,12 +2,13 @@
 """
 Palimpsest — a local, self-contained CAT tool built on the self-refine loop.
 
-Runs entirely on your own machine. Your book text and your API key never
+Runs entirely on your own machine. Your book text and your API keys never
 leave your computer except for the calls to the translation API itself.
 
 Setup:
-    pip install flask anthropic python-docx
-    Put your API key in key.txt in this folder.
+    pip install flask anthropic openai google-genai python-docx cryptography
+    Add your API key(s) from the app's Settings screen (or, for Anthropic
+    only, put a key in key.txt in this folder for backward compatibility).
 
 Run:
     Double-click start.command (Mac) or start.bat (Windows).
@@ -21,125 +22,26 @@ import glob
 import datetime
 from flask import Flask, request, jsonify, send_from_directory
 
+import keys
+import spending
+import providers
+
 app = Flask(__name__, static_folder=".")
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 PROJECTS_DIR = os.path.join(HERE, "projects")
 os.makedirs(PROJECTS_DIR, exist_ok=True)
 
-MODELS = {
-    "Opus 4.8": "claude-opus-4-8",
-    "Sonnet 5": "claude-sonnet-5",
-    "Sonnet 4.6": "claude-sonnet-4-6",
-    "Haiku 4.5": "claude-haiku-4-5-20251001",
-}
-PRICES = {
-    "claude-opus-4-8":          {"in": 5.0,  "out": 25.0, "cache_write": 6.25, "cache_read": 0.50},
-    # Sonnet 5 bills at $2/$10 until 2026-08-31, then at the list price below.
-    # Costs shown for it are therefore high by ~a third until then.
-    "claude-sonnet-5":          {"in": 3.0,  "out": 15.0, "cache_write": 3.75, "cache_read": 0.30},
-    "claude-sonnet-4-6":        {"in": 3.0,  "out": 15.0, "cache_write": 3.75, "cache_read": 0.30},
-    "claude-haiku-4-5-20251001":{"in": 1.0,  "out": 5.0,  "cache_write": 1.25, "cache_read": 0.10},
-}
-DEFAULT_MODEL = "claude-sonnet-4-6"
+DEFAULT_PROVIDER, DEFAULT_MODEL = "anthropic", "claude-sonnet-4-6"
 
 
-# --------------------------------------------------------------------------
-# API key
-# --------------------------------------------------------------------------
-
-def load_api_key():
-    key_file = os.path.join(HERE, "key.txt")
-    if os.path.exists(key_file):
-        with open(key_file, "r", encoding="utf-8") as f:
-            k = f.read().strip()
-            if k:
-                return k
-    return os.environ.get("ANTHROPIC_API_KEY", "").strip()
-
-
-def get_client():
-    from anthropic import Anthropic
-    key = load_api_key()
-    if not key:
-        raise RuntimeError("no key")
-    return Anthropic(api_key=key)
-
-
-# --------------------------------------------------------------------------
-# Cached call: splits standing context (cacheable) from per-segment content.
-# --------------------------------------------------------------------------
-
-def call_cached(client, model, system_text, standing_context, per_call_text, max_tokens=8192):
-    """
-    Make an API call with prompt caching.
-    - system_text: the role instruction (cached)
-    - standing_context: synopsis, glossary, rules, style (cached)
-    - per_call_text: neighbors, memory, the segment itself (NOT cached)
-    """
-    resp = client.messages.create(
-        model=model,
-        max_tokens=max_tokens,
-        # Sonnet 5 turns adaptive thinking on by default; the others leave it off
-        # when unset. Disable it everywhere so max_tokens is spent on translation,
-        # not reasoning, and behaviour is identical across models. Passed via
-        # extra_body so it works on the older anthropic SDK too.
-        extra_body={"thinking": {"type": "disabled"}},
-        system=[{
-            "type": "text",
-            "text": system_text,
-            "cache_control": {"type": "ephemeral"}
-        }],
-        messages=[{
-            "role": "user",
-            "content": [
-                {
-                    "type": "text",
-                    "text": standing_context,
-                    "cache_control": {"type": "ephemeral"}
-                },
-                {
-                    "type": "text",
-                    "text": per_call_text
-                }
-            ]
-        }]
-    )
-    text = "".join(b.text for b in resp.content if b.type == "text").strip()
-    usage = resp.usage
-    return text, usage
-
-
-def call_simple(client, model, system, user, max_tokens=8192):
-    """Non-cached call for setup pass."""
-    resp = client.messages.create(
-        model=model, max_tokens=max_tokens,
-        extra_body={"thinking": {"type": "disabled"}},
-        system=system, messages=[{"role": "user", "content": user}],
-    )
-    text = "".join(b.text for b in resp.content if b.type == "text").strip()
-    return text, resp.usage.input_tokens, resp.usage.output_tokens
-
-
-def compute_cost(usage, model):
-    """Compute cost from usage object, accounting for cache hits."""
-    price = PRICES.get(model, PRICES[DEFAULT_MODEL])
-    input_tokens = getattr(usage, 'input_tokens', 0) or 0
-    output_tokens = getattr(usage, 'output_tokens', 0) or 0
-    cache_read = getattr(usage, 'cache_read_input_tokens', 0) or 0
-    cache_write = getattr(usage, 'cache_creation_input_tokens', 0) or 0
-    # input_tokens from the API includes non-cached input; cache_read/write are separate
-    non_cached_input = input_tokens - cache_read - cache_write
-    if non_cached_input < 0:
-        non_cached_input = 0
-    cost = (non_cached_input / 1e6 * price["in"]
-            + cache_read / 1e6 * price["cache_read"]
-            + cache_write / 1e6 * price["cache_write"]
-            + output_tokens / 1e6 * price["out"])
-    return round(cost, 6), {
-        "input": non_cached_input, "output": output_tokens,
-        "cache_read": cache_read, "cache_write": cache_write
-    }
+def parse_model_key(s):
+    """'provider::model_id' -> (provider, model_id), falling back to the default."""
+    if s and "::" in s:
+        provider, model = s.split("::", 1)
+        if provider in providers.PROVIDERS and model in providers.PROVIDERS[provider]["models"]:
+            return provider, model
+    return DEFAULT_PROVIDER, DEFAULT_MODEL
 
 
 # --------------------------------------------------------------------------
@@ -166,11 +68,11 @@ def segment(text):
 # One-time whole-book context pass (no caching needed — runs once)
 # --------------------------------------------------------------------------
 
-def condense_brief(client, model, synopsis):
+def condense_brief(provider, model, synopsis):
     """Compress the brief to minimum tokens without losing any instruction.
     Runs once at setup; saves tokens on every later translation call."""
     if not synopsis or len(synopsis) < 200:
-        return synopsis, 0, 0
+        return synopsis, None
     system = ("You compress translation briefs to the fewest words possible "
               "while preserving every instruction, nuance, and stylistic note. "
               "Telegraphic phrasing is fine. Drop nothing meaningful.")
@@ -178,13 +80,13 @@ def condense_brief(client, model, synopsis):
             "Keep every distinct instruction about voice, tone, register, POV, and "
             "style. Output ONLY the condensed brief.\n\n" + synopsis)
     try:
-        text, ti, to = call_simple(client, model, system, user, max_tokens=1024)
-        return text, ti, to
+        text, cost, tokens = providers.call_simple(provider, model, system, user, max_tokens=1024)
+        return text, (cost, tokens)
     except Exception:
-        return synopsis, 0, 0
+        return synopsis, None
 
 
-def build_context(client, model, src, tgt, full_text):
+def build_context(provider, model, src, tgt, full_text):
     system = (
         "You are a senior literary translator preparing to translate a book. "
         "Before translating, you read the whole text and produce a working brief."
@@ -216,7 +118,7 @@ def build_context(client, model, src, tgt, full_text):
         f"Prefer a short, high-value list over an exhaustive one.\n\n"
         f"BOOK:\n{sample}"
     )
-    return call_simple(client, model, system, user, max_tokens=4096)
+    return providers.call_simple(provider, model, system, user, max_tokens=4096)
 
 
 def split_context(blob):
@@ -267,12 +169,37 @@ def index():
 
 @app.route("/models")
 def models():
-    return jsonify(list(MODELS.keys()))
+    return jsonify(providers.list_catalog())
 
 
-@app.route("/key_status")
-def key_status():
-    return jsonify({"has_key": bool(load_api_key())})
+@app.route("/keys/status")
+def keys_status():
+    return jsonify(keys.key_status())
+
+
+@app.route("/keys", methods=["POST"])
+def keys_set():
+    d = request.get_json()
+    provider = d.get("provider")
+    if provider not in providers.PROVIDERS:
+        return jsonify({"error": "Unknown provider."}), 400
+    keys.set_key(provider, d.get("api_key", ""))
+    return jsonify({"ok": True, "has_key": bool(keys.get_key(provider))})
+
+
+@app.route("/keys/clear", methods=["POST"])
+def keys_clear():
+    d = request.get_json()
+    provider = d.get("provider")
+    if provider not in providers.PROVIDERS:
+        return jsonify({"error": "Unknown provider."}), 400
+    keys.clear_key(provider)
+    return jsonify({"ok": True})
+
+
+@app.route("/spending")
+def spending_summary():
+    return jsonify(spending.summary())
 
 
 @app.route("/projects")
@@ -365,7 +292,8 @@ def setup():
     f = request.files.get("file")
     src = request.form.get("source_lang", "English")
     tgt = request.form.get("target_lang", "Turkish")
-    model = MODELS.get(request.form.get("model"), DEFAULT_MODEL)
+    project_name = request.form.get("name", "")
+    provider, model = parse_model_key(request.form.get("model"))
     if not f:
         return jsonify({"error": "No file received."}), 400
     try:
@@ -375,19 +303,21 @@ def setup():
     segs = segment(text)
     if not segs:
         return jsonify({"error": "No text found in the file."}), 400
+    if not keys.get_key(provider):
+        return jsonify({"error": f"No API key for {provider}. Add one from Settings."}), 500
     try:
-        client = get_client()
-    except Exception:
-        return jsonify({"error": "No API key. Put your key in key.txt and restart."}), 500
-    try:
-        blob, ti, to = build_context(client, model, src, tgt, text)
+        blob, cost1, tokens1 = build_context(provider, model, src, tgt, text)
         synopsis, terms = split_context(blob)
+        spending.log_call("", project_name, provider, model, "off", tokens1, cost1)
         # Condense the brief once now, to cut tokens on every later call.
-        condensed, ti2, to2 = condense_brief(client, model, synopsis)
-        price = PRICES.get(model, PRICES[DEFAULT_MODEL])
-        cost = (ti + ti2) / 1e6 * price["in"] + (to + to2) / 1e6 * price["out"]
+        condensed, condense_info = condense_brief(provider, model, synopsis)
+        total_cost = cost1
+        if condense_info:
+            cost2, tokens2 = condense_info
+            spending.log_call("", project_name, provider, model, "off", tokens2, cost2)
+            total_cost += cost2
         return jsonify({"segments": segs, "synopsis": condensed, "terms": terms,
-                        "setup_cost": round(cost, 4), "count": len(segs)})
+                        "setup_cost": round(total_cost, 4), "count": len(segs)})
     except Exception as e:
         return jsonify({"error": f"Context pass failed: {e}"}), 500
 
@@ -397,16 +327,15 @@ def clean_glossary():
     """Re-filter an existing glossary: drop X=X identities, one-offs, and noise.
     Driven by language pair and genre. Returns a cleaned term list."""
     d = request.get_json()
-    model = MODELS.get(d.get("model"), DEFAULT_MODEL)
+    provider, model = parse_model_key(d.get("model"))
     src, tgt = d.get("source_lang", "English"), d.get("target_lang", "Turkish")
     terms = (d.get("terms") or "").strip()
     synopsis = (d.get("synopsis") or "").strip()
+    project_id, project_name = d.get("id", ""), d.get("name", "")
     if not terms:
         return jsonify({"terms": "", "cost": 0})
-    try:
-        client = get_client()
-    except Exception:
-        return jsonify({"error": "No API key. Put your key in key.txt and restart."}), 500
+    if not keys.get_key(provider):
+        return jsonify({"error": f"No API key for {provider}. Add one from Settings."}), 500
     try:
         system = (
             "You are a translation glossary editor. You ruthlessly prune glossaries "
@@ -427,9 +356,8 @@ def clean_glossary():
             f"(target may be blank). No commentary.\n\n"
             f"GLOSSARY:\n{terms}"
         )
-        text, ti, to = call_simple(client, model, system, user, max_tokens=2048)
-        price = PRICES.get(model, PRICES[DEFAULT_MODEL])
-        cost = ti / 1e6 * price["in"] + to / 1e6 * price["out"]
+        text, cost, tokens = providers.call_simple(provider, model, system, user, max_tokens=2048)
+        spending.log_call(project_id, project_name, provider, model, "off", tokens, cost)
         return jsonify({"terms": text.strip(), "cost": round(cost, 4)})
     except Exception as e:
         return jsonify({"error": f"Cleanup failed: {e}"}), 500
@@ -439,15 +367,15 @@ def clean_glossary():
 def translate_simple():
     """Single-pass translation with prompt caching."""
     d = request.get_json()
-    model = MODELS.get(d.get("model"), DEFAULT_MODEL)
+    provider, model = parse_model_key(d.get("model"))
     src, tgt = d.get("source_lang", "English"), d.get("target_lang", "Turkish")
     text = d.get("text", "").strip()
+    effort = d.get("effort", "off")
+    project_id, project_name = d.get("id", ""), d.get("name", "")
     if not text:
         return jsonify({"error": "Empty segment."}), 400
-    try:
-        client = get_client()
-    except Exception:
-        return jsonify({"error": "No API key. Put your key in key.txt and restart."}), 500
+    if not keys.get_key(provider):
+        return jsonify({"error": f"No API key for {provider}. Add one from Settings."}), 500
     try:
         system_text = (
             f"You are a professional literary translator from {src} into {tgt}. "
@@ -461,12 +389,13 @@ def translate_simple():
             d.get("before", ""), d.get("after", ""),
             d.get("memory", ""))
 
-        result, usage = call_cached(client, model, system_text, standing, per_call)
-        cost, token_detail = compute_cost(usage, model)
+        result, cost, tokens = providers.call(
+            provider, model, system_text, standing, per_call, effort=effort)
+        spending.log_call(project_id, project_name, provider, model, effort, tokens, cost)
 
         return jsonify({
             "final": result, "cost": cost,
-            "tokens": token_detail
+            "tokens": tokens
         })
     except Exception as e:
         return jsonify({"error": f"Translation failed: {e}"}), 500
@@ -479,10 +408,10 @@ def project_path(pid):
 
 if __name__ == "__main__":
     import webbrowser, threading
-    if not load_api_key():
-        print("\n  ! No API key found.")
-        print("  ! Put your Anthropic key in key.txt in this folder,")
-        print("  ! then run this again.\n")
+    if not any(keys.key_status().values()):
+        print("\n  ! No API key found for any provider.")
+        print("  ! Open the app and add one from the Settings screen,")
+        print("  ! or (Anthropic only) put a key in key.txt and restart.\n")
     else:
         print("\n  Palimpsest is running.")
         print("  Open  http://localhost:5001  in your browser (opening it for you now).\n")

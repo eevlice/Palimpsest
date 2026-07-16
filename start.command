@@ -3,8 +3,8 @@
 cd "$(dirname "$0")"
 echo "Starting Palimpsest..."
 # Install libraries if missing (first run only), quietly.
-python3 -c "import flask, anthropic, docx" 2>/dev/null || {
-  echo "First run: installing the three required libraries..."
-  pip3 install --quiet flask anthropic python-docx
+python3 -c "import flask, anthropic, openai, google.genai, docx, cryptography" 2>/dev/null || {
+  echo "First run: installing the required libraries..."
+  pip3 install --quiet flask anthropic openai google-genai python-docx cryptography
 }
 python3 server.py
