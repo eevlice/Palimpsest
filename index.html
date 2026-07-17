@@ -200,7 +200,17 @@
     opacity:.5;transition:width .3s;}
   .tracker-label{font-family:'Spline Sans Mono',monospace;font-size:11px;color:var(--ink-soft);white-space:nowrap;}
   /* centered nav */
-  .window-nav{display:flex;align-items:center;gap:14px;margin:4px 0 10px;justify-content:center;}
+  /* relative + absolute so the resume button sits at the right edge without
+     pulling the pagination off centre */
+  .window-nav{display:flex;align-items:center;gap:14px;margin:4px 0 10px;
+    justify-content:center;position:relative;}
+  .wn-resume{position:absolute;right:0;top:50%;transform:translateY(-50%);
+    width:30px;height:30px;box-sizing:border-box;padding:0;
+    display:inline-flex;align-items:center;justify-content:center;
+    border:1px solid var(--rule);background:none;color:var(--ink-soft);cursor:pointer;}
+  .wn-resume:hover:not(:disabled){border-color:var(--ink);color:var(--ink);}
+  .wn-resume:disabled{opacity:.35;cursor:default;}
+  .wn-resume svg{display:block;}
   .seg-model{font-family:'Spline Sans Mono',monospace;font-size:11px;color:var(--ink);
     background:rgba(255,255,255,.5);border:1px solid var(--rule);padding:5px 8px;cursor:pointer;}
   @media(max-width:760px){
@@ -392,12 +402,14 @@
           <button class="wn-btn" id="prev-win">← Önceki</button>
           <span class="wn-label" id="win-label"></span>
           <button class="wn-btn" id="next-win">Sonraki →</button>
+          <button class="wn-resume" id="jump-last"></button>
         </div>
         <div id="segments"></div>
         <div class="window-nav" style="margin-top:28px;">
           <button class="wn-btn" id="prev-win2">← Önceki</button>
           <span class="wn-label" id="win-label2"></span>
           <button class="wn-btn" id="next-win2">Sonraki →</button>
+          <button class="wn-resume" id="jump-last2"></button>
         </div>
       </div>
     </div>
@@ -466,7 +478,8 @@ const ICON={
   book:'<svg viewBox="0 0 24 24" width="15" height="15" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 7v14"/><path d="M3 18a1 1 0 0 1-1-1V4a1 1 0 0 1 1-1h5a4 4 0 0 1 4 4 4 4 0 0 1 4-4h5a1 1 0 0 1 1 1v13a1 1 0 0 1-1 1h-6a3 3 0 0 0-3 3 3 3 0 0 0-3-3z"/></svg>',
   checklist:'<svg viewBox="0 0 24 24" width="15" height="15" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><path d="m3 17 2 2 4-4"/><path d="m3 7 2 2 4-4"/><path d="M13 6h8"/><path d="M13 12h8"/><path d="M13 18h8"/></svg>',
   filetext:'<svg viewBox="0 0 24 24" width="15" height="15" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><path d="M15 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V7Z"/><path d="M14 2v4a2 2 0 0 0 2 2h4"/><path d="M10 9H8"/><path d="M16 13H8"/><path d="M16 17H8"/></svg>',
-  bolt:'<svg viewBox="0 0 24 24" width="11" height="11" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round"><path d="M13 2 3 14h9l-1 8 10-12h-9l1-8Z"/></svg>'
+  bolt:'<svg viewBox="0 0 24 24" width="11" height="11" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round"><path d="M13 2 3 14h9l-1 8 10-12h-9l1-8Z"/></svg>',
+  bookmark:'<svg viewBox="0 0 24 24" width="13" height="13" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><path d="m19 21-7-4-7 4V5a2 2 0 0 1 2-2h10a2 2 0 0 1 2 2v16z"/></svg>'
 };
 
 // ================================================================
@@ -1217,6 +1230,7 @@ function renderWindow(){
   const atStart=winStart<=0, atEnd=winStart+WIN>=P.segments.length;
   $('prev-win').disabled=atStart;$('next-win').disabled=atEnd;
   if($('prev-win2')){$('prev-win2').disabled=atStart;$('next-win2').disabled=atEnd;}
+  renderResumeButtons();
   // auto-size all visible translation boxes to fit their content
   for(let i=winStart;i<last;i++){ autoGrow($('edit-'+i)); }
 }
@@ -1229,6 +1243,34 @@ function pageLater(){
 }
 $('prev-win').onclick=pageEarlier;$('next-win').onclick=pageLater;
 $('prev-win2').onclick=pageEarlier;$('next-win2').onclick=pageLater;
+
+// Jump back to the frontier of your work: a project opens at ¶1, so with a few
+// thousand paragraphs the place you left off is otherwise a long page away.
+function lastTranslatedIndex(){
+  if(!P||!P.finals) return -1;
+  for(let i=P.finals.length-1;i>=0;i--){ if(P.finals[i]!==null) return i; }
+  return -1;
+}
+function renderResumeButtons(){
+  const i=lastTranslatedIndex();
+  const inWindow = i>=winStart && i<winStart+WIN;
+  ['jump-last','jump-last2'].forEach(id=>{
+    const b=$(id); if(!b) return;
+    b.innerHTML=ICON.bookmark;
+    b.disabled = i<0 || inWindow;
+    b.title = i<0 ? 'Henüz çevrilmiş paragraf yok'
+      : inWindow ? `Son çevrilen paragraf (¶${i+1}) zaten bu pencerede`
+      : `Kaldığın yere dön — son çevrilen paragraf, ¶${i+1}`;
+  });
+}
+function jumpToLastTranslated(){
+  const i=lastTranslatedIndex();
+  if(i<0) return;
+  goToWindow(i);
+  window.scrollTo({top:0,behavior:'smooth'});
+}
+$('jump-last').onclick=jumpToLastTranslated;
+$('jump-last2').onclick=jumpToLastTranslated;
 
 
 // ================================================================
