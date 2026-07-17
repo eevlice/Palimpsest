@@ -51,11 +51,17 @@
     border:1px solid var(--pencil-soft);background:rgba(178,58,46,.06);padding:14px 16px;margin-top:16px;}
   .note{font-family:'Spline Sans Mono',monospace;font-size:12px;color:var(--thread);
     border:1px solid var(--thread);background:rgba(63,97,81,.06);padding:12px 14px;margin-bottom:20px;}
-  .hidden{display:none;}
+  /* a utility that must beat any later display rule on the same element
+     (.header-nav and .seg-effort both set their own display) */
+  .hidden{display:none !important;}
   .panel-title{font-family:'Fraunces',serif;font-weight:500;font-size:24px;
     border-bottom:1px solid var(--rule);padding-bottom:7px;margin:30px 0 14px;
     display:flex;align-items:baseline;gap:12px;}
   .panel-title .n{font-family:'Spline Sans Mono',monospace;font-size:12px;color:var(--pencil);}
+  /* a back button can't sit on a serif baseline without looking dropped */
+  .panel-title.with-back{align-items:center;gap:14px;margin-top:0;}
+  .panel-note{font-size:12px;color:var(--ink-soft);margin:0 0 18px;}
+  .panel-note .mono-sm{font-size:11px;}
   .save-pill{font-family:'Spline Sans Mono',monospace;font-size:11px;color:var(--thread);}
   .proj{display:flex;align-items:center;gap:14px;border-bottom:1px solid var(--rule);padding:14px 0;}
   .proj .pname{font-family:'Fraunces',serif;font-size:20px;cursor:pointer;}
@@ -239,15 +245,21 @@
   }
   .header-nav{display:flex;gap:6px;flex:0 0 auto;}
   .provider-row{border:1px solid var(--rule);background:rgba(255,255,255,.4);
-    padding:16px 18px;margin-bottom:16px;}
-  .provider-row .prow-top{display:flex;align-items:center;gap:10px;margin-bottom:10px;}
-  .provider-row .plabel{font-family:'Fraunces',serif;font-size:19px;}
+    padding:16px 18px;margin-bottom:14px;}
+  .provider-row .prow-top{display:flex;align-items:center;gap:12px;margin-bottom:12px;}
+  .provider-row .plabel{font-family:'Fraunces',serif;font-size:18px;line-height:1;}
+  /* status to the right edge, so it lands in one column instead of trailing
+     each provider's name at a different x */
+  .provider-row .pill{margin-left:auto;}
   .pill{font-family:'Spline Sans Mono',monospace;font-size:10px;letter-spacing:.08em;
-    text-transform:uppercase;padding:3px 9px;border:1px solid var(--rule);color:var(--ink-soft);}
+    text-transform:uppercase;height:22px;box-sizing:border-box;padding:0 9px;
+    display:inline-flex;align-items:center;border:1px solid var(--rule);color:var(--ink-soft);}
   .pill.on{border-color:var(--thread);color:var(--thread);}
-  .prow-form{display:flex;gap:8px;}
-  .prow-form input{flex:1 1 auto;}
-  .prow-form button{flex:0 0 auto;}
+  /* field and buttons share one height - they were 44px against 30px */
+  .prow-form{display:flex;gap:8px;align-items:center;}
+  .prow-form input{flex:1 1 auto;min-width:0;height:34px;box-sizing:border-box;
+    font-size:14px;padding:0 12px;}
+  .prow-form .tb{height:34px;flex:0 0 auto;}
   .data-table{width:100%;border-collapse:collapse;font-family:'Spline Sans Mono',monospace;font-size:13px;}
   .data-table th,.data-table td{text-align:left;padding:8px 10px;border-bottom:1px solid var(--rule);}
   .data-table th{color:var(--ink-soft);font-weight:500;text-transform:uppercase;font-size:11px;letter-spacing:.08em;}
@@ -417,14 +429,14 @@
 
   <!-- ========== SETTINGS ========== -->
   <section id="settings" class="hidden">
-    <div class="panel-title"><button class="tb" onclick="closeToHome()">← Geri</button>&nbsp;API Anahtarları</div>
-    <p class="sub">API anahtarların şifreli olarak yalnızca bu bilgisayarda, <span class="mono-sm">~/.palimpsest</span> altında saklanır. Hiçbir zaman sunucuya veya başka bir yere gönderilmez.</p>
+    <div class="panel-title with-back"><button class="tb icon-only" onclick="closeToHome()" title="Geri">←</button>API Anahtarları</div>
+    <p class="panel-note">Anahtarlar yalnızca bu bilgisayarda, <span class="mono-sm">~/.palimpsest</span> altında şifreli durur — hiçbir yere gönderilmez.</p>
     <div id="settings-providers"></div>
   </section>
 
   <!-- ========== SPENDING ========== -->
   <section id="spending" class="hidden">
-    <div class="panel-title"><button class="tb" onclick="closeToHome()">← Geri</button>&nbsp;Harcamalar</div>
+    <div class="panel-title with-back"><button class="tb icon-only" onclick="closeToHome()" title="Geri">←</button>Harcamalar</div>
     <div class="total-banner" id="spending-total"></div>
     <div style="overflow-x:auto;">
       <table class="data-table" id="spending-table">
@@ -695,7 +707,10 @@ function showScreen(id){
   $(id).classList.remove('hidden');window.scrollTo({top:0,behavior:'smooth'});
   // The workspace has a toolbar to sit in; every other screen only has the
   // header, so the nav rides along rather than being duplicated.
-  (id==='workspace' ? $('ws-tools') : $('header-top')).appendChild($('header-nav'));
+  const nav=$('header-nav');
+  (id==='workspace' ? $('ws-tools') : $('header-top')).appendChild(nav);
+  // ...and it hides on the two screens it opens, where it would be a no-op
+  nav.classList.toggle('hidden', id==='settings'||id==='spending');
 }
 let _prevScreen='home';
 function closeToHome(){ showScreen(_prevScreen); }
