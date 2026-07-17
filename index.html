@@ -13,6 +13,8 @@
   .header-top{display:flex;align-items:center;justify-content:space-between;gap:16px;width:100%;}
   h1{font-family:'Fraunces',serif;font-weight:600;font-size:26px;
     line-height:1;margin:0;letter-spacing:-.02em;}
+  /* the pilcrow the whole app is built around, set against the P it precedes */
+  h1 .mark{color:var(--pencil);font-size:24px;margin-right:1px;}
   .sub{color:var(--ink-soft);margin:12px 0 0;max-width:58ch;}
   label{font-family:'Spline Sans Mono',monospace;font-size:11px;letter-spacing:.14em;
     text-transform:uppercase;color:var(--ink-soft);display:block;margin-bottom:6px;}
@@ -292,7 +294,7 @@
 <div class="wrap">
   <header>
     <div class="header-top" id="header-top">
-      <h1>Palimpsest</h1>
+      <h1><span class="mark">¶</span>Palimpsest</h1>
       <div class="header-nav" id="header-nav">
         <button class="tb icon-only" id="btn-settings-nav" onclick="openSettings()" title="API anahtarları"><svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><circle cx="8" cy="15" r="4"/><path d="M10.8 12.2 20 3"/><path d="m17 6 3 3"/><path d="m14 9 2 2"/></svg></button>
         <button class="tb icon-only" id="btn-spending-nav" onclick="openSpending()" title="Harcamalar"><svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><line x1="6" y1="20" x2="6" y2="10"/><line x1="12" y1="20" x2="12" y2="4"/><line x1="18" y1="20" x2="18" y2="14"/></svg></button>
