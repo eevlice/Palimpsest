@@ -93,11 +93,13 @@
     padding:16px 18px;margin-bottom:14px;animation:slideDown .2s ease;}
   @keyframes slideDown{from{opacity:0;transform:translateY(-6px);}to{opacity:1;transform:none;}}
   .drawer-head{display:flex;align-items:center;gap:14px;margin-bottom:12px;}
-  /* a quiet text action, not a bordered pill competing with the real buttons */
+  /* a hairline frame just enough to read as a button, not a filled pill
+     competing with the primary actions - right-aligned, and destructive
+     enough (see cleanGlossary's confirm) to warrant the outline */
   .ghost-link{font-family:'Spline Sans Mono',monospace;font-size:11px;letter-spacing:.06em;
-    text-transform:uppercase;border:none;background:none;color:var(--ink-soft);
-    cursor:pointer;padding:0;margin-left:auto;}
-  .ghost-link:hover{color:var(--pencil);}
+    text-transform:uppercase;border:1px solid var(--rule);background:none;color:var(--ink-soft);
+    cursor:pointer;padding:5px 10px;margin-left:auto;}
+  .ghost-link:hover{border-color:var(--pencil);color:var(--pencil);}
   .drawer label{margin-top:12px;}.drawer label:first-child{margin-top:0;}
   .ws-layout{display:grid;grid-template-columns:84px 1fr;gap:18px;align-items:start;}
   /* sticky at top:18px, so leave the same 18px at the bottom - anything more
@@ -203,27 +205,22 @@
   .glist-x:hover{color:var(--pencil);}
   .glist-empty{padding:12px 6px;font-family:'Spline Sans Mono',monospace;font-size:12px;
     color:var(--ink-soft);}
-  /* no frame of its own - it's a row inside the drawer, not a nested box.
-     #chip-cancel reserves its slot even while hidden (visibility, not
-     display:none) so it can't shift the inputs when it appears. */
+  /* no frame of its own - it's a row inside the drawer, not a nested box. */
   .chip-add{display:flex;gap:8px;align-items:center;}
   .chip-add input{font-size:14px;height:36px;box-sizing:border-box;padding:0 11px;
     flex:1 1 0;min-width:0;}
   .chip-eq{font-family:'Spline Sans Mono',monospace;color:var(--ink-soft);flex:0 0 auto;}
-  #chip-cancel{flex:0 0 auto;width:30px;height:36px;box-sizing:border-box;padding:0;
-    display:inline-flex;align-items:center;justify-content:center;
-    border:1px solid var(--rule);background:none;color:var(--ink-soft);cursor:pointer;
-    visibility:hidden;}
-  #chip-cancel svg{display:block;}
-  #chip-cancel.shown{visibility:visible;}
+  /* square icon buttons, always present (no reserved-but-empty slot to catch
+     the eye) - #chip-cancel doubles as "clear the form" when idle and "cancel
+     this edit" once a row is loaded, so it never needs to vanish. */
+  .chip-add button{flex:0 0 auto;width:36px;height:36px;box-sizing:border-box;padding:0;
+    display:inline-flex;align-items:center;justify-content:center;cursor:pointer;}
+  .chip-add button svg{display:block;}
+  #chip-cancel{border:1px solid var(--rule);background:none;color:var(--rule);}
+  #chip-cancel.active{color:var(--ink-soft);}
   #chip-cancel:hover{border-color:var(--pencil);color:var(--pencil);}
-  /* wide enough for GÜNCELLE (the longer of the two labels this button
-     carries) so switching labels doesn't nudge the row's total width */
-  .chip-add button{font-family:'Spline Sans Mono',monospace;font-size:12px;text-transform:uppercase;
-    letter-spacing:.06em;border:1px solid var(--ink);background:var(--ink);color:var(--paper);
-    height:36px;box-sizing:border-box;padding:0 16px;cursor:pointer;flex:0 0 auto;
-    min-width:104px;}
-  .chip-add button:hover{background:var(--pencil);border-color:var(--pencil);}
+  #chip-add-btn{border:1px solid var(--ink);background:var(--ink);color:var(--paper);}
+  #chip-add-btn:hover{background:var(--pencil);border-color:var(--pencil);}
   /* progress tracker */
   .tracker{display:flex;align-items:center;gap:14px;margin:0 0 16px;padding:12px 16px;
     background:rgba(255,255,255,.4);border:1px solid var(--rule);}
@@ -415,8 +412,8 @@
         <input class="k" id="chip-src" placeholder="kaynak terim">
         <span class="chip-eq">=</span>
         <input id="chip-tgt" placeholder="hedef terim">
-        <button id="chip-cancel" title="Düzenlemeyi iptal et"><svg viewBox="0 0 24 24" width="13" height="13" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg></button>
-        <button id="chip-add-btn">Ekle</button>
+        <button id="chip-cancel" title="Formu temizle"><svg viewBox="0 0 24 24" width="13" height="13" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg></button>
+        <button id="chip-add-btn" title="Ekle"><svg viewBox="0 0 24 24" width="15" height="15" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><line x1="12" y1="5" x2="12" y2="19"/><line x1="5" y1="12" x2="19" y2="12"/></svg></button>
       </div>
       <div class="glist" id="chip-list"></div>
     </div>
@@ -524,7 +521,8 @@ const ICON={
   filetext:'<svg viewBox="0 0 24 24" width="15" height="15" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><path d="M15 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V7Z"/><path d="M14 2v4a2 2 0 0 0 2 2h4"/><path d="M10 9H8"/><path d="M16 13H8"/><path d="M16 17H8"/></svg>',
   bolt:'<svg viewBox="0 0 24 24" width="11" height="11" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round"><path d="M13 2 3 14h9l-1 8 10-12h-9l1-8Z"/></svg>',
   bookmark:'<svg viewBox="0 0 24 24" width="13" height="13" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><path d="m19 21-7-4-7 4V5a2 2 0 0 1 2-2h10a2 2 0 0 1 2 2v16z"/></svg>',
-  x:'<svg viewBox="0 0 24 24" width="13" height="13" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg>'
+  x:'<svg viewBox="0 0 24 24" width="13" height="13" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg>',
+  plus:'<svg viewBox="0 0 24 24" width="15" height="15" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><line x1="12" y1="5" x2="12" y2="19"/><line x1="5" y1="12" x2="19" y2="12"/></svg>'
 };
 
 // ================================================================
@@ -841,8 +839,10 @@ function loadChipForEdit(idx){
   EDIT_IDX=idx;
   $('chip-src').value=t.src;
   $('chip-tgt').value=t.tgt;
-  $('chip-add-btn').textContent='Güncelle';
-  $('chip-cancel').classList.add('shown');
+  $('chip-add-btn').innerHTML=ICON.check;
+  $('chip-add-btn').title='Güncelle';
+  $('chip-cancel').classList.add('active');
+  $('chip-cancel').title='Düzenlemeyi iptal et';
   renderChips();
   $('chip-src').focus();
   // scroll the edit row into view if needed
@@ -853,8 +853,10 @@ function resetEditRow(){
   EDIT_IDX=null;
   $('chip-src').value='';
   $('chip-tgt').value='';
-  $('chip-add-btn').textContent='Ekle';
-  $('chip-cancel').classList.remove('shown');
+  $('chip-add-btn').innerHTML=ICON.plus;
+  $('chip-add-btn').title='Ekle';
+  $('chip-cancel').classList.remove('active');
+  $('chip-cancel').title='Formu temizle';
 }
 
 function commitEditRow(){
@@ -875,6 +877,9 @@ function commitEditRow(){
 
 async function cleanGlossary(){
   if(!P.terms||!P.terms.trim()){ $('clean-status').textContent='temizlenecek bir şey yok'; return; }
+  // makes a real (paid) API call and overwrites the existing terms with the
+  // model's rewrite, with no undo - worth a confirm before an easy mis-click.
+  if(!confirm('Sözlük bir API çağrısıyla yeniden düzenlenecek ve mevcut terimlerin üzerine yazılacak. Bu işlem geri alınamaz. Devam edilsin mi?')) return;
   const btn=$('clean-gloss'); btn.disabled=true;
   $('clean-status').innerHTML='<span class="loading">cleaning</span>';
   try{
