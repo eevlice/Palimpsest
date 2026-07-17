@@ -25,6 +25,7 @@ from flask import Flask, request, jsonify, send_from_directory
 import keys
 import spending
 import providers
+import prefs
 
 app = Flask(__name__, static_folder=".")
 
@@ -200,6 +201,17 @@ def keys_clear():
 @app.route("/spending")
 def spending_summary():
     return jsonify(spending.summary())
+
+
+@app.route("/prefs")
+def prefs_get():
+    return jsonify(prefs.get_all())
+
+
+@app.route("/prefs", methods=["POST"])
+def prefs_set():
+    patch = request.get_json() or {}
+    return jsonify(prefs.update(patch))
 
 
 @app.route("/projects")

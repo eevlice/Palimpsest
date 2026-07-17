@@ -289,6 +289,14 @@
   .prow-form input{flex:1 1 auto;min-width:0;height:34px;box-sizing:border-box;
     font-size:14px;padding:0 12px;}
   .prow-form .tb{height:34px;flex:0 0 auto;}
+  /* one card style for every preference row - a select today, whatever
+     control the next preference needs tomorrow, same frame */
+  .pref-row{border:1px solid var(--rule);background:rgba(255,255,255,.4);
+    padding:16px 18px;margin-bottom:14px;}
+  .pref-row .plabel{font-family:'Fraunces',serif;font-size:18px;line-height:1;
+    display:block;margin-bottom:6px;}
+  .pref-row .pref-note{font-size:12px;color:var(--ink-soft);margin:0 0 12px;}
+  .pref-row .pref-control select{height:34px;box-sizing:border-box;font-size:14px;}
   .data-table{width:100%;border-collapse:collapse;font-family:'Spline Sans Mono',monospace;font-size:13px;}
   .data-table th,.data-table td{text-align:left;padding:8px 10px;border-bottom:1px solid var(--rule);}
   .data-table th{color:var(--ink-soft);font-weight:500;text-transform:uppercase;font-size:11px;letter-spacing:.08em;}
@@ -319,6 +327,7 @@
     <div class="header-top" id="header-top">
       <h1><span class="mark">¶</span>Palimpsest</h1>
       <div class="header-nav" id="header-nav">
+        <button class="tb icon-only" id="btn-preferences-nav" onclick="openPreferences()" title="Tercihler"><svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><line x1="21" y1="4" x2="14" y2="4"/><line x1="10" y1="4" x2="3" y2="4"/><line x1="21" y1="12" x2="12" y2="12"/><line x1="8" y1="12" x2="3" y2="12"/><line x1="21" y1="20" x2="16" y2="20"/><line x1="12" y1="20" x2="3" y2="20"/><line x1="14" y1="2" x2="14" y2="6"/><line x1="8" y1="10" x2="8" y2="14"/><line x1="16" y1="18" x2="16" y2="22"/></svg></button>
         <button class="tb icon-only" id="btn-settings-nav" onclick="openSettings()" title="API anahtarları"><svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><circle cx="8" cy="15" r="4"/><path d="M10.8 12.2 20 3"/><path d="m17 6 3 3"/><path d="m14 9 2 2"/></svg></button>
         <button class="tb icon-only" id="btn-spending-nav" onclick="openSpending()" title="Harcamalar"><svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><line x1="6" y1="20" x2="6" y2="10"/><line x1="12" y1="20" x2="12" y2="4"/><line x1="18" y1="20" x2="18" y2="14"/></svg></button>
       </div>
@@ -456,6 +465,12 @@
     </div>
   </section>
 
+  <!-- ========== PREFERENCES ========== -->
+  <section id="preferences" class="hidden">
+    <div class="panel-title with-back"><button class="tb icon-only" onclick="closeToHome()" title="Geri">←</button>Tercihler</div>
+    <div id="preferences-list"></div>
+  </section>
+
   <!-- ========== SETTINGS ========== -->
   <section id="settings" class="hidden">
     <div class="panel-title with-back"><button class="tb icon-only" onclick="closeToHome()" title="Geri">←</button>API Anahtarları</div>
@@ -487,6 +502,7 @@ const esc=s=>(s||'').replace(/[&<>]/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;'}[c]
 let P=null,fileObj=null,saveTimer=null,winStart=0,EDIT_IDX=null;
 const WIN=10;
 let MODEL_CATALOG=[]; // [{provider,label,has_key,models:[{id,label,effort}]}]
+let PREFS={};
 const EFFORT_LABEL={off:'Kapalı',low:'Düşük',medium:'Orta',high:'Yüksek'};
 // A three-column meter, drawn as SVG rather than text: font glyphs for this
 // either clash in size (the mono font covers ○◑● but not ◔) or read as
@@ -562,7 +578,12 @@ function findModelInfo(key){
   const m=p&&p.models.find(x=>x.id===modelId);
   return m ? {provider,modelId,label:m.label,effort:m.effort,has_key:p.has_key} : null;
 }
-loadCatalog();
+function loadPrefs(){
+  return fetch('/prefs').then(r=>r.json()).then(p=>{ PREFS=p||{}; });
+}
+// Prefs must be in hand before the catalog picks a default model, or the
+// user's saved choice loses the race to the hardcoded fallback on first paint.
+loadPrefs().then(loadCatalog);
 refreshProjects();
 
 // ================================================================
@@ -624,6 +645,45 @@ function renderSpending(){
         rows.appendChild(tr);
       });
     }
+  });
+}
+
+// ================================================================
+// PREFERENCES
+// ================================================================
+// Each entry owns its label, its explanation, and how it renders/saves - to
+// add a preference later, add one entry here and its render function. The
+// screen itself (renderPreferences) never needs to change.
+const PREFERENCE_DEFS=[
+  {
+    key:'default_model',
+    label:'Varsayılan model',
+    note:'Yeni projeler ve yeni paragraflar bu modelle açılır.',
+    render:renderDefaultModelPref,
+  },
+];
+function savePref(key,value){
+  PREFS[key]=value;
+  fetch('/prefs',{method:'POST',headers:{'Content-Type':'application/json'},
+    body:JSON.stringify({[key]:value})});
+}
+function renderDefaultModelPref(el){
+  const sel=document.createElement('select');
+  sel.id='pref-default-model';
+  populateModelSelect(sel);
+  sel.value=PREFS.default_model||defaultModel();
+  sel.onchange=()=>savePref('default_model',sel.value);
+  el.appendChild(sel);
+}
+function renderPreferences(){
+  const c=$('preferences-list');c.innerHTML='';
+  PREFERENCE_DEFS.forEach(def=>{
+    const row=document.createElement('div');row.className='pref-row';
+    row.innerHTML=`<span class="plabel">${esc(def.label)}</span>
+      <p class="pref-note">${esc(def.note)}</p>
+      <div class="pref-control" id="pref-ctl-${def.key}"></div>`;
+    c.appendChild(row);
+    def.render($('pref-ctl-'+def.key));
   });
 }
 
@@ -734,14 +794,14 @@ $('start').onclick=()=>{
 // SCREENS
 // ================================================================
 function showScreen(id){
-  ['home','review','workspace','settings','spending'].forEach(s=>$(s).classList.add('hidden'));
+  ['home','review','workspace','settings','spending','preferences'].forEach(s=>$(s).classList.add('hidden'));
   $(id).classList.remove('hidden');window.scrollTo({top:0,behavior:'smooth'});
   // The workspace has a toolbar to sit in; every other screen only has the
   // header, so the nav rides along rather than being duplicated.
   const nav=$('header-nav');
   (id==='workspace' ? $('ws-tools') : $('header-top')).appendChild(nav);
-  // ...and it hides on the two screens it opens, where it would be a no-op
-  nav.classList.toggle('hidden', id==='settings'||id==='spending');
+  // ...and it hides on the screens it opens, where it would be a no-op
+  nav.classList.toggle('hidden', id==='settings'||id==='spending'||id==='preferences');
 }
 let _prevScreen='home';
 function closeToHome(){ showScreen(_prevScreen); }
@@ -754,6 +814,11 @@ function openSpending(){
   _prevScreen = P ? 'workspace' : 'home';
   renderSpending();
   showScreen('spending');
+}
+function openPreferences(){
+  _prevScreen = P ? 'workspace' : 'home';
+  renderPreferences();
+  showScreen('preferences');
 }
 $('home-btn').onclick=()=>{
   P=null;fileObj=null;$('analyze').disabled=true;$('pname').value='';
@@ -991,7 +1056,15 @@ function goToWindow(i){
 }
 
 function defaultModel(){
-  // Prefer Anthropic Sonnet 4.6 among providers that currently have a key.
+  // The user's saved preference wins, provided it still resolves to a model
+  // with a live key - a revoked key or a catalog change falls through to the
+  // hardcoded fallback below rather than silently picking an unusable model.
+  const pref=PREFS.default_model;
+  if(pref){
+    const info=findModelInfo(pref);
+    if(info&&info.has_key) return pref;
+  }
+  // Otherwise prefer Anthropic Sonnet 4.6 among providers that have a key.
   const keyed=MODEL_CATALOG.filter(p=>p.has_key);
   const pool=keyed.length?keyed:MODEL_CATALOG;
   const anthropic=pool.find(p=>p.provider==='anthropic');
