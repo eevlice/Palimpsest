@@ -243,16 +243,24 @@
   .data-table th{color:var(--ink-soft);font-weight:500;text-transform:uppercase;font-size:11px;letter-spacing:.08em;}
   .data-table td.num,.data-table th.num{text-align:right;}
   .total-banner{font-family:'Fraunces',serif;font-size:26px;margin:18px 0;}
-  /* effort: a 4-step segmented meter, off -> high */
+  /* effort: one cell wide until you open it, then a 4-step meter */
   .seg-effort{display:inline-flex;flex:0 0 auto;height:30px;box-sizing:border-box;
-    border:1px solid var(--rule);background:rgba(255,255,255,.5);}
-  .seg-effort .ef{width:27px;padding:0;border:none;border-right:1px solid var(--rule);
+    border:1px solid var(--rule);background:rgba(255,255,255,.5);
+    width:30px;overflow:hidden;transition:width .18s ease;}
+  .seg-effort.open{width:106px;}
+  /* cells flex so they divide the width exactly - a fixed cell width leaves a
+     sliver of bare container beside the last one when it's the selected step */
+  .seg-effort .ef{flex:1 1 auto;padding:0;border:none;border-right:1px solid var(--rule);
     background:none;color:var(--ink-soft);cursor:pointer;
     display:inline-flex;align-items:center;justify-content:center;}
   .seg-effort .ef:last-child{border-right:none;}
   .seg-effort .ef:hover{color:var(--ink);background:rgba(255,255,255,.7);}
-  .seg-effort .ef.on{background:var(--paper-deep);color:var(--ink);}
+  .seg-effort.open .ef.on{background:var(--paper-deep);color:var(--ink);}
   .seg-effort .ef svg{display:block;}
+  /* collapsed: only the current step, and a tinted box if effort is on at all */
+  .seg-effort:not(.open) .ef{display:none;}
+  .seg-effort:not(.open) .ef.on{display:inline-flex;border-right:none;}
+  .seg-effort:not(.open):not([data-value="off"]){background:var(--paper-deep);color:var(--ink);}
 </style>
 
 <div class="wrap">
@@ -427,15 +435,26 @@ let P=null,fileObj=null,saveTimer=null,winStart=0,EDIT_IDX=null;
 const WIN=10;
 let MODEL_CATALOG=[]; // [{provider,label,has_key,models:[{id,label,effort}]}]
 const EFFORT_LABEL={off:'Kapalı',low:'Düşük',medium:'Orta',high:'Yüksek'};
-// A rising meter, drawn as SVG rather than text: font glyphs for this either
-// clash in size (the mono font covers ○◑● but not ◔) or read as punctuation.
+// A three-column meter, drawn as SVG rather than text: font glyphs for this
+// either clash in size (the mono font covers ○◑● but not ◔) or read as
+// punctuation. The columns never move - an unlit step is a dot, so "off" is the
+// meter at zero rather than an anonymous dash.
 const S='viewBox="0 0 24 24" width="13" height="13" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round"';
+const _bar=(x,top)=>`<line x1="${x}" y1="18" x2="${x}" y2="${top}"/>`;
+const _dot=(x)=>`<circle cx="${x}" cy="18" r="1.2" fill="currentColor" stroke="none"/>`;
 const EFFORT_ICON={
-  off:`<svg ${S}><line x1="7" y1="12" x2="17" y2="12"/></svg>`,
-  low:`<svg ${S}><line x1="12" y1="18" x2="12" y2="13"/></svg>`,
-  medium:`<svg ${S}><line x1="8" y1="18" x2="8" y2="13"/><line x1="16" y1="18" x2="16" y2="8"/></svg>`,
-  high:`<svg ${S}><line x1="5" y1="18" x2="5" y2="13"/><line x1="12" y1="18" x2="12" y2="8"/><line x1="19" y1="18" x2="19" y2="4"/></svg>`
+  off:   `<svg ${S}>${_dot(6)}${_dot(12)}${_dot(18)}</svg>`,
+  low:   `<svg ${S}>${_bar(6,14)}${_dot(12)}${_dot(18)}</svg>`,
+  medium:`<svg ${S}>${_bar(6,14)}${_bar(12,10)}${_dot(18)}</svg>`,
+  high:  `<svg ${S}>${_bar(6,14)}${_bar(12,10)}${_bar(18,6)}</svg>`
 };
+const EFFORT_HINT={
+  off:'Kapalı — düşünme yok. En hızlı ve en ucuz.',
+  low:'Düşük — kısa bir muhakeme payı.',
+  medium:'Orta — modelin zorlandığı paragraflar için.',
+  high:'Yüksek — en derin muhakeme. En yavaş ve en pahalı.'
+};
+const effortTitle=(v)=>'Düşünme eforu · '+EFFORT_HINT[v||'off'];
 
 // --- inline SVG icons (stroke uses currentColor so they theme correctly) ---
 const ICON={
@@ -937,15 +956,30 @@ function modelSelector(i){
 }
 function effortSelector(i){
   const btns=['off','low','medium','high'].map(e=>
-    `<button type="button" class="ef" data-effort="${e}" title="${EFFORT_LABEL[e]}"
-      onclick="setSegEffort(${i},'${e}')">${EFFORT_ICON[e]}</button>`).join('');
-  return `<div class="seg-effort" id="esel-${i}" data-value="off">${btns}</div>`;
+    `<button type="button" class="ef" data-effort="${e}" title="${effortTitle(e)}"
+      onclick="effortCellClick(event,${i},'${e}')">${EFFORT_ICON[e]}</button>`).join('');
+  return `<div class="seg-effort" id="esel-${i}" data-value="off"
+    title="${effortTitle('off')}">${btns}</div>`;
 }
+// Collapsed it shows only the current step; the first click opens the four,
+// the second picks one and closes again.
+window.effortCellClick=(ev,i,val)=>{
+  ev.stopPropagation();
+  const el=$('esel-'+i); if(!el) return;
+  if(!el.classList.contains('open')){ closeEffortMenus(); el.classList.add('open'); return; }
+  setSegEffort(i,val);
+  el.classList.remove('open');
+};
+function closeEffortMenus(){
+  document.querySelectorAll('.seg-effort.open').forEach(e=>e.classList.remove('open'));
+}
+document.addEventListener('click',closeEffortMenus);
 // The toggle holds its state in data-value; getSegEffort is the only reader.
 window.setSegEffort=(i,val)=>{
   const el=$('esel-'+i); if(!el) return;
   if(!EFFORT_LABEL[val]) val='off';
   el.dataset.value=val;
+  el.title=effortTitle(val);
   el.querySelectorAll('.ef').forEach(b=>b.classList.toggle('on', b.dataset.effort===val));
 };
 function onModelChange(i){
