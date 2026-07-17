@@ -92,6 +92,12 @@
   .drawer{background:rgba(255,255,255,.45);border:1px solid var(--rule);
     padding:16px 18px;margin-bottom:14px;animation:slideDown .2s ease;}
   @keyframes slideDown{from{opacity:0;transform:translateY(-6px);}to{opacity:1;transform:none;}}
+  .drawer-head{display:flex;align-items:center;gap:14px;margin-bottom:12px;}
+  /* a quiet text action, not a bordered pill competing with the real buttons */
+  .ghost-link{font-family:'Spline Sans Mono',monospace;font-size:11px;letter-spacing:.06em;
+    text-transform:uppercase;border:none;background:none;color:var(--ink-soft);
+    cursor:pointer;padding:0;margin-left:auto;}
+  .ghost-link:hover{color:var(--pencil);}
   .drawer label{margin-top:12px;}.drawer label:first-child{margin-top:0;}
   .ws-layout{display:grid;grid-template-columns:84px 1fr;gap:18px;align-items:start;}
   /* sticky at top:18px, so leave the same 18px at the bottom - anything more
@@ -177,31 +183,46 @@
   .seg-btn.primary svg{margin:0;}
   .seg-cache{color:var(--thread);display:inline-flex;vertical-align:-2px;margin-left:5px;}
   /* glossary list */
-  .glist{margin:10px 0 0;border:1px solid var(--rule);background:rgba(255,255,255,.4);
+  /* one frame per drawer, not one per sub-section - .glist used to carry its
+     own border+background on top of .drawer's, and chip-add another again in
+     a different colour (thread, not rule). A hairline top border is enough to
+     separate the list from the add row above it. */
+  .glist{margin-top:14px;padding-top:14px;border-top:1px solid var(--rule);
     max-height:280px;overflow-y:auto;}
   .glist-row{display:grid;grid-template-columns:1fr 1fr auto;align-items:center;
-    gap:10px;padding:10px 12px;border-bottom:1px solid var(--rule);cursor:pointer;
+    gap:10px;padding:9px 6px;border-bottom:1px solid var(--rule);cursor:pointer;
     transition:background .1s;}
   .glist-row:last-child{border-bottom:none;}
-  .glist-row:hover{background:rgba(255,255,255,.7);}
-  .glist-row.active{background:#fffdf8;box-shadow:inset 2px 0 0 var(--thread);}
+  .glist-row:hover{background:rgba(255,255,255,.5);}
+  .glist-row.active{background:rgba(255,255,255,.6);box-shadow:inset 2px 0 0 var(--thread);}
   .glist-src{font-family:'Spline Sans Mono',monospace;font-size:13px;color:var(--ink);}
   .glist-tgt{font-family:'Spline Sans Mono',monospace;font-size:13px;color:var(--thread);}
   .glist-tgt.empty{color:var(--rule);font-style:italic;}
   .glist-x{border:none;background:none;color:var(--pencil-soft);font-size:15px;
     cursor:pointer;padding:0 4px;line-height:1;flex:0 0 auto;}
   .glist-x:hover{color:var(--pencil);}
-  .glist-empty{padding:12px;font-family:'Spline Sans Mono',monospace;font-size:12px;
+  .glist-empty{padding:12px 6px;font-family:'Spline Sans Mono',monospace;font-size:12px;
     color:var(--ink-soft);}
-  #chip-cancel{background:none;color:var(--ink-soft);border-color:var(--rule);}
-  #chip-cancel:hover{border-color:var(--pencil);color:var(--pencil);background:none;}
-  .chip-add{display:flex;gap:8px;align-items:center;margin-bottom:14px;padding:12px;
-    background:rgba(255,255,255,.7);border:1px solid var(--thread);}
-  .chip-add input{font-size:14px;padding:9px 11px;flex:1 1 0;min-width:0;}
+  /* no frame of its own - it's a row inside the drawer, not a nested box.
+     #chip-cancel reserves its slot even while hidden (visibility, not
+     display:none) so it can't shift the inputs when it appears. */
+  .chip-add{display:flex;gap:8px;align-items:center;}
+  .chip-add input{font-size:14px;height:36px;box-sizing:border-box;padding:0 11px;
+    flex:1 1 0;min-width:0;}
   .chip-eq{font-family:'Spline Sans Mono',monospace;color:var(--ink-soft);flex:0 0 auto;}
+  #chip-cancel{flex:0 0 auto;width:30px;height:36px;box-sizing:border-box;padding:0;
+    display:inline-flex;align-items:center;justify-content:center;
+    border:1px solid var(--rule);background:none;color:var(--ink-soft);cursor:pointer;
+    visibility:hidden;}
+  #chip-cancel svg{display:block;}
+  #chip-cancel.shown{visibility:visible;}
+  #chip-cancel:hover{border-color:var(--pencil);color:var(--pencil);}
+  /* wide enough for GÜNCELLE (the longer of the two labels this button
+     carries) so switching labels doesn't nudge the row's total width */
   .chip-add button{font-family:'Spline Sans Mono',monospace;font-size:12px;text-transform:uppercase;
     letter-spacing:.06em;border:1px solid var(--ink);background:var(--ink);color:var(--paper);
-    padding:9px 16px;cursor:pointer;flex:0 0 auto;}
+    height:36px;box-sizing:border-box;padding:0 16px;cursor:pointer;flex:0 0 auto;
+    min-width:104px;}
   .chip-add button:hover{background:var(--pencil);border-color:var(--pencil);}
   /* progress tracker */
   .tracker{display:flex;align-items:center;gap:14px;margin:0 0 16px;padding:12px 16px;
@@ -228,6 +249,11 @@
   @media(max-width:760px){
     .row{grid-template-columns:1fr;}
     .row2{grid-template-columns:1fr 1fr;}
+    /* src/eq/tgt on their own line, cancel+add below - side by side at 375px
+       they crushed the term inputs down to a few unreadable pixels each */
+    .chip-add{display:grid;grid-template-columns:1fr auto 1fr;row-gap:8px;}
+    #chip-cancel{grid-column:1;justify-self:start;}
+    #chip-add-btn{grid-column:3;justify-self:end;}
     .seg{grid-template-columns:1fr;}
     .ws-layout{grid-template-columns:1fr;}
     /* toolbar: status group wraps to its own full-width line below the tools */
@@ -380,17 +406,17 @@
       </div>
     </div>
     <div class="drawer hidden" id="drawer-glossary">
-      <div style="display:flex;align-items:center;gap:12px;margin-bottom:10px;">
+      <div class="drawer-head">
         <label style="margin:0;">Sözlük</label>
-        <button class="undo-merge" id="clean-gloss" style="margin-left:auto;color:var(--thread);border-color:var(--thread);">✦ Sözlüğü temizle</button>
+        <button class="ghost-link" id="clean-gloss">Sözlüğü temizle</button>
         <span class="meta" id="clean-status"></span>
       </div>
       <div class="chip-add">
         <input class="k" id="chip-src" placeholder="kaynak terim">
         <span class="chip-eq">=</span>
         <input id="chip-tgt" placeholder="hedef terim">
+        <button id="chip-cancel" title="Düzenlemeyi iptal et"><svg viewBox="0 0 24 24" width="13" height="13" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg></button>
         <button id="chip-add-btn">Ekle</button>
-        <button id="chip-cancel" style="display:none;">İptal</button>
       </div>
       <div class="glist" id="chip-list"></div>
     </div>
@@ -497,7 +523,8 @@ const ICON={
   checklist:'<svg viewBox="0 0 24 24" width="15" height="15" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><path d="m3 17 2 2 4-4"/><path d="m3 7 2 2 4-4"/><path d="M13 6h8"/><path d="M13 12h8"/><path d="M13 18h8"/></svg>',
   filetext:'<svg viewBox="0 0 24 24" width="15" height="15" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><path d="M15 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V7Z"/><path d="M14 2v4a2 2 0 0 0 2 2h4"/><path d="M10 9H8"/><path d="M16 13H8"/><path d="M16 17H8"/></svg>',
   bolt:'<svg viewBox="0 0 24 24" width="11" height="11" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round"><path d="M13 2 3 14h9l-1 8 10-12h-9l1-8Z"/></svg>',
-  bookmark:'<svg viewBox="0 0 24 24" width="13" height="13" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><path d="m19 21-7-4-7 4V5a2 2 0 0 1 2-2h10a2 2 0 0 1 2 2v16z"/></svg>'
+  bookmark:'<svg viewBox="0 0 24 24" width="13" height="13" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><path d="m19 21-7-4-7 4V5a2 2 0 0 1 2-2h10a2 2 0 0 1 2 2v16z"/></svg>',
+  x:'<svg viewBox="0 0 24 24" width="13" height="13" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg>'
 };
 
 // ================================================================
@@ -814,8 +841,8 @@ function loadChipForEdit(idx){
   EDIT_IDX=idx;
   $('chip-src').value=t.src;
   $('chip-tgt').value=t.tgt;
-  $('chip-add-btn').textContent='Update';
-  $('chip-cancel').style.display='inline-block';
+  $('chip-add-btn').textContent='Güncelle';
+  $('chip-cancel').classList.add('shown');
   renderChips();
   $('chip-src').focus();
   // scroll the edit row into view if needed
@@ -826,8 +853,8 @@ function resetEditRow(){
   EDIT_IDX=null;
   $('chip-src').value='';
   $('chip-tgt').value='';
-  $('chip-add-btn').textContent='Add';
-  $('chip-cancel').style.display='none';
+  $('chip-add-btn').textContent='Ekle';
+  $('chip-cancel').classList.remove('shown');
 }
 
 function commitEditRow(){
