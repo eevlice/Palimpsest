@@ -54,12 +54,16 @@
   /* a utility that must beat any later display rule on the same element
      (.header-nav and .seg-effort both set their own display) */
   .hidden{display:none !important;}
-  .panel-title{font-family:'Fraunces',serif;font-weight:500;font-size:24px;
+  /* section headings speak the interface's mono voice, not the display serif -
+     that one belongs to the logo and to the names the sections list */
+  /* ink, not ink-soft: field labels are mono uppercase too, and a section
+     heading has to outrank them on more than its underline */
+  .panel-title{font-family:'Spline Sans Mono',monospace;font-weight:500;font-size:12px;
+    letter-spacing:.2em;text-transform:uppercase;color:var(--ink);
     border-bottom:1px solid var(--rule);padding-bottom:7px;margin:30px 0 14px;
-    display:flex;align-items:baseline;gap:12px;}
-  .panel-title .n{font-family:'Spline Sans Mono',monospace;font-size:12px;color:var(--pencil);}
-  /* a back button can't sit on a serif baseline without looking dropped */
-  .panel-title.with-back{align-items:center;gap:14px;margin-top:0;}
+    display:flex;align-items:center;gap:12px;}
+  .panel-title .n{color:var(--pencil);}
+  .panel-title.with-back{gap:14px;margin-top:0;}
   .panel-note{font-size:12px;color:var(--ink-soft);margin:0 0 18px;}
   .panel-note .mono-sm{font-size:11px;}
   .save-pill{font-family:'Spline Sans Mono',monospace;font-size:11px;color:var(--thread);}
