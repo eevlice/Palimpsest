@@ -11,11 +11,15 @@ otomatik olarak kaydeder.
 
 ## İlk kurulum (yaklaşık beş dakika, bir kez)
 
-1. Bilgisayarınızda yoksa **Python 3.10 veya üstünü** https://python.org
+1. **Dosyaları indirin.** Bu sayfanın üstündeki yeşil **Code** butonuna,
+   ardından **Download ZIP**'e tıklayıp bilgisayarınızda bir klasöre çıkarın.
+   (Git kullanıyorsanız `git clone` ile de indirebilirsiniz.)
+
+2. Bilgisayarınızda yoksa **Python 3.10 veya üstünü** https://python.org
    adresinden kurun. (Windows'ta kurulum sırasında "Add Python to PATH"
    kutusunu işaretleyin.)
 
-2. **API anahtarınızı ekleyin.** Uygulamayı ilk açtığınızda sağ üstteki
+3. **API anahtarınızı ekleyin.** Uygulamayı ilk açtığınızda sağ üstteki
    **API Anahtarları**'na girin ve kullanmak istediğiniz sağlayıcının (Claude,
    ChatGPT, Gemini) anahtarını yapıştırıp *Kaydet*'e basın. Anahtar,
    bilgisayarınızda `~/.palimpsest` klasöründe şifreli olarak saklanır ve
@@ -27,7 +31,7 @@ otomatik olarak kaydeder.
    (Eski kurulumlardan kalan `key.txt` dosyası varsa, Anthropic için hâlâ
    çalışmaya devam eder — yeniden anahtar girmeniz gerekmez.)
 
-3. Hepsi bu kadar. Başlatıcı, ihtiyaç duyduğu kütüphaneleri ilk
+4. Hepsi bu kadar. Başlatıcı, ihtiyaç duyduğu kütüphaneleri ilk
    çalıştırmada sizin için kurar.
 
 ---
