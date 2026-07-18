@@ -1403,13 +1403,18 @@ $('jump-last2').onclick=jumpToLastTranslated;
 // TRANSLATE + WRITE + APPROVE
 // ================================================================
 function memoryString(uptoIndex){
+  // Walk backward from the current paragraph so "earlier" means the nearest
+  // approved neighbors, not whichever 6 paragraphs happened to be approved
+  // first in the book - those go stale the moment you're 200 paragraphs past
+  // them. Kept short (4 pairs, 80 chars each): this is a consistency nudge,
+  // not a translation memory dump.
   const pairs=[];
-  for(let j=0;j<uptoIndex&&pairs.length<6;j++){
+  for(let j=uptoIndex-1;j>=0&&pairs.length<4;j--){
     if(P.approved[j]&&P.finals[j]){
-      pairs.push(P.segments[j].slice(0,120)+' => '+P.finals[j].slice(0,120));
+      pairs.push(P.segments[j].slice(0,80)+' => '+P.finals[j].slice(0,80));
     }
   }
-  return pairs.join('\n');
+  return pairs.reverse().join('\n');
 }
 
 window.writeSeg=(i)=>{

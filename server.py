@@ -71,15 +71,23 @@ def segment(text):
 
 def condense_brief(provider, model, synopsis):
     """Compress the brief to minimum tokens without losing any instruction.
-    Runs once at setup; saves tokens on every later translation call."""
+    Runs once at setup; saves tokens on every later translation call, since
+    this brief rides along - cached - on every paragraph for the rest of
+    the book. A fixed "half its length" target caps compression early; an
+    absolute-minimum instruction keeps squeezing past that if the brief
+    allows it, without touching what "no instruction lost" means."""
     if not synopsis or len(synopsis) < 200:
         return synopsis, None
     system = ("You compress translation briefs to the fewest words possible "
               "while preserving every instruction, nuance, and stylistic note. "
-              "Telegraphic phrasing is fine. Drop nothing meaningful.")
-    user = ("Condense this translation brief to roughly half its length or less. "
-            "Keep every distinct instruction about voice, tone, register, POV, and "
-            "style. Output ONLY the condensed brief.\n\n" + synopsis)
+              "Telegraphic phrasing, sentence fragments, and dropped articles "
+              "are fine. Compress the phrasing, never the content — if in doubt, "
+              "keep the detail and cut a word elsewhere.")
+    user = ("Rewrite this translation brief in the fewest words that lose zero "
+            "instructions, nuances, or stylistic notes — no target length, just "
+            "the true minimum. Keep every distinct instruction about voice, tone, "
+            "register, POV, and style. Do not summarize away specifics. "
+            "Output ONLY the condensed brief.\n\n" + synopsis)
     try:
         text, cost, tokens = providers.call_simple(provider, model, system, user, max_tokens=1024)
         return text, (cost, tokens)
@@ -145,12 +153,29 @@ def build_standing_context(synopsis, terms, rules, style_sample):
     return "\n\n".join(parts) if parts else "(no project context provided)"
 
 
+def _edge_snippet(text, chars, from_end):
+    """A short excerpt from a neighboring paragraph, for flow context only -
+    it's never translated, so word-perfect boundaries don't matter, but this
+    trims to the nearest whitespace instead of slicing mid-word. Sent uncached
+    on every call, so full neighboring paragraphs (some run 1-2k chars) were
+    pure waste for what's just meant to convey "what came right before/after"."""
+    if len(text) <= chars:
+        return text
+    if from_end:
+        cut = text[-chars:]
+        sp = cut.find(" ")
+        return ("…" + cut[sp + 1:]) if sp != -1 else ("…" + cut)
+    cut = text[:chars]
+    sp = cut.rfind(" ")
+    return (cut[:sp] + "…") if sp != -1 else (cut + "…")
+
+
 def build_per_call(src, tgt, text, before, after, memory):
     """The part that changes per paragraph — NOT cached."""
     parts = []
     if memory: parts.append(f"EARLIER APPROVED TRANSLATIONS (match these):\n{memory}")
-    if before: parts.append(f"PRECEDING TEXT (context only, do NOT translate):\n{before}")
-    if after: parts.append(f"FOLLOWING TEXT (context only, do NOT translate):\n{after}")
+    if before: parts.append(f"PRECEDING TEXT (context only, do NOT translate):\n{_edge_snippet(before, 220, from_end=True)}")
+    if after: parts.append(f"FOLLOWING TEXT (context only, do NOT translate):\n{_edge_snippet(after, 220, from_end=False)}")
     parts.append(
         f"Translate ONLY the SEGMENT below into {tgt}. "
         f"Follow the brief, term sheet, rules, and style. "
