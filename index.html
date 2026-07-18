@@ -338,7 +338,7 @@
   <!-- ========== HOME ========== -->
   <section id="home">
     <div class="panel-title">Projeler</div>
-    <div id="project-list"><p class="meta">No saved projects yet.</p></div>
+    <div id="project-list"><p class="meta">Henüz kaydedilmiş proje yok.</p></div>
     <div class="panel-title" style="margin-top:36px;">Yeni proje başlat</div>
     <div class="field" style="margin-bottom:18px;">
       <label for="pname">Proje adı</label>
@@ -693,7 +693,7 @@ function renderPreferences(){
 function refreshProjects(){
   fetch('/projects').then(r=>r.json()).then(list=>{
     const c=$('project-list');
-    if(!list.length){c.innerHTML='<p class="meta">No saved projects yet.</p>';return;}
+    if(!list.length){c.innerHTML='<p class="meta">Henüz kaydedilmiş proje yok.</p>';return;}
     c.innerHTML='';
     list.forEach(p=>{
       const d=document.createElement('div');d.className='proj';
