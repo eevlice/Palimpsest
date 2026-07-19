@@ -30,10 +30,13 @@ PROVIDERS = {
         "label": "Claude",
         "effort_kind": "thinking_budget",
         "models": {
-            "claude-opus-4-8": {"label": "Opus 4.8", "in": 5.0, "out": 25.0, "cache_write": 6.25, "cache_read": 0.50, "effort": True},
-            "claude-sonnet-5": {"label": "Sonnet 5", "in": 3.0, "out": 15.0, "cache_write": 3.75, "cache_read": 0.30, "effort": True, "thinking_style": "adaptive"},
-            "claude-sonnet-4-6": {"label": "Sonnet 4.6", "in": 3.0, "out": 15.0, "cache_write": 3.75, "cache_read": 0.30, "effort": True},
-            "claude-haiku-4-5-20251001": {"label": "Haiku 4.5", "in": 1.0, "out": 5.0, "cache_write": 1.25, "cache_read": 0.10, "effort": True},
+            # cache_write is priced for the 1h TTL (2x base input) to match the
+            # ttl:"1h" set in _call_anthropic below - it was 1.25x (5min TTL)
+            # and quietly under-reported real spend once the TTL changed.
+            "claude-opus-4-8": {"label": "Opus 4.8", "in": 5.0, "out": 25.0, "cache_write": 10.0, "cache_read": 0.50, "effort": True},
+            "claude-sonnet-5": {"label": "Sonnet 5", "in": 3.0, "out": 15.0, "cache_write": 6.0, "cache_read": 0.30, "effort": True, "thinking_style": "adaptive"},
+            "claude-sonnet-4-6": {"label": "Sonnet 4.6", "in": 3.0, "out": 15.0, "cache_write": 6.0, "cache_read": 0.30, "effort": True},
+            "claude-haiku-4-5-20251001": {"label": "Haiku 4.5", "in": 1.0, "out": 5.0, "cache_write": 2.0, "cache_read": 0.10, "effort": True},
         },
     },
     "openai": {
@@ -115,15 +118,22 @@ def _call_anthropic(client, model, system_text, standing_context, per_call_text,
             budget = EFFORT_BUDGETS[effort]
             extra_body = {"thinking": {"type": "enabled", "budget_tokens": budget}}
             max_tokens = max(max_tokens, budget + 2048)
+    # 1h TTL, not the 5min default: the read-review-edit-approve loop between
+    # paragraphs is human-paced and routinely outlasts 5 minutes, which would
+    # otherwise cool the cache and rewrite the brief/terms/rules/style at full
+    # write cost (1.25x) with none of the read discount (~0.1x). The 1h write
+    # premium (2x) is paid once; staying warm across a book-length session
+    # more than covers it.
+    cache_control = {"type": "ephemeral", "ttl": "1h"}
     content = []
     if standing_context:
-        content.append({"type": "text", "text": standing_context, "cache_control": {"type": "ephemeral"}})
+        content.append({"type": "text", "text": standing_context, "cache_control": cache_control})
     content.append({"type": "text", "text": per_call_text})
     resp = client.messages.create(
         model=model,
         max_tokens=max_tokens,
         extra_body=extra_body,
-        system=[{"type": "text", "text": system_text, "cache_control": {"type": "ephemeral"}}],
+        system=[{"type": "text", "text": system_text, "cache_control": cache_control}],
         messages=[{"role": "user", "content": content}],
     )
     text = "".join(b.text for b in resp.content if b.type == "text").strip()
