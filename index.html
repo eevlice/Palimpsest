@@ -173,9 +173,9 @@
     border-color:var(--thread);color:var(--paper);}
   .seg-btn:disabled{opacity:.4;cursor:wait;}
   .seg-cost{font-family:'Spline Sans Mono',monospace;font-size:11px;color:var(--ink-soft);}
-  /* column 2 only, not the full row - centers under the untranslated box
-     it actually acts on, not under the src/tgt pair as a whole */
-  .merge-join{grid-column:2;display:flex;justify-content:center;margin-top:6px;}
+  /* column 1 only, not the full row - centers under the source paragraph
+     it merges, not under the src/tgt pair as a whole */
+  .merge-join{grid-column:1;display:flex;justify-content:center;margin-top:6px;}
   .merge-btn{display:inline-flex;align-items:center;gap:6px;font-family:'Spline Sans Mono',monospace;
     font-size:10px;letter-spacing:.06em;text-transform:uppercase;border:1px dashed var(--rule);
     background:none;color:var(--ink-soft);padding:4px 12px;cursor:pointer;}
@@ -275,7 +275,6 @@
     #chip-cancel{grid-column:1;justify-self:start;}
     #chip-add-btn{grid-column:3;justify-self:end;}
     .seg{grid-template-columns:1fr;}
-    .merge-join{grid-column:1;}
     .ws-layout{grid-template-columns:1fr;}
     /* toolbar: status group wraps to its own full-width line below the tools */
     .ws-status{flex:1 1 100%;order:1;justify-content:flex-end;}
