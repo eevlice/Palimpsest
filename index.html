@@ -1048,13 +1048,24 @@ $('btn-rail-mobile').onclick=()=>{
 // ---- glossary chips ----
 function parseTerms(str){
   // returns array of {src,tgt} from "src = tgt" lines. The model's raw output
-  // sometimes wraps a term in markdown backticks; strip those or every
-  // downstream match (glossary highlighting included) silently finds nothing.
-  const stripTicks=s=>s.replace(/^`+|`+$/g,'');
+  // sometimes wraps a term in markdown backticks or quote marks - strip
+  // those or matching breaks in two ways: backticks never appear in real
+  // prose so the literal substring is just never found, and quote marks
+  // are worse - real text often has trailing punctuation *inside* the
+  // closing quote ("...killing music," said) that the entry doesn't
+  // capture, so even the quoted text mismatches the quoted entry.
+  const QUOTE_PAIRS=[['"','"'],["'","'"],['“','”'],['‘','’']];
+  function stripWrap(s){
+    s=s.replace(/^`+|`+$/g,'');
+    for(const [open,close] of QUOTE_PAIRS){
+      if(s.length>1 && s[0]===open && s[s.length-1]===close){ s=s.slice(1,-1).trim(); break; }
+    }
+    return s;
+  }
   return (str||'').split('\n').map(l=>l.trim()).filter(Boolean).map(l=>{
     const i=l.indexOf('=');
-    if(i<0) return {src:stripTicks(l),tgt:''};
-    return {src:stripTicks(l.slice(0,i).trim()), tgt:stripTicks(l.slice(i+1).trim())};
+    if(i<0) return {src:stripWrap(l),tgt:''};
+    return {src:stripWrap(l.slice(0,i).trim()), tgt:stripWrap(l.slice(i+1).trim())};
   });
 }
 // ---- glossary term spotting (source-side only - see the search feature's
