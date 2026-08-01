@@ -292,10 +292,14 @@
   .glist-empty{padding:12px 6px;font-family:'Spline Sans Mono',monospace;font-size:12px;
     color:var(--ink-soft);}
   /* no frame of its own - it's a row inside the drawer, not a nested box. */
-  .chip-add{display:flex;gap:8px;align-items:center;}
+  /* same gap and flex:1 1 0 split as .glist-row below it, and the buttons
+     sit in a .glist-actions zone too - so the add row's two fields and
+     button cluster line up with the src/tgt/actions columns of every
+     entry underneath instead of drifting on their own proportions. */
+  .chip-add{display:flex;gap:14px;align-items:center;}
   .chip-add input{font-size:14px;height:36px;box-sizing:border-box;padding:0 11px;
     flex:1 1 0;min-width:0;}
-  .chip-eq{font-family:'Spline Sans Mono',monospace;color:var(--ink-soft);flex:0 0 auto;}
+  .chip-add .glist-actions{padding-left:14px;}
   /* square icon buttons, always present (no reserved-but-empty slot to catch
      the eye) - #chip-cancel doubles as "clear the form" when idle and "cancel
      this edit" once a row is loaded, so it never needs to vanish. */
@@ -332,11 +336,10 @@
   @media(max-width:760px){
     .row{grid-template-columns:1fr;}
     .row2{grid-template-columns:1fr 1fr;}
-    /* src/eq/tgt on their own line, cancel+add below - side by side at 375px
+    /* src/tgt on their own line, cancel+add below - side by side at 375px
        they crushed the term inputs down to a few unreadable pixels each */
-    .chip-add{display:grid;grid-template-columns:1fr auto 1fr;row-gap:8px;}
-    #chip-cancel{grid-column:1;justify-self:start;}
-    #chip-add-btn{grid-column:3;justify-self:end;}
+    .chip-add{display:grid;grid-template-columns:1fr 1fr;row-gap:8px;column-gap:14px;}
+    .chip-add .glist-actions{grid-column:1/-1;justify-self:end;border-left:none;padding-left:0;}
     .seg{grid-template-columns:1fr;}
     .ws-layout{grid-template-columns:1fr;}
     /* toolbar: status group wraps to its own full-width line below the tools */
@@ -514,15 +517,16 @@
     <div class="drawer hidden" id="drawer-glossary">
       <div class="drawer-head">
         <label style="margin:0;">Sözlük</label>
-        <button class="ghost-link" id="clean-gloss">Sözlüğü temizle</button>
         <span class="meta" id="clean-status"></span>
+        <button class="ghost-link" id="clean-gloss">Sözlüğü temizle</button>
       </div>
       <div class="chip-add">
         <input class="k" id="chip-src" placeholder="kaynak terim">
-        <span class="chip-eq">=</span>
         <input id="chip-tgt" placeholder="hedef terim">
-        <button id="chip-cancel" title="Formu temizle"><svg viewBox="0 0 24 24" width="13" height="13" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg></button>
-        <button id="chip-add-btn" title="Ekle"><svg viewBox="0 0 24 24" width="15" height="15" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><line x1="12" y1="5" x2="12" y2="19"/><line x1="5" y1="12" x2="19" y2="12"/></svg></button>
+        <span class="glist-actions">
+          <button id="chip-cancel" title="Formu temizle"><svg viewBox="0 0 24 24" width="13" height="13" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg></button>
+          <button id="chip-add-btn" title="Ekle"><svg viewBox="0 0 24 24" width="15" height="15" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><line x1="12" y1="5" x2="12" y2="19"/><line x1="5" y1="12" x2="19" y2="12"/></svg></button>
+        </span>
       </div>
       <div class="glist" id="chip-list"></div>
     </div>
