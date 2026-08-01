@@ -260,18 +260,28 @@
      separate the list from the add row above it. */
   .glist{margin-top:14px;padding-top:14px;border-top:1px solid var(--rule);
     max-height:280px;overflow-y:auto;}
-  .glist-row{display:grid;grid-template-columns:1fr 1fr auto auto;align-items:center;
-    gap:10px;padding:9px 6px;border-bottom:1px solid var(--rule);cursor:pointer;
+  /* flex, not grid: src/tgt share the space evenly and truncate instead of
+     wrapping/stretching, and the actions cluster (count + delete) sits in
+     its own fixed-width zone behind a divider - so it lines up the same
+     way on every row regardless of digit count or text length. */
+  .glist-row{display:flex;align-items:center;gap:14px;
+    padding:9px 6px;border-bottom:1px solid var(--rule);cursor:pointer;
     transition:background .1s;}
   .glist-row:last-child{border-bottom:none;}
   .glist-row:hover{background:rgba(255,255,255,.5);}
   .glist-row.active{background:rgba(255,255,255,.6);box-shadow:inset 2px 0 0 var(--thread);}
-  .glist-src{font-family:'Spline Sans Mono',monospace;font-size:13px;color:var(--ink);}
-  .glist-tgt{font-family:'Spline Sans Mono',monospace;font-size:13px;color:var(--thread);}
+  .glist-src,.glist-tgt{flex:1 1 0;min-width:0;overflow:hidden;text-overflow:ellipsis;
+    white-space:nowrap;font-family:'Spline Sans Mono',monospace;font-size:13px;}
+  .glist-src{color:var(--ink);}
+  .glist-tgt{color:var(--thread);}
   .glist-tgt.empty{color:var(--rule);font-style:italic;}
+  .glist-actions{display:flex;align-items:center;gap:8px;flex:0 0 auto;
+    padding-left:12px;border-left:1px solid var(--rule);}
   /* count + filter, one control: click filters the workspace down to just
-     the paragraphs where this term's source form occurs */
-  .glist-filter{display:inline-flex;align-items:center;gap:4px;border:1px solid var(--rule);
+     the paragraphs where this term's source form occurs. Fixed min-width so
+     "1" and "30" don't leave the delete button drifting left/right per row. */
+  .glist-filter{display:inline-flex;align-items:center;justify-content:center;gap:4px;
+    min-width:50px;border:1px solid var(--rule);
     background:none;color:var(--ink-soft);font-family:'Spline Sans Mono',monospace;font-size:11px;
     padding:3px 8px;cursor:pointer;white-space:nowrap;flex:0 0 auto;}
   .glist-filter:hover{border-color:var(--thread);color:var(--thread);}
@@ -1233,8 +1243,10 @@ function renderChips(){
     row.innerHTML=
       `<span class="glist-src">${esc(t.src)}</span>`+
       `<span class="glist-tgt${t.tgt?'':' empty'}">${t.tgt?esc(t.tgt):'—'}</span>`+
+      `<span class="glist-actions">`+
       `<button class="glist-filter" title="Bu terimin geçtiği paragrafları listele">${ICON.tag} ${count}</button>`+
-      `<button class="glist-x" title="remove">×</button>`;
+      `<button class="glist-x" title="remove">×</button>`+
+      `</span>`;
     row.querySelector('.glist-src').onclick=()=>loadChipForEdit(idx);
     row.querySelector('.glist-tgt').onclick=()=>loadChipForEdit(idx);
     row.querySelector('.glist-filter').onclick=(e)=>{ e.stopPropagation(); applyGlossaryFilter(t.src); };
