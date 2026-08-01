@@ -1866,7 +1866,7 @@ function jumpToLastTranslated(){
   // the rail's scroll position along, so without this the dot marking
   // where you actually landed can sit well outside view.
   const railItem=document.querySelector(`.rail-item[data-index="${i}"]`);
-  if(railItem) railItem.scrollIntoView({block:'center',behavior:'smooth'});
+  if(railItem) railItem.scrollIntoView({block:'start',behavior:'smooth'});
 }
 $('jump-last').onclick=jumpToLastTranslated;
 $('jump-last2').onclick=jumpToLastTranslated;
