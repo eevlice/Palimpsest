@@ -71,6 +71,10 @@
   .panel-note{font-size:12px;color:var(--ink-soft);margin:0 0 18px;}
   .panel-note .mono-sm{font-size:11px;}
   .save-pill{font-family:'Spline Sans Mono',monospace;font-size:11px;color:var(--thread);}
+  /* matches save-pill's type size exactly, not the slightly larger default
+     .meta - the leading interpunct in its own text (see export click
+     handler) keeps it from reading as glued onto whatever precedes it */
+  #export-meta{font-size:11px;}
   .proj{display:flex;align-items:center;gap:14px;border-bottom:1px solid var(--rule);padding:14px 0;}
   .proj .pname{font-family:'Fraunces',serif;font-size:20px;cursor:pointer;}
   .proj .pname:hover{color:var(--pencil);}
@@ -494,6 +498,13 @@
 
   <!-- ========== WORKSPACE ========== -->
   <section id="workspace" class="hidden">
+    <div class="tracker">
+      <div class="tracker-bar">
+        <div class="tracker-fill-trans" id="tk-trans"></div>
+        <div class="tracker-fill-appr" id="tk-appr"></div>
+      </div>
+      <span class="tracker-label" id="tk-label"></span>
+    </div>
     <div class="ws-bar">
       <button class="tb icon-only" id="home-btn" title="Projelere dön">←</button>
       <span class="ws-divider"></span>
@@ -548,13 +559,6 @@
     <div class="drawer hidden" id="drawer-brief">
       <label>Özet</label><textarea id="d-syn" style="min-height:80px;"></textarea>
       <label>Stil örneği</label><textarea id="d-style" style="min-height:60px;"></textarea>
-    </div>
-    <div class="tracker">
-      <div class="tracker-bar">
-        <div class="tracker-fill-trans" id="tk-trans"></div>
-        <div class="tracker-fill-appr" id="tk-appr"></div>
-      </div>
-      <span class="tracker-label" id="tk-label"></span>
     </div>
     <button class="tb run-full" id="btn-rail-mobile" style="display:none;margin-bottom:12px;">¶ Paragraflar</button>
     <div id="merge-confirm-bar"></div>
@@ -1984,6 +1988,6 @@ $('export').onclick=()=>{
   const blob=new Blob([out],{type:'text/plain;charset=utf-8'});
   const a=document.createElement('a');a.href=URL.createObjectURL(blob);
   a.download=P.name.replace(/[^a-z0-9]+/gi,'_')+'.'+P.target_lang.toLowerCase()+'.txt';a.click();
-  $('export-meta').textContent=`${P.segments.length} paragraftan ${P.approved.filter(Boolean).length} tanesi dışa aktarıldı`;
+  $('export-meta').textContent=`· ${P.segments.length} paragraftan ${P.approved.filter(Boolean).length} tanesi dışa aktarıldı`;
 };
 </script>
