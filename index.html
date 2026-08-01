@@ -150,9 +150,16 @@
      whole line once the row wraps. */
   .seg-actions .seg-model{flex:1 1 120px;min-width:120px;}
   .seg-actions .seg-cost{flex:0 0 auto;margin-left:auto;white-space:nowrap;}
-  /* one height for every control in the row, whatever its padding */
-  .seg-actions>.seg-btn,.seg-actions>.seg-model,.seg-actions>.seg-effort{
+  /* one height for every control in the row, whatever its padding - descendant
+     (not child) selector since model/effort/rerun/cost now live one level
+     deeper, inside .seg-extra */
+  .seg-actions .seg-btn,.seg-actions .seg-model,.seg-actions .seg-effort{
     height:30px;box-sizing:border-box;}
+  /* closed: gone. open: display:contents so its children rejoin .seg-actions'
+     own flex row (same gap/wrap) as if the wrapper weren't there. */
+  .seg-extra{display:none;}
+  .seg-extra.open{display:contents;}
+  .seg-toggle.active{border-color:var(--ink);color:var(--ink);background:rgba(255,255,255,.5);}
   .seg-btn{font-family:'Spline Sans Mono',monospace;font-size:11px;letter-spacing:.08em;
     text-transform:uppercase;padding:6px 12px;cursor:pointer;border:1px solid var(--rule);
     background:none;color:var(--ink-soft);}
@@ -559,6 +566,7 @@ const ICON={
   bookmark:'<svg viewBox="0 0 24 24" width="13" height="13" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><path d="m19 21-7-4-7 4V5a2 2 0 0 1 2-2h10a2 2 0 0 1 2 2v16z"/></svg>',
   x:'<svg viewBox="0 0 24 24" width="13" height="13" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg>',
   search:'<svg viewBox="0 0 24 24" width="15" height="15" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><circle cx="11" cy="11" r="8"/><line x1="21" y1="21" x2="16.65" y2="16.65"/></svg>',
+  more:'<svg viewBox="0 0 24 24" width="15" height="15" fill="currentColor" stroke="none"><circle cx="12" cy="5" r="1.6"/><circle cx="12" cy="12" r="1.6"/><circle cx="12" cy="19" r="1.6"/></svg>',
   plus:'<svg viewBox="0 0 24 24" width="15" height="15" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><line x1="12" y1="5" x2="12" y2="19"/><line x1="5" y1="12" x2="19" y2="12"/></svg>'
 };
 
@@ -1204,6 +1212,41 @@ window.setSegEffort=(i,val)=>{
   el.title=effortTitle(val);
   el.querySelectorAll('.ef').forEach(b=>b.classList.toggle('on', b.dataset.effort===val));
 };
+// Once a paragraph has a translation, model/effort/rerun/cost are settings
+// you check rarely - keeping them on screen permanently competes with the
+// text you're actually there to read. So: full row for 5s right after a
+// translate (time to glance at cost/cache), then it collapses behind a
+// single toggle sized like the approve button. Re-opens on click and stays
+// open until you close it or the timer runs again.
+let SEG_EXTRA_OPEN={};
+let SEG_EXTRA_TIMERS={};
+function segActionsHTML(i,costTag){
+  const open=SEG_EXTRA_OPEN[i]?' open':'';
+  return `<div class="seg-actions">
+      <button class="seg-btn icon approve${P.approved[i]?' on':''}" onclick="approveSeg(${i})" title="${P.approved[i]?'Onaylandı':'Bu paragrafı onayla'}">${ICON.check}</button>
+      <button class="seg-btn icon seg-toggle${open?' active':''}" id="toggle-${i}" onclick="toggleSegExtra(${i})" title="Model, efor ve maliyet">${ICON.more}</button>
+      <div class="seg-extra${open}" id="extra-${i}">
+        ${modelSelector(i)}${effortSelector(i)}
+        <button class="seg-btn icon" onclick="runSeg(${i})" title="Yeniden çevir (makine)">${ICON.rerun}</button>
+        ${costTag}
+      </div>
+    </div>`;
+}
+window.toggleSegExtra=(i)=>{
+  clearTimeout(SEG_EXTRA_TIMERS[i]);
+  SEG_EXTRA_OPEN[i]=!SEG_EXTRA_OPEN[i];
+  applySegExtraState(i);
+};
+function applySegExtraState(i){
+  const el=$('extra-'+i), tg=$('toggle-'+i);
+  if(el) el.classList.toggle('open',!!SEG_EXTRA_OPEN[i]);
+  if(tg) tg.classList.toggle('active',!!SEG_EXTRA_OPEN[i]);
+}
+function revealSegExtraThenCollapse(i){
+  SEG_EXTRA_OPEN[i]=true;
+  clearTimeout(SEG_EXTRA_TIMERS[i]);
+  SEG_EXTRA_TIMERS[i]=setTimeout(()=>{ SEG_EXTRA_OPEN[i]=false; applySegExtraState(i); },5000);
+}
 function onModelChange(i){
   const msel=$('msel-'+i), esel=$('esel-'+i);
   if(!msel||!esel)return;
@@ -1395,13 +1438,7 @@ function renderWindow(){
     let right;
     if(P.finals[i]!==null){
       const costTag=(P.segCost&&P.segCost[i]!=null)?`<span class="seg-cost">$${P.segCost[i].toFixed(4)}</span>`:'';
-      right=`<textarea class="tgt-edit" id="edit-${i}">${esc(P.finals[i])}</textarea>
-        <div class="seg-actions">
-          <button class="seg-btn icon approve${P.approved[i]?' on':''}" onclick="approveSeg(${i})" title="${P.approved[i]?'Onaylandı':'Bu paragrafı onayla'}">${ICON.check}</button>
-          ${modelSelector(i)}${effortSelector(i)}
-          <button class="seg-btn icon" onclick="runSeg(${i})" title="Yeniden çevir (makine)">${ICON.rerun}</button>
-          ${costTag}
-        </div>`;
+      right=`<textarea class="tgt-edit" id="edit-${i}">${esc(P.finals[i])}</textarea>${segActionsHTML(i,costTag)}`;
     }else{
       right=`<div class="placeholder">Henüz çevrilmedi.</div>
         <div class="seg-actions">
@@ -1539,18 +1576,14 @@ window.runSeg=async(i)=>{
     P.segEffort[i]=segEffort;
     const tk=data.tokens||{};
     const cacheInfo=tk.cache_read?`<span class="seg-cache" title="Bağlam önbellekten okundu">${ICON.bolt}</span>`:'';
-    area.innerHTML=`<textarea class="tgt-edit" id="edit-${i}">${esc(data.final)}</textarea>
-      <div class="seg-actions">
-        <button class="seg-btn icon approve" onclick="approveSeg(${i})" title="Bu paragrafı onayla">${ICON.check}</button>
-        ${modelSelector(i)}${effortSelector(i)}
-        <button class="seg-btn icon" onclick="runSeg(${i})" title="Yeniden çevir (makine)">${ICON.rerun}</button>
-        <span class="seg-cost">$${data.cost.toFixed(4)}${cacheInfo}</span>
-      </div>`;
+    SEG_EXTRA_OPEN[i]=true;
+    area.innerHTML=`<textarea class="tgt-edit" id="edit-${i}">${esc(data.final)}</textarea>${segActionsHTML(i,`<span class="seg-cost">$${data.cost.toFixed(4)}${cacheInfo}</span>`)}`;
     // restore selected model + effort in the new controls; onModelChange runs
     // last so it can still force effort off if the model doesn't support it
     const newSel=$('msel-'+i);if(newSel)newSel.value=segModel;
     setSegEffort(i,segEffort);
     onModelChange(i);
+    revealSegExtraThenCollapse(i);
     const ned=$('edit-'+i);ned.oninput=()=>{P.finals[i]=ned.value;autoGrow(ned);queueSave();};autoGrow(ned);
     $('seg-'+i).classList.remove('done');
     updateProgress();renderRail();queueSave();
