@@ -40,6 +40,8 @@
     display:inline-flex;align-items:center;justify-content:center;}
   .tb:hover{border-color:var(--ink);color:var(--ink);}
   .tb.active{border-color:var(--thread);color:var(--thread);}
+  .tb.primary{background:var(--ink);color:var(--paper);border-color:var(--ink);}
+  .tb.primary:hover{background:var(--pencil);border-color:var(--pencil);}
   .drop{border:1.5px dashed var(--rule);padding:38px;text-align:center;cursor:pointer;
     background:rgba(255,255,255,.3);transition:border-color .15s,background .15s;margin-bottom:22px;}
   .drop:hover,.drop.over{border-color:var(--pencil);background:#fffdf8;}
@@ -117,6 +119,31 @@
   .gloss-pop-pair .k{color:var(--ink-soft);}
   .gloss-pop-pair .eq{color:var(--rule);margin:0 4px;}
   .gloss-pop-stat{color:var(--ink-soft);font-size:11px;margin:4px 0 6px;}
+  /* selection tip: appears at the mouseup point when text is selected inside
+     a translation box - cheap positioning (no caret-pixel math), reads fine
+     since it lands right where the hand already is. */
+  .gloss-add-tip{position:fixed;z-index:60;background:var(--ink);color:var(--paper);
+    font-family:'Spline Sans Mono',monospace;font-size:11px;letter-spacing:.05em;
+    text-transform:uppercase;border:none;padding:7px 12px;cursor:pointer;
+    display:inline-flex;align-items:center;gap:6px;box-shadow:0 4px 10px -4px rgba(0,0,0,.35);}
+  .gloss-add-tip:hover{background:var(--pencil);}
+  .gloss-modal-overlay{position:fixed;inset:0;z-index:70;background:rgba(0,0,0,.4);
+    display:flex;align-items:center;justify-content:center;padding:24px;}
+  .gloss-modal{background:var(--paper);border:1px solid var(--rule);padding:22px 24px;
+    width:100%;max-width:620px;}
+  .gloss-modal-title{font-family:'Spline Sans Mono',monospace;font-size:11px;letter-spacing:.1em;
+    text-transform:uppercase;color:var(--ink-soft);margin:0 0 16px;}
+  .gloss-modal-cols{display:grid;grid-template-columns:1fr 1fr;gap:18px;}
+  .gloss-modal-cols label{font-family:'Spline Sans Mono',monospace;font-size:10px;letter-spacing:.1em;
+    text-transform:uppercase;color:var(--ink-soft);display:block;margin-bottom:6px;}
+  .gloss-modal-src{font-size:15px;line-height:1.6;color:var(--ink-soft);background:var(--paper-deep);
+    border:1px solid var(--rule);padding:10px 12px;user-select:text;cursor:text;max-height:220px;
+    overflow-y:auto;margin-bottom:8px;}
+  .gloss-modal-src mark{background:var(--pencil-soft);color:var(--ink);}
+  .gloss-modal-cols input{width:100%;font-family:'Newsreader',serif;font-size:15px;color:var(--ink);
+    background:var(--paper);border:1px solid var(--rule);padding:9px 11px;}
+  .gloss-modal-cols input[readonly]{color:var(--ink-soft);font-family:'Spline Sans Mono',monospace;font-size:12px;}
+  .gloss-modal-actions{display:flex;justify-content:flex-end;gap:8px;margin-top:18px;}
   @keyframes searchFlash{0%{box-shadow:0 0 0 2px var(--thread);}100%{box-shadow:0 0 0 0 transparent;}}
   @keyframes slideDown{from{opacity:0;transform:translateY(-6px);}to{opacity:1;transform:none;}}
   .drawer-head{display:flex;align-items:center;gap:14px;margin-bottom:12px;}
@@ -542,6 +569,29 @@
     </div>
     <p class="meta" id="spending-empty" style="margin-top:14px;"></p>
   </section>
+
+  <!-- ========== ADD-TO-GLOSSARY (selection tip + modal) ========== -->
+  <button class="gloss-add-tip hidden" id="gloss-add-tip"></button>
+  <div class="gloss-modal-overlay hidden" id="gloss-modal-overlay">
+    <div class="gloss-modal">
+      <p class="gloss-modal-title">Sözlük girdisi ekle</p>
+      <div class="gloss-modal-cols">
+        <div class="col">
+          <label>Kaynak paragraf — ilgili kısmı seç</label>
+          <div class="gloss-modal-src" id="gloss-modal-src"></div>
+          <input id="gloss-modal-src-term" placeholder="Yukarıdan bir kısım seçin…" readonly>
+        </div>
+        <div class="col">
+          <label>Hedef terim</label>
+          <input id="gloss-modal-tgt">
+        </div>
+      </div>
+      <div class="gloss-modal-actions">
+        <button class="tb" id="gloss-modal-cancel">Vazgeç</button>
+        <button class="tb primary" id="gloss-modal-add">Ekle</button>
+      </div>
+    </div>
+  </div>
 </div>
 
 <script>
@@ -997,11 +1047,22 @@ function glossHitsForText(text){
   });
   return hits;
 }
+function isWordChar(ch){ return /[a-z0-9]/i.test(ch); }
 function findSpans(text,needle){
+  // Word-boundary gated: without this, a short entry like "IP" matches
+  // inside "skipped" (sk-IP-ped) - substring search doesn't know a word
+  // boundary from a coincidence. Only counts as a hit if neither the
+  // character right before nor right after is itself a word character.
   const spans=[]; if(!needle) return spans;
   const hay=text.toLocaleLowerCase('tr'), n=needle.toLocaleLowerCase('tr');
   let i=0;
-  while(true){ const at=hay.indexOf(n,i); if(at<0) break; spans.push({start:at,end:at+n.length}); i=at+n.length; }
+  while(true){
+    const at=hay.indexOf(n,i);
+    if(at<0) break;
+    const before=at>0?hay[at-1]:'', after=at+n.length<hay.length?hay[at+n.length]:'';
+    if(!isWordChar(before)&&!isWordChar(after)){ spans.push({start:at,end:at+n.length}); i=at+n.length; }
+    else i=at+1;
+  }
   return spans;
 }
 function glossaryHighlight(text,hits,segIndex){
@@ -1064,6 +1125,60 @@ window.showGlossPopup=(ev,idxOrIdxs,segIndex)=>{
   const x=Math.min(ev.clientX,window.innerWidth-296);
   const y=Math.min(ev.clientY+12,window.innerHeight-120);
   pop.style.left=x+'px';pop.style.top=y+'px';
+};
+
+// ---- add to glossary: select target text -> tip -> modal (source paragraph
+// on the left for a mouse-selected term, target selection pre-filled on the
+// right). No API/matching needed for capture - it's just two selections. ----
+let GLOSS_ADD_CTX=null;
+function hideGlossAddTip(){ $('gloss-add-tip').classList.add('hidden'); }
+function showGlossAddTip(x,y,segIndex,text){
+  const tip=$('gloss-add-tip');
+  tip.innerHTML=`${ICON.tag} Sözlüğe ekle`;
+  tip.classList.remove('hidden');
+  const left=Math.min(Math.max(8,x-70),window.innerWidth-160);
+  const top=Math.max(8,y-42);
+  tip.style.left=left+'px';tip.style.top=top+'px';
+  tip.onclick=()=>{ hideGlossAddTip(); openGlossModal(segIndex,text); };
+}
+document.addEventListener('mouseup',e=>{
+  if(!e.target.classList||!e.target.classList.contains('tgt-edit')){
+    if(!e.target.closest('.gloss-add-tip')) hideGlossAddTip();
+    return;
+  }
+  const ta=e.target;
+  const selText=ta.value.slice(ta.selectionStart,ta.selectionEnd).trim();
+  if(!selText){ hideGlossAddTip(); return; }
+  const i=parseInt(ta.id.slice(5),10);
+  showGlossAddTip(e.clientX,e.clientY,i,selText);
+});
+function openGlossModal(segIndex,targetText){
+  GLOSS_ADD_CTX={segIndex};
+  const srcBox=$('gloss-modal-src');
+  srcBox.textContent=P.segments[segIndex]||'';
+  $('gloss-modal-src-term').value='';
+  $('gloss-modal-tgt').value=targetText;
+  $('gloss-modal-overlay').classList.remove('hidden');
+  srcBox.onmouseup=()=>{
+    const sel=window.getSelection().toString().trim();
+    if(sel) $('gloss-modal-src-term').value=sel;
+  };
+  setTimeout(()=>$('gloss-modal-tgt').focus(),0);
+}
+function closeGlossModal(){ $('gloss-modal-overlay').classList.add('hidden'); GLOSS_ADD_CTX=null; }
+$('gloss-modal-cancel').onclick=closeGlossModal;
+$('gloss-modal-overlay').onclick=e=>{ if(e.target.id==='gloss-modal-overlay') closeGlossModal(); };
+$('gloss-modal-add').onclick=()=>{
+  const src=$('gloss-modal-src-term').value.trim();
+  const tgt=$('gloss-modal-tgt').value.trim();
+  if(!src||!tgt) return;
+  const arr=parseTerms(P.terms);
+  arr.push({src,tgt});
+  P.terms=termsToString(arr);
+  closeGlossModal();
+  queueSave();
+  renderWindow();
+  if(!$('drawer-glossary').classList.contains('hidden')) renderChips();
 };
 function termsToString(arr){
   return arr.map(t=>t.tgt?`${t.src} = ${t.tgt}`:`${t.src} = `).join('\n');
