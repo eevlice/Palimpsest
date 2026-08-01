@@ -275,15 +275,27 @@
   .glist-src{color:var(--ink);}
   .glist-tgt{color:var(--thread);}
   .glist-tgt.empty{color:var(--rule);font-style:italic;}
-  .glist-actions{display:flex;align-items:center;gap:8px;flex:0 0 auto;
+  /* fixed width, not just flex:0 0 auto - the add-row's two 36px square
+     buttons and an entry row's badge+delete are different natural widths,
+     so leaving this auto-sized let the two src/tgt flex:1 columns compute
+     to slightly different widths in each context (more leftover space
+     when this zone is narrower), which drifted the divider line itself
+     out of alignment. Same fixed width in both places = same leftover
+     space for src/tgt either way. */
+  .glist-actions{display:flex;align-items:center;justify-content:flex-end;gap:8px;
+    flex:0 0 auto;width:104px;box-sizing:border-box;
     padding-left:12px;border-left:1px solid var(--rule);}
   /* count + filter, one control: click filters the workspace down to just
      the paragraphs where this term's source form occurs. Fixed min-width so
      "1" and "30" don't leave the delete button drifting left/right per row. */
-  .glist-filter{display:inline-flex;align-items:center;justify-content:center;gap:4px;
-    min-width:50px;border:1px solid var(--rule);
+  /* fixed width, not min-width - a min-width only sets a floor, so a
+     4-digit count (2120) still grows the button past a 3-digit neighbor
+     and drags the delete button sideways with it, row to row. A hard
+     width keeps every badge identical regardless of digit count. */
+  .glist-filter{display:inline-flex;align-items:center;justify-content:center;gap:3px;
+    width:62px;overflow:hidden;border:1px solid var(--rule);
     background:none;color:var(--ink-soft);font-family:'Spline Sans Mono',monospace;font-size:11px;
-    padding:3px 8px;cursor:pointer;white-space:nowrap;flex:0 0 auto;}
+    padding:3px 6px;cursor:pointer;white-space:nowrap;flex:0 0 auto;}
   .glist-filter:hover{border-color:var(--thread);color:var(--thread);}
   .glist-filter svg{display:block;}
   .glist-x{border:none;background:none;color:var(--pencil-soft);font-size:15px;
@@ -296,10 +308,9 @@
      sit in a .glist-actions zone too - so the add row's two fields and
      button cluster line up with the src/tgt/actions columns of every
      entry underneath instead of drifting on their own proportions. */
-  .chip-add{display:flex;gap:14px;align-items:center;}
+  .chip-add{display:flex;gap:14px;align-items:center;padding:0 6px;}
   .chip-add input{font-size:14px;height:36px;box-sizing:border-box;padding:0 11px;
     flex:1 1 0;min-width:0;}
-  .chip-add .glist-actions{padding-left:14px;}
   /* square icon buttons, always present (no reserved-but-empty slot to catch
      the eye) - #chip-cancel doubles as "clear the form" when idle and "cancel
      this edit" once a row is loaded, so it never needs to vanish. */
@@ -964,7 +975,10 @@ function toggleDrawer(id,btnId){
   const d=$(id),b=$(btnId),open=d.classList.contains('hidden');
   ['drawer-glossary','drawer-rules','drawer-brief'].forEach(x=>$(x).classList.add('hidden'));
   ['btn-glossary','btn-rules','btn-brief'].forEach(x=>$(x).classList.remove('active'));
-  if(open){d.classList.remove('hidden');b.classList.add('active');}
+  if(open){
+    d.classList.remove('hidden');b.classList.add('active');
+    if(id==='drawer-glossary') syncGlossaryScrollGutter();
+  }
 }
 $('btn-glossary').onclick=()=>toggleDrawer('drawer-glossary','btn-glossary');
 $('btn-rules').onclick=()=>toggleDrawer('drawer-rules','btn-rules');
@@ -1273,6 +1287,23 @@ function renderChips(){
     };
     list.appendChild(row);
   });
+  syncGlossaryScrollGutter();
+}
+// .glist scrolls internally once entries overflow its max-height, and that
+// scrollbar eats into its rows' width - but .chip-add above it never
+// scrolls, so its own row stayed full-width and drifted out of alignment
+// with the divider line below. Measuring the actual reserved scrollbar
+// width (0 when there's no scrollbar yet) and mirroring it as padding on
+// chip-add keeps both rows the same effective width either way.
+function syncGlossaryScrollGutter(){
+  const list=$('chip-list'), addRow=document.querySelector('.chip-add');
+  if(!list||!addRow||list.offsetWidth===0) return;
+  const gutter=list.offsetWidth-list.clientWidth;
+  // adds to the row's own 6px inset (see .chip-add's CSS) rather than
+  // replacing it - an inline style here would otherwise clobber that base
+  // padding down to just the scrollbar gutter, throwing the two right back
+  // out of alignment whenever there's no scrollbar (gutter=0).
+  addRow.style.paddingRight=(6+gutter)+'px';
 }
 
 function loadChipForEdit(idx){
