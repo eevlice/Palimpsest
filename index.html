@@ -179,6 +179,14 @@
     background:none;color:var(--ink-soft);padding:4px 12px;cursor:pointer;}
   .merge-btn:hover{border-color:var(--thread);color:var(--thread);border-style:solid;}
   .merge-btn.undo{border-color:var(--pencil-soft);color:var(--pencil);}
+  /* icon-only now - square it off, and a small pointer hanging off the
+     bottom edge stands in for "with next": it aims at the paragraph below. */
+  .merge-btn:not(.undo){position:relative;padding:6px 10px;}
+  .merge-btn:not(.undo)::after{content:'';position:absolute;left:50%;bottom:-6px;
+    transform:translateX(-50%);width:0;height:0;
+    border-left:5px solid transparent;border-right:5px solid transparent;
+    border-top:5px solid currentColor;opacity:.5;}
+  .merge-btn:not(.undo):hover::after{opacity:1;}
   .rail-item.merge-sel{background:rgba(178,58,46,.12);border-left-color:var(--pencil);color:var(--pencil);}
   .merge-confirm{display:flex;align-items:center;gap:10px;padding:10px 14px;
     background:rgba(178,58,46,.07);border:1px solid var(--pencil-soft);margin-bottom:12px;
@@ -1440,7 +1448,7 @@ function renderWindow(){
       const costTag=(P.segCost&&P.segCost[i]!=null)?`<span class="seg-cost">$${P.segCost[i].toFixed(4)}</span>`:'';
       right=`<textarea class="tgt-edit" id="edit-${i}">${esc(P.finals[i])}</textarea>${segActionsHTML(i,costTag)}`;
     }else{
-      right=`<div class="placeholder">Henüz çevrilmedi.</div>
+      right=`<div class="placeholder"></div>
         <div class="seg-actions">
           <button class="seg-btn primary" onclick="runSeg(${i})" title="Makine ile çevir">${ICON.translate}<span>Translate</span></button>
           ${modelSelector(i)}${effortSelector(i)}
@@ -1452,7 +1460,7 @@ function renderWindow(){
     if(canMerge(i)||isUndoTarget){
       let inner='';
       if(canMerge(i)){
-        inner+=`<button class="merge-btn" onclick="mergeDown(${i})" title="Bu paragrafı bir sonrakiyle birleştir">${ICON.merge}Merge with next</button>`;
+        inner+=`<button class="merge-btn" onclick="mergeDown(${i})" title="Bu paragrafı bir sonrakiyle birleştir">${ICON.merge}</button>`;
       }
       if(isUndoTarget){
         inner+=`<button class="merge-btn undo" onclick="undoMerge()" title="Bu paragrafı oluşturan birleştirmeyi geri al">↶ Birleştirmeyi geri al</button>`;
