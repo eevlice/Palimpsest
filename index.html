@@ -100,6 +100,8 @@
   .search-bar input{border:none;background:none;padding:2px 0;flex:1;font-size:14px;}
   .search-bar input:focus{outline:none;box-shadow:none;}
   .search-bar .meta{white-space:nowrap;min-width:56px;}
+  .gloss-filter-bar #gloss-filter-label{flex:1;font-size:14px;}
+  .gloss-filter-bar #gloss-filter-back{margin-left:auto;white-space:nowrap;}
   mark.search-mark{background:var(--thread-light,#ffe9a8);color:inherit;padding:0 1px;}
   .seg.search-hit{animation:searchFlash 1.2s ease;}
   /* glossary terms in source text: a dotted underline, not a filled highlight -
@@ -258,7 +260,7 @@
      separate the list from the add row above it. */
   .glist{margin-top:14px;padding-top:14px;border-top:1px solid var(--rule);
     max-height:280px;overflow-y:auto;}
-  .glist-row{display:grid;grid-template-columns:1fr 1fr auto;align-items:center;
+  .glist-row{display:grid;grid-template-columns:1fr 1fr auto auto;align-items:center;
     gap:10px;padding:9px 6px;border-bottom:1px solid var(--rule);cursor:pointer;
     transition:background .1s;}
   .glist-row:last-child{border-bottom:none;}
@@ -267,6 +269,13 @@
   .glist-src{font-family:'Spline Sans Mono',monospace;font-size:13px;color:var(--ink);}
   .glist-tgt{font-family:'Spline Sans Mono',monospace;font-size:13px;color:var(--thread);}
   .glist-tgt.empty{color:var(--rule);font-style:italic;}
+  /* count + filter, one control: click filters the workspace down to just
+     the paragraphs where this term's source form occurs */
+  .glist-filter{display:inline-flex;align-items:center;gap:4px;border:1px solid var(--rule);
+    background:none;color:var(--ink-soft);font-family:'Spline Sans Mono',monospace;font-size:11px;
+    padding:3px 8px;cursor:pointer;white-space:nowrap;flex:0 0 auto;}
+  .glist-filter:hover{border-color:var(--thread);color:var(--thread);}
+  .glist-filter svg{display:block;}
   .glist-x{border:none;background:none;color:var(--pencil-soft);font-size:15px;
     cursor:pointer;padding:0 4px;line-height:1;flex:0 0 auto;}
   .glist-x:hover{color:var(--pencil);}
@@ -486,6 +495,11 @@
       <button class="tb icon-only" id="search-prev" title="Önceki (Shift+Enter)">‹</button>
       <button class="tb icon-only" id="search-next" title="Sonraki (Enter)">›</button>
       <button class="tb icon-only" id="search-close" title="Kapat (Esc)"><svg viewBox="0 0 24 24" width="13" height="13" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg></button>
+    </div>
+    <div class="search-bar gloss-filter-bar hidden" id="gloss-filter-bar">
+      <svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><path d="M4 4h16l-6 8v6l-4 2v-8z"/></svg>
+      <span id="gloss-filter-label"></span>
+      <button class="tb" id="gloss-filter-back" title="Tüm paragraflara geri dön">← Tüm paragraflar</button>
     </div>
     <div class="drawer hidden" id="drawer-glossary">
       <div class="drawer-head">
@@ -1094,13 +1108,29 @@ function closeGlossPopover(){ const p=$('gloss-popover'); if(p) p.remove(); }
 document.addEventListener('click',e=>{
   if(!e.target.closest('.gloss-hit,.gloss-flag,#gloss-popover')) closeGlossPopover();
 });
-function openSearchForTerm(term){
-  closeGlossPopover();
-  const bar=$('search-bar');
-  if(bar.classList.contains('hidden')){ bar.classList.remove('hidden'); $('btn-search').classList.add('active'); }
-  $('search-input').value=term;
-  runSearch();
+// ---- filter workspace down to just the paragraphs containing a term ----
+let GLOSS_FILTER=null; // {term, indices:[...]}
+function glossaryFilterIndices(term){
+  const idxs=[];
+  P.segments.forEach((s,i)=>{ if(findSpans(s||'',term).length) idxs.push(i); });
+  return idxs;
 }
+function applyGlossaryFilter(term){
+  closeGlossPopover();
+  const indices=glossaryFilterIndices(term);
+  GLOSS_FILTER={term,indices};
+  const bar=$('gloss-filter-bar');
+  bar.classList.remove('hidden');
+  $('gloss-filter-label').textContent=`"${term}" — ${indices.length} paragraf`;
+  renderWindow();renderRail();
+  window.scrollTo({top:0,behavior:'smooth'});
+}
+function clearGlossaryFilter(){
+  GLOSS_FILTER=null;
+  $('gloss-filter-bar').classList.add('hidden');
+  renderWindow();renderRail();
+}
+$('gloss-filter-back').onclick=clearGlossaryFilter;
 window.showGlossPopup=(ev,idxOrIdxs,segIndex)=>{
   ev.stopPropagation();
   closeGlossPopover();
@@ -1118,7 +1148,7 @@ window.showGlossPopup=(ev,idxOrIdxs,segIndex)=>{
     return `<div class="gloss-pop-row">
       <div class="gloss-pop-pair"><span class="k">${esc(t.src)}</span><span class="eq">=</span><span>${esc(t.tgt)}</span></div>
       <div class="gloss-pop-stat">${stat} (kaynak metinde)</div>
-      <button class="ghost-link" style="margin-left:0;" onclick="openSearchForTerm('${safeSrc}')">Bul</button>
+      <button class="ghost-link" style="margin-left:0;" onclick="applyGlossaryFilter('${safeSrc}')">Filtrele</button>
     </div>`;
   }).join('');
   document.body.appendChild(pop);
@@ -1196,12 +1226,18 @@ function renderChips(){
   arr.forEach((t,idx)=>{
     const row=document.createElement('div');
     row.className='glist-row'+(EDIT_IDX===idx?' active':'');
+    // paragraph count, not raw occurrence count - matches what clicking
+    // this actually filters down to, so the number on the badge and the
+    // number in the filtered view always agree.
+    const count=glossaryFilterIndices(t.src).length;
     row.innerHTML=
       `<span class="glist-src">${esc(t.src)}</span>`+
       `<span class="glist-tgt${t.tgt?'':' empty'}">${t.tgt?esc(t.tgt):'—'}</span>`+
+      `<button class="glist-filter" title="Bu terimin geçtiği paragrafları listele">${ICON.tag} ${count}</button>`+
       `<button class="glist-x" title="remove">×</button>`;
     row.querySelector('.glist-src').onclick=()=>loadChipForEdit(idx);
     row.querySelector('.glist-tgt').onclick=()=>loadChipForEdit(idx);
+    row.querySelector('.glist-filter').onclick=(e)=>{ e.stopPropagation(); applyGlossaryFilter(t.src); };
     row.querySelector('.glist-x').onclick=(e)=>{
       e.stopPropagation();
       const a=parseTerms(P.terms); a.splice(idx,1);
@@ -1351,14 +1387,16 @@ function padWidth(){ return String(P.segments.length).length; }
 function renderRail(){
   const r=$('rail-items');r.innerHTML='';
   const w=padWidth();
+  const inFilter=i=>GLOSS_FILTER&&GLOSS_FILTER.indices.includes(i);
   P.segments.forEach((_,i)=>{
     const it=document.createElement('div');
     const isMergeSel=MERGE_SEL.includes(i);
-    it.className='rail-item'+((i>=winStart&&i<winStart+WIN)?' active':'')+(isMergeSel?' merge-sel':'');
+    const isActive=GLOSS_FILTER?inFilter(i):(i>=winStart&&i<winStart+WIN);
+    it.className='rail-item'+(isActive?' active':'')+(isMergeSel?' merge-sel':'');
     it.innerHTML=`<span class="dot ${statusOf(i)}"></span>${String(i+1).padStart(w,'0')}`;
     it.onclick=()=>{
       if(MERGE_MODE){ mergeSelClick(i); }
-      else{ goToWindow(i); if(window.innerWidth<=760) closeRailMobile(); }
+      else{ if(GLOSS_FILTER) clearGlossaryFilter(); goToWindow(i); if(window.innerWidth<=760) closeRailMobile(); }
     };
     r.appendChild(it);
   });
@@ -1653,10 +1691,21 @@ function renderWindow(){
   if(!c){ console.error('PALIMPSEST: #segments not found'); return; }
   c.innerHTML='';
   if(!P||!P.segments||!P.segments.length){ return; }
-  const end=Math.min(winStart+WIN,P.segments.length);
-  if(winStart>=P.segments.length){ winStart=0; return renderWindow(); }
+  const filtered=!!GLOSS_FILTER;
+  let indices;
+  if(filtered){
+    indices=GLOSS_FILTER.indices;
+  }else{
+    const end=Math.min(winStart+WIN,P.segments.length);
+    if(winStart>=P.segments.length){ winStart=0; return renderWindow(); }
+    indices=[];
+    for(let k=winStart;k<end;k++) indices.push(k);
+  }
+  if(filtered&&!indices.length){
+    c.innerHTML='<div class="glist-empty" style="padding:24px 4px;">Bu terim kaynak metinde bulunamadı.</div>';
+  }
   try{
-  for(let i=winStart;i<end;i++){
+  for(const i of indices){
     const div=document.createElement('div');
     div.className='seg'+(P.approved[i]?' done':'');div.id='seg-'+i;
     let right;
@@ -1695,16 +1744,24 @@ function renderWindow(){
     onModelChange(i);
   }
   }catch(err){ console.error('renderWindow:',err); return; }
-  const last=Math.min(winStart+WIN,P.segments.length);
-  const lbl=`¶ ${winStart+1}–${last} of ${P.segments.length}`;
-  $('win-label').textContent=lbl;
-  if($('win-label2'))$('win-label2').textContent=lbl;
-  const atStart=winStart<=0, atEnd=winStart+WIN>=P.segments.length;
-  $('prev-win').disabled=atStart;$('next-win').disabled=atEnd;
-  if($('prev-win2')){$('prev-win2').disabled=atStart;$('next-win2').disabled=atEnd;}
+  if(filtered){
+    const lbl=`Filtrelendi: ${indices.length} paragraf`;
+    $('win-label').textContent=lbl;
+    if($('win-label2'))$('win-label2').textContent=lbl;
+    $('prev-win').disabled=true;$('next-win').disabled=true;
+    if($('prev-win2')){$('prev-win2').disabled=true;$('next-win2').disabled=true;}
+  }else{
+    const last=Math.min(winStart+WIN,P.segments.length);
+    const lbl=`¶ ${winStart+1}–${last} of ${P.segments.length}`;
+    $('win-label').textContent=lbl;
+    if($('win-label2'))$('win-label2').textContent=lbl;
+    const atStart=winStart<=0, atEnd=winStart+WIN>=P.segments.length;
+    $('prev-win').disabled=atStart;$('next-win').disabled=atEnd;
+    if($('prev-win2')){$('prev-win2').disabled=atStart;$('next-win2').disabled=atEnd;}
+  }
   renderResumeButtons();
   // auto-size all visible translation boxes to fit their content
-  for(let i=winStart;i<last;i++){ autoGrow($('edit-'+i)); }
+  indices.forEach(i=>autoGrow($('edit-'+i)));
 }
 
 function pageEarlier(){winStart=Math.max(0,winStart-WIN);renderWindow();renderRail();window.scrollTo({top:0,behavior:'smooth'});}
