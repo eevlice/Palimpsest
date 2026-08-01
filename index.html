@@ -173,20 +173,17 @@
     border-color:var(--thread);color:var(--paper);}
   .seg-btn:disabled{opacity:.4;cursor:wait;}
   .seg-cost{font-family:'Spline Sans Mono',monospace;font-size:11px;color:var(--ink-soft);}
-  .merge-join{grid-column:1 / -1;display:flex;justify-content:center;margin-top:6px;}
+  /* column 2 only, not the full row - centers under the untranslated box
+     it actually acts on, not under the src/tgt pair as a whole */
+  .merge-join{grid-column:2;display:flex;justify-content:center;margin-top:6px;}
   .merge-btn{display:inline-flex;align-items:center;gap:6px;font-family:'Spline Sans Mono',monospace;
     font-size:10px;letter-spacing:.06em;text-transform:uppercase;border:1px dashed var(--rule);
     background:none;color:var(--ink-soft);padding:4px 12px;cursor:pointer;}
   .merge-btn:hover{border-color:var(--thread);color:var(--thread);border-style:solid;}
   .merge-btn.undo{border-color:var(--pencil-soft);color:var(--pencil);}
-  /* icon-only now - square it off, and a small pointer hanging off the
-     bottom edge stands in for "with next": it aims at the paragraph below. */
-  .merge-btn:not(.undo){position:relative;padding:6px 10px;}
-  .merge-btn:not(.undo)::after{content:'';position:absolute;left:50%;bottom:-6px;
-    transform:translateX(-50%);width:0;height:0;
-    border-left:5px solid transparent;border-right:5px solid transparent;
-    border-top:5px solid currentColor;opacity:.5;}
-  .merge-btn:not(.undo):hover::after{opacity:1;}
+  /* icon-only, squared off - centered under the untranslated box itself now
+     says "with next" via position, no arrow needed. */
+  .merge-btn:not(.undo){padding:6px 10px;}
   .rail-item.merge-sel{background:rgba(178,58,46,.12);border-left-color:var(--pencil);color:var(--pencil);}
   .merge-confirm{display:flex;align-items:center;gap:10px;padding:10px 14px;
     background:rgba(178,58,46,.07);border:1px solid var(--pencil-soft);margin-bottom:12px;
@@ -278,6 +275,7 @@
     #chip-cancel{grid-column:1;justify-self:start;}
     #chip-add-btn{grid-column:3;justify-self:end;}
     .seg{grid-template-columns:1fr;}
+    .merge-join{grid-column:1;}
     .ws-layout{grid-template-columns:1fr;}
     /* toolbar: status group wraps to its own full-width line below the tools */
     .ws-status{flex:1 1 100%;order:1;justify-content:flex-end;}
