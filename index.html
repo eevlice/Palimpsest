@@ -180,7 +180,8 @@
   .dot.approved{background:var(--thread);}
   .wn-btn{font-family:'Spline Sans Mono',monospace;font-size:11px;letter-spacing:.08em;
     text-transform:uppercase;border:1px solid var(--rule);background:none;color:var(--ink-soft);
-    padding:6px 12px;cursor:pointer;}
+    padding:0 12px;height:30px;box-sizing:border-box;cursor:pointer;
+    display:inline-flex;align-items:center;justify-content:center;}
   .wn-btn:hover:not(:disabled){border-color:var(--ink);color:var(--ink);}
   .wn-btn:disabled{opacity:.35;cursor:default;}
   .wn-label{font-family:'Spline Sans Mono',monospace;font-size:11px;color:var(--ink-soft);}
@@ -1455,6 +1456,7 @@ function renderRail(){
     const isMergeSel=MERGE_SEL.includes(i);
     const isActive=GLOSS_FILTER?inFilter(i):(i>=winStart&&i<winStart+WIN);
     it.className='rail-item'+(isActive?' active':'')+(isMergeSel?' merge-sel':'');
+    it.dataset.index=i;
     it.innerHTML=`<span class="dot ${statusOf(i)}"></span>${String(i+1).padStart(w,'0')}`;
     it.onclick=()=>{
       if(MERGE_MODE){ mergeSelClick(i); }
@@ -1859,6 +1861,12 @@ function jumpToLastTranslated(){
   if(i<0) return;
   goToWindow(i);
   window.scrollTo({top:0,behavior:'smooth'});
+  // the rail is its own scroll region (thousands of paragraphs, only a
+  // sliver of which is visible) - jumping the main window doesn't carry
+  // the rail's scroll position along, so without this the dot marking
+  // where you actually landed can sit well outside view.
+  const railItem=document.querySelector(`.rail-item[data-index="${i}"]`);
+  if(railItem) railItem.scrollIntoView({block:'center',behavior:'smooth'});
 }
 $('jump-last').onclick=jumpToLastTranslated;
 $('jump-last2').onclick=jumpToLastTranslated;
