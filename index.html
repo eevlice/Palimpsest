@@ -100,6 +100,23 @@
   .search-bar .meta{white-space:nowrap;min-width:56px;}
   mark.search-mark{background:var(--thread-light,#ffe9a8);color:inherit;padding:0 1px;}
   .seg.search-hit{animation:searchFlash 1.2s ease;}
+  /* glossary terms in source text: a dotted underline, not a filled highlight -
+     deliberately quieter than search's mark so the two don't read as the same
+     thing. Translation boxes are free-edit textareas, so we can't mark a word
+     inside them the same way - instead a small tag icon on the row says "a
+     glossary term's source form is somewhere in this paragraph", and opens
+     the same popover. */
+  mark.gloss-hit{background:none;border-bottom:1.5px dotted var(--thread);color:inherit;
+    cursor:pointer;padding:0;}
+  mark.gloss-hit:hover{background:rgba(63,97,81,.12);}
+  .gloss-flag{color:var(--thread);border-color:var(--thread);}
+  .gloss-popover{position:fixed;z-index:50;background:var(--paper);border:1px solid var(--rule);
+    box-shadow:0 6px 18px -8px rgba(0,0,0,.35);padding:10px 12px;max-width:280px;font-size:13px;}
+  .gloss-pop-row+.gloss-pop-row{margin-top:10px;padding-top:10px;border-top:1px solid var(--rule);}
+  .gloss-pop-pair{font-family:'Spline Sans Mono',monospace;font-size:12px;}
+  .gloss-pop-pair .k{color:var(--ink-soft);}
+  .gloss-pop-pair .eq{color:var(--rule);margin:0 4px;}
+  .gloss-pop-stat{color:var(--ink-soft);font-size:11px;margin:4px 0 6px;}
   @keyframes searchFlash{0%{box-shadow:0 0 0 2px var(--thread);}100%{box-shadow:0 0 0 0 transparent;}}
   @keyframes slideDown{from{opacity:0;transform:translateY(-6px);}to{opacity:1;transform:none;}}
   .drawer-head{display:flex;align-items:center;gap:14px;margin-bottom:12px;}
@@ -572,7 +589,8 @@ const ICON={
   x:'<svg viewBox="0 0 24 24" width="13" height="13" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg>',
   search:'<svg viewBox="0 0 24 24" width="15" height="15" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><circle cx="11" cy="11" r="8"/><line x1="21" y1="21" x2="16.65" y2="16.65"/></svg>',
   more:'<svg viewBox="0 0 24 24" width="15" height="15" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 1 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-4 0v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 1 1-2.83-2.83l.06-.06a1.65 1.65 0 0 0 .33-1.82 1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1 0-4h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 1 1 2.83-2.83l.06.06a1.65 1.65 0 0 0 1.82.33H9a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 4 0v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 1 1 2.83 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82V9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1z"/></svg>',
-  plus:'<svg viewBox="0 0 24 24" width="15" height="15" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><line x1="12" y1="5" x2="12" y2="19"/><line x1="5" y1="12" x2="19" y2="12"/></svg>'
+  plus:'<svg viewBox="0 0 24 24" width="15" height="15" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><line x1="12" y1="5" x2="12" y2="19"/><line x1="5" y1="12" x2="19" y2="12"/></svg>',
+  tag:'<svg viewBox="0 0 24 24" width="13" height="13" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><path d="M12.59 2.59a2 2 0 0 0-1.42-.59H4a2 2 0 0 0-2 2v7.17a2 2 0 0 0 .59 1.42l8.7 8.7a2.43 2.43 0 0 0 3.42 0l6.3-6.3a2.43 2.43 0 0 0 0-3.42z"/><circle cx="7.5" cy="7.5" r="1.4" fill="currentColor" stroke="none"/></svg>'
 };
 
 // ================================================================
@@ -955,13 +973,98 @@ $('btn-rail-mobile').onclick=()=>{
 // ================================================================
 // ---- glossary chips ----
 function parseTerms(str){
-  // returns array of {src,tgt} from "src = tgt" lines
+  // returns array of {src,tgt} from "src = tgt" lines. The model's raw output
+  // sometimes wraps a term in markdown backticks; strip those or every
+  // downstream match (glossary highlighting included) silently finds nothing.
+  const stripTicks=s=>s.replace(/^`+|`+$/g,'');
   return (str||'').split('\n').map(l=>l.trim()).filter(Boolean).map(l=>{
     const i=l.indexOf('=');
-    if(i<0) return {src:l,tgt:''};
-    return {src:l.slice(0,i).trim(), tgt:l.slice(i+1).trim()};
+    if(i<0) return {src:stripTicks(l),tgt:''};
+    return {src:stripTicks(l.slice(0,i).trim()), tgt:stripTicks(l.slice(i+1).trim())};
   });
 }
+// ---- glossary term spotting (source-side only - see the search feature's
+// design note: matching Turkish inflected forms reliably needs real
+// morphology, not worth it here. The source language match is exact and
+// cheap, and doubles as the signal for "this paragraph uses a glossary
+// term" on the translation side too. ----
+function glossHitsForText(text){
+  const arr=parseTerms(P.terms);
+  const hits=[];
+  arr.forEach((t,idx)=>{
+    if(!t.src) return;
+    if(text.toLocaleLowerCase('tr').includes(t.src.toLocaleLowerCase('tr'))) hits.push({idx,src:t.src,tgt:t.tgt});
+  });
+  return hits;
+}
+function findSpans(text,needle){
+  const spans=[]; if(!needle) return spans;
+  const hay=text.toLocaleLowerCase('tr'), n=needle.toLocaleLowerCase('tr');
+  let i=0;
+  while(true){ const at=hay.indexOf(n,i); if(at<0) break; spans.push({start:at,end:at+n.length}); i=at+n.length; }
+  return spans;
+}
+function glossaryHighlight(text,hits,segIndex){
+  if(!hits.length) return esc(text);
+  let spans=[];
+  hits.forEach(h=>{ findSpans(text,h.src).forEach(s=>spans.push({...s,idx:h.idx})); });
+  spans.sort((a,b)=>a.start-b.start);
+  let out='',pos=0;
+  spans.forEach(s=>{
+    if(s.start<pos) return;
+    out+=esc(text.slice(pos,s.start));
+    out+=`<mark class="gloss-hit" onclick="showGlossPopup(event,${s.idx},${segIndex})">${esc(text.slice(s.start,s.end))}</mark>`;
+    pos=s.end;
+  });
+  out+=esc(text.slice(pos));
+  return out;
+}
+function glossFlagBtn(i){
+  const hits=glossHitsForText(P.segments[i]);
+  if(!hits.length) return '';
+  return `<button class="seg-btn icon gloss-flag" onclick="showGlossPopup(event,[${hits.map(h=>h.idx).join(',')}],${i})" title="Bu paragrafta ${hits.length} sözlük terimi var">${ICON.tag}</button>`;
+}
+function termTotal(src){
+  let total=0;
+  P.segments.forEach(s=>{ total+=findSpans(s||'',src).length; });
+  return total;
+}
+function closeGlossPopover(){ const p=$('gloss-popover'); if(p) p.remove(); }
+document.addEventListener('click',e=>{
+  if(!e.target.closest('.gloss-hit,.gloss-flag,#gloss-popover')) closeGlossPopover();
+});
+function openSearchForTerm(term){
+  closeGlossPopover();
+  const bar=$('search-bar');
+  if(bar.classList.contains('hidden')){ bar.classList.remove('hidden'); $('btn-search').classList.add('active'); }
+  $('search-input').value=term;
+  runSearch();
+}
+window.showGlossPopup=(ev,idxOrIdxs,segIndex)=>{
+  ev.stopPropagation();
+  closeGlossPopover();
+  const arr=parseTerms(P.terms);
+  const idxs=Array.isArray(idxOrIdxs)?idxOrIdxs:[idxOrIdxs];
+  const list=idxs.map(i=>arr[i]).filter(Boolean);
+  if(!list.length) return;
+  const pop=document.createElement('div');
+  pop.id='gloss-popover';pop.className='gloss-popover';
+  pop.innerHTML=list.map(t=>{
+    const total=termTotal(t.src);
+    const here=segIndex!=null?findSpans(P.segments[segIndex]||'',t.src).length:null;
+    const stat=here!=null?`bu paragrafta ${here} kez, toplamda ${total} kez`:`toplamda ${total} kez`;
+    const safeSrc=t.src.replace(/\\/g,'\\\\').replace(/'/g,"\\'");
+    return `<div class="gloss-pop-row">
+      <div class="gloss-pop-pair"><span class="k">${esc(t.src)}</span><span class="eq">=</span><span>${esc(t.tgt)}</span></div>
+      <div class="gloss-pop-stat">${stat} (kaynak metinde)</div>
+      <button class="ghost-link" style="margin-left:0;" onclick="openSearchForTerm('${safeSrc}')">Bul</button>
+    </div>`;
+  }).join('');
+  document.body.appendChild(pop);
+  const x=Math.min(ev.clientX,window.innerWidth-296);
+  const y=Math.min(ev.clientY+12,window.innerHeight-120);
+  pop.style.left=x+'px';pop.style.top=y+'px';
+};
 function termsToString(arr){
   return arr.map(t=>t.tgt?`${t.src} = ${t.tgt}`:`${t.src} = `).join('\n');
 }
@@ -1229,6 +1332,7 @@ function segActionsHTML(i,costTag){
   const open=SEG_EXTRA_OPEN[i]?' open':'';
   return `<div class="seg-actions">
       <button class="seg-btn icon approve${P.approved[i]?' on':''}" onclick="approveSeg(${i})" title="${P.approved[i]?'Onaylandı':'Bu paragrafı onayla'}">${ICON.check}</button>
+      ${glossFlagBtn(i)}
       <button class="seg-btn icon seg-toggle${open?' active':''}" id="toggle-${i}" onclick="toggleSegExtra(${i})" title="Model, efor ve maliyet">${ICON.more}</button>
       <div class="seg-extra${open}" id="extra-${i}">
         ${modelSelector(i)}${effortSelector(i)}
@@ -1448,6 +1552,7 @@ function renderWindow(){
       right=`<div class="placeholder"></div>
         <div class="seg-actions">
           <button class="seg-btn primary icon" onclick="runSeg(${i})" title="Makine ile çevir">${ICON.translate}</button>
+          ${glossFlagBtn(i)}
           ${modelSelector(i)}${effortSelector(i)}
           <button class="seg-btn icon" onclick="writeSeg(${i})" title="Kendi çevirimі yaz">${ICON.pencil}</button>
         </div>`;
@@ -1464,8 +1569,9 @@ function renderWindow(){
       }
       mergeCtl=`<div class="merge-join">${inner}</div>`;
     }
+    const srcHtml=SEARCH.query?highlightText(P.segments[i],SEARCH.query):glossaryHighlight(P.segments[i],glossHitsForText(P.segments[i]),i);
     div.innerHTML=`<div class="seg-num">¶ ${String(i+1).padStart(padWidth(),'0')}</div>
-      <div class="src">${SEARCH.query?highlightText(P.segments[i],SEARCH.query):esc(P.segments[i])}</div><div class="tgt-area">${right}</div>${mergeCtl}`;
+      <div class="src">${srcHtml}</div><div class="tgt-area">${right}</div>${mergeCtl}`;
     c.appendChild(div);
     if(P.finals[i]!==null){
       const ed=$('edit-'+i);ed.oninput=()=>{P.finals[i]=ed.value;autoGrow(ed);queueSave();};
@@ -1547,6 +1653,7 @@ window.writeSeg=(i)=>{
   area.innerHTML=`<textarea class="tgt-edit" id="edit-${i}" placeholder="Çevirinizi yazın…"></textarea>
     <div class="seg-actions">
       <button class="seg-btn icon approve" onclick="approveSeg(${i})" title="Bu paragrafı onayla">${ICON.check}</button>
+      ${glossFlagBtn(i)}
       ${modelSelector(i)}${effortSelector(i)}
       <button class="seg-btn icon" onclick="runSeg(${i})" title="Bunun yerine makine ile çevir">${ICON.translate}</button>
     </div>`;
