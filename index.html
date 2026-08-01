@@ -91,6 +91,15 @@
   .tb.icon-only svg{display:block;}
   .drawer{background:rgba(255,255,255,.45);border:1px solid var(--rule);
     padding:16px 18px;margin-bottom:14px;animation:slideDown .2s ease;}
+  .search-bar{display:flex;align-items:center;gap:8px;background:rgba(255,255,255,.45);
+    border:1px solid var(--rule);padding:8px 10px;margin-bottom:14px;color:var(--ink-soft);
+    animation:slideDown .2s ease;}
+  .search-bar input{border:none;background:none;padding:2px 0;flex:1;font-size:14px;}
+  .search-bar input:focus{outline:none;box-shadow:none;}
+  .search-bar .meta{white-space:nowrap;min-width:56px;}
+  mark.search-mark{background:var(--thread-light,#ffe9a8);color:inherit;padding:0 1px;}
+  .seg.search-hit{animation:searchFlash 1.2s ease;}
+  @keyframes searchFlash{0%{box-shadow:0 0 0 2px var(--thread);}100%{box-shadow:0 0 0 0 transparent;}}
   @keyframes slideDown{from{opacity:0;transform:translateY(-6px);}to{opacity:1;transform:none;}}
   .drawer-head{display:flex;align-items:center;gap:14px;margin-bottom:12px;}
   /* a hairline frame just enough to read as a button, not a filled pill
@@ -173,6 +182,7 @@
   .merge-confirm .mc-cancel{background:none;color:var(--ink-soft);border-color:var(--rule);}
   .merge-confirm .mc-cancel:hover{border-color:var(--ink);color:var(--ink);}
   #btn-merge-mode.active{border-color:var(--pencil);color:var(--pencil);}
+  #btn-search.active{border-color:var(--ink);color:var(--ink);}
   .merge-btn.undo:hover{border-color:var(--pencil);color:var(--pencil);background:rgba(178,58,46,.05);}
   .merge-join{gap:8px;}
   .undo-merge{font-family:'Spline Sans Mono',monospace;font-size:11px;letter-spacing:.06em;
@@ -402,6 +412,7 @@
         <button class="tb icon-only" id="btn-rules" title="Kurallar"><svg viewBox="0 0 24 24" width="15" height="15" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><path d="m3 17 2 2 4-4"/><path d="m3 7 2 2 4-4"/><path d="M13 6h8"/><path d="M13 12h8"/><path d="M13 18h8"/></svg></button>
         <button class="tb icon-only" id="btn-brief" title="Özet &amp; stil"><svg viewBox="0 0 24 24" width="15" height="15" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><path d="M15 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V7Z"/><path d="M14 2v4a2 2 0 0 0 2 2h4"/><path d="M10 9H8"/><path d="M16 13H8"/><path d="M16 17H8"/></svg></button>
         <button class="tb icon-only" id="btn-merge-mode" title="Paragrafları birleştir"><svg viewBox="0 0 24 24" width="15" height="15" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><path d="M9 17H7A5 5 0 0 1 7 7h2"/><path d="M15 7h2a5 5 0 1 1 0 10h-2"/><line x1="8" y1="12" x2="16" y2="12"/></svg></button>
+        <button class="tb icon-only" id="btn-search" title="Ara (kaynak &amp; çeviri)"><svg viewBox="0 0 24 24" width="15" height="15" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><circle cx="11" cy="11" r="8"/><line x1="21" y1="21" x2="16.65" y2="16.65"/></svg></button>
         <button class="tb icon-only" id="export" title="Çeviriyi dışa aktar"><svg viewBox="0 0 24 24" width="15" height="15" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 15V3"/><path d="m7 10 5 5 5-5"/><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/></svg></button>
       </div>
       <div class="ws-status">
@@ -410,6 +421,14 @@
         <span class="save-pill" id="save-pill"></span>
         <span class="meta" id="export-meta"></span>
       </div>
+    </div>
+    <div class="search-bar hidden" id="search-bar">
+      <svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><circle cx="11" cy="11" r="8"/><line x1="21" y1="21" x2="16.65" y2="16.65"/></svg>
+      <input id="search-input" placeholder="Kaynak veya çeviride ara…" autocomplete="off">
+      <span class="meta" id="search-count"></span>
+      <button class="tb icon-only" id="search-prev" title="Önceki (Shift+Enter)">‹</button>
+      <button class="tb icon-only" id="search-next" title="Sonraki (Enter)">›</button>
+      <button class="tb icon-only" id="search-close" title="Kapat (Esc)"><svg viewBox="0 0 24 24" width="13" height="13" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg></button>
     </div>
     <div class="drawer hidden" id="drawer-glossary">
       <div class="drawer-head">
@@ -538,6 +557,7 @@ const ICON={
   bolt:'<svg viewBox="0 0 24 24" width="11" height="11" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round"><path d="M13 2 3 14h9l-1 8 10-12h-9l1-8Z"/></svg>',
   bookmark:'<svg viewBox="0 0 24 24" width="13" height="13" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><path d="m19 21-7-4-7 4V5a2 2 0 0 1 2-2h10a2 2 0 0 1 2 2v16z"/></svg>',
   x:'<svg viewBox="0 0 24 24" width="13" height="13" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg>',
+  search:'<svg viewBox="0 0 24 24" width="15" height="15" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><circle cx="11" cy="11" r="8"/><line x1="21" y1="21" x2="16.65" y2="16.65"/></svg>',
   plus:'<svg viewBox="0 0 24 24" width="15" height="15" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><line x1="12" y1="5" x2="12" y2="19"/><line x1="5" y1="12" x2="19" y2="12"/></svg>'
 };
 
@@ -840,6 +860,68 @@ $('btn-glossary').onclick=()=>toggleDrawer('drawer-glossary','btn-glossary');
 $('btn-rules').onclick=()=>toggleDrawer('drawer-rules','btn-rules');
 $('btn-brief').onclick=()=>toggleDrawer('drawer-brief','btn-brief');
 $('btn-merge-mode').onclick=toggleMergeMode;
+
+// ---- search (source & translation text) ----
+let SEARCH={query:'',matches:[],idx:-1};
+function toggleSearch(){
+  const bar=$('search-bar');
+  const opening=bar.classList.contains('hidden');
+  bar.classList.toggle('hidden');
+  $('btn-search').classList.toggle('active',opening);
+  if(opening){ $('search-input').focus(); $('search-input').select(); }
+  else clearSearch();
+}
+function clearSearch(){
+  SEARCH={query:'',matches:[],idx:-1};
+  $('search-input').value='';
+  $('search-count').textContent='';
+  renderWindow();
+}
+function runSearch(){
+  const q=$('search-input').value.trim();
+  SEARCH.query=q;
+  if(!q){ SEARCH.matches=[];SEARCH.idx=-1;$('search-count').textContent='';renderWindow();return; }
+  const ql=q.toLocaleLowerCase('tr');
+  SEARCH.matches=[];
+  P.segments.forEach((s,i)=>{
+    const srcHit=(s||'').toLocaleLowerCase('tr').includes(ql);
+    const tgtHit=(P.finals[i]||'').toLocaleLowerCase('tr').includes(ql);
+    if(srcHit||tgtHit) SEARCH.matches.push(i);
+  });
+  if(!SEARCH.matches.length){ SEARCH.idx=-1; $('search-count').textContent='Sonuç yok'; renderWindow(); return; }
+  SEARCH.idx=0;
+  jumpToMatch();
+}
+function jumpToMatch(){
+  if(SEARCH.idx<0||!SEARCH.matches.length) return;
+  $('search-count').textContent=(SEARCH.idx+1)+' / '+SEARCH.matches.length;
+  goToWindow(SEARCH.matches[SEARCH.idx]);
+  setTimeout(()=>{
+    const el=$('seg-'+SEARCH.matches[SEARCH.idx]);
+    if(!el) return;
+    el.scrollIntoView({behavior:'smooth',block:'center'});
+    el.classList.add('search-hit');
+    setTimeout(()=>el.classList.remove('search-hit'),1200);
+  },30);
+}
+function searchNext(){ if(!SEARCH.matches.length)return; SEARCH.idx=(SEARCH.idx+1)%SEARCH.matches.length; jumpToMatch(); }
+function searchPrev(){ if(!SEARCH.matches.length)return; SEARCH.idx=(SEARCH.idx-1+SEARCH.matches.length)%SEARCH.matches.length; jumpToMatch(); }
+function highlightText(text,query){
+  const escaped=esc(text);
+  if(!query) return escaped;
+  const qEsc=query.replace(/[.*+?^${}()|[\]\\]/g,'\\$&');
+  try{ return escaped.replace(new RegExp('('+qEsc+')','gi'),'<mark class="search-mark">$1</mark>'); }
+  catch(e){ return escaped; }
+}
+$('btn-search').onclick=toggleSearch;
+$('search-close').onclick=toggleSearch;
+$('search-next').onclick=searchNext;
+$('search-prev').onclick=searchPrev;
+$('search-input').addEventListener('input',runSearch);
+$('search-input').addEventListener('keydown',e=>{
+  if(e.key==='Enter'){ e.preventDefault(); e.shiftKey?searchPrev():searchNext(); }
+  else if(e.key==='Escape'){ toggleSearch(); }
+});
 
 // ---- mobile rail toggle ----
 function closeRailMobile(){
@@ -1340,7 +1422,7 @@ function renderWindow(){
       mergeCtl=`<div class="merge-join">${inner}</div>`;
     }
     div.innerHTML=`<div class="seg-num">¶ ${String(i+1).padStart(padWidth(),'0')}</div>
-      <div class="src">${esc(P.segments[i])}</div><div class="tgt-area">${right}</div>${mergeCtl}`;
+      <div class="src">${SEARCH.query?highlightText(P.segments[i],SEARCH.query):esc(P.segments[i])}</div><div class="tgt-area">${right}</div>${mergeCtl}`;
     c.appendChild(div);
     if(P.finals[i]!==null){
       const ed=$('edit-'+i);ed.oninput=()=>{P.finals[i]=ed.value;autoGrow(ed);queueSave();};
