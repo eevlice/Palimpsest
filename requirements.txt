@@ -1,0 +1,6 @@
+flask
+anthropic
+openai
+google-genai
+python-docx
+cryptography

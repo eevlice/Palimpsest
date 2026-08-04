@@ -15,7 +15,7 @@ if exist .git (
 python -c "import flask, anthropic, openai, google.genai, docx, cryptography" 2>NUL
 if errorlevel 1 (
   echo First run: installing the required libraries...
-  pip install flask anthropic openai google-genai python-docx cryptography
+  pip install -r requirements.txt
 )
 python server.py
 pause

@@ -6,7 +6,7 @@ Runs entirely on your own machine. Your book text and your API keys never
 leave your computer except for the calls to the translation API itself.
 
 Setup:
-    pip install flask anthropic openai google-genai python-docx cryptography
+    pip install -r requirements.txt
     Add your API key(s) from the app's Settings screen (or, for Anthropic
     only, put a key in key.txt in this folder for backward compatibility).
 
