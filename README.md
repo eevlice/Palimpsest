@@ -79,9 +79,13 @@ yanındaki ikinci açılır menüden **Düşük/Orta/Yüksek** efor seçebilirsi
 
 ## Çalışmanız nerede tutulur
 
-Her kitap, bu README'nin yanındaki **`projects/`** klasöründe bir JSON
-dosyasıdır. Çalışmanızı yedeklemek veya taşımak için o klasörü kopyalayın.
-Bir projeyi başkasına vermek için tek JSON dosyasını gönderin.
+Her kitap, **`~/.palimpsest/projects/`** klasöründe bir JSON dosyasıdır —
+API anahtarlarınızın ve tercihlerinizin durduğu yerin hemen yanında, uygulama
+klasörünün dışında. Çalışmanızı yedeklemek veya taşımak için o klasörü
+kopyalayın. Bir projeyi başkasına vermek için tek JSON dosyasını gönderin.
+
+(Eski bir kurulumdan güncelliyorsanız: kitaplarınız uygulama klasörünün
+içindeki `projects/`'ta ise, ilk açılışta otomatik olarak buraya taşınır.)
 
 ---
 

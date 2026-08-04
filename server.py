@@ -19,6 +19,7 @@ import os
 import re
 import json
 import glob
+import shutil
 import datetime
 from flask import Flask, request, jsonify, send_from_directory
 
@@ -30,8 +31,24 @@ import prefs
 app = Flask(__name__, static_folder=".")
 
 HERE = os.path.dirname(os.path.abspath(__file__))
-PROJECTS_DIR = os.path.join(HERE, "projects")
+
+# Books live in ~/.palimpsest/, next to keys.enc.json/prefs.json/spending.jsonl -
+# not inside the app's own folder. An install that gets updated by replacing
+# its own directory (git pull is fine, but Homebrew's Cellar swap or a fresh
+# ZIP extracted over a deleted old one are not) would otherwise take your
+# books with it.
+CONFIG_DIR = os.path.join(os.path.expanduser("~"), ".palimpsest")
+PROJECTS_DIR = os.path.join(CONFIG_DIR, "projects")
 os.makedirs(PROJECTS_DIR, exist_ok=True)
+
+# One-time migration for installs that started before this moved: pull any
+# books left in the old app-local projects/ folder over, but only if the new
+# location is still empty - never overwrite anything already migrated.
+_OLD_PROJECTS_DIR = os.path.join(HERE, "projects")
+if os.path.isdir(_OLD_PROJECTS_DIR) and not os.listdir(PROJECTS_DIR):
+    for _fname in os.listdir(_OLD_PROJECTS_DIR):
+        if _fname.endswith(".json"):
+            shutil.move(os.path.join(_OLD_PROJECTS_DIR, _fname), os.path.join(PROJECTS_DIR, _fname))
 
 DEFAULT_PROVIDER, DEFAULT_MODEL = "anthropic", "claude-sonnet-4-6"
 
