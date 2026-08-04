@@ -11,18 +11,29 @@ otomatik olarak kaydeder.
 
 ## İlk kurulum (yaklaşık beş dakika, bir kez)
 
-1. **Dosyaları indirin.** Bu sayfanın üstündeki yeşil **Code** butonuna,
-   ardından **Download ZIP**'e tıklayıp bilgisayarınızda bir klasöre çıkarın.
+1. **Dosyaları indirin.** Üç yoldan biri:
 
-   Git kullanıyorsanız `git clone` ile de indirebilirsiniz — bu durumda
-   başlatıcı (`start.command`/`start.bat`) her açılışta güncellemeleri
-   otomatik çeker, elle bir şey yapmanız gerekmez. Kitaplarınız ve API
-   anahtarınız bundan hiç etkilenmez (`projects/` ve `key.txt` git'in
-   takip ettiği dosyalar değil).
+   - Bu sayfanın üstündeki yeşil **Code** butonuna, ardından
+     **Download ZIP**'e tıklayıp bilgisayarınızda bir klasöre çıkarın.
+   - Git kullanıyorsanız `git clone` ile de indirebilirsiniz — bu durumda
+     başlatıcı (`start.command`/`start.bat`) her açılışta güncellemeleri
+     otomatik çeker, elle bir şey yapmanız gerekmez.
+   - **Mac'te Homebrew kullanıyorsanız:**
+     ```
+     brew tap eevlice/palimpsest
+     brew install palimpsest
+     ```
+     Kurulumdan sonra `palimpsest` yazarak çalıştırın, ya da arka planda
+     ve girişte otomatik başlaması için `brew services start palimpsest`.
+     `brew upgrade palimpsest` ile güncellersiniz.
 
-2. Bilgisayarınızda yoksa **Python 3.10 veya üstünü** https://python.org
-   adresinden kurun. (Windows'ta kurulum sırasında "Add Python to PATH"
-   kutusunu işaretleyin.)
+   Hangi yolu seçerseniz seçin, kitaplarınız ve API anahtarınız hep aynı
+   yerde (`~/.palimpsest/`) durur ve bir güncellemeden etkilenmez.
+
+2. Homebrew ile kurmadıysanız, bilgisayarınızda yoksa **Python 3.10 veya
+   üstünü** https://python.org adresinden kurun. (Windows'ta kurulum
+   sırasında "Add Python to PATH" kutusunu işaretleyin. Homebrew kurulumu
+   Python'u zaten kendisi getirir, bu adımı atlayın.)
 
 3. **API anahtarınızı ekleyin.** Uygulamayı ilk açtığınızda sağ üstteki
    **API Anahtarları**'na girin ve kullanmak istediğiniz sağlayıcının (Claude,
@@ -36,15 +47,18 @@ otomatik olarak kaydeder.
    (Eski kurulumlardan kalan `key.txt` dosyası varsa, Anthropic için hâlâ
    çalışmaya devam eder — yeniden anahtar girmeniz gerekmez.)
 
-4. Hepsi bu kadar. Başlatıcı, ihtiyaç duyduğu kütüphaneleri ilk
-   çalıştırmada sizin için kurar.
+4. Hepsi bu kadar. ZIP/git kurulumunda başlatıcı, ihtiyaç duyduğu
+   kütüphaneleri ilk çalıştırmada sizin için kurar; Homebrew kurulumunda
+   bunlar zaten `brew install` sırasında kurulmuş olur.
 
 ---
 
 ## Kullanmak için (her seferinde)
 
-- **Mac:** **`start.command`** dosyasına çift tıklayın
+- **Mac (ZIP/git):** **`start.command`** dosyasına çift tıklayın
 - **Windows:** **`start.bat`** dosyasına çift tıklayın
+- **Mac (Homebrew):** terminalde `palimpsest` yazın, ya da arka planda
+  sürekli açık kalsın istiyorsanız `brew services start palimpsest`
 
 Tarayıcınız uygulamada otomatik açılır. İşiniz bitince tarayıcı sekmesini
 kapatın ve başlatıcının açtığı küçük terminal penceresini kapatın.
