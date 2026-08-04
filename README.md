@@ -13,7 +13,12 @@ otomatik olarak kaydeder.
 
 1. **Dosyaları indirin.** Bu sayfanın üstündeki yeşil **Code** butonuna,
    ardından **Download ZIP**'e tıklayıp bilgisayarınızda bir klasöre çıkarın.
-   (Git kullanıyorsanız `git clone` ile de indirebilirsiniz.)
+
+   Git kullanıyorsanız `git clone` ile de indirebilirsiniz — bu durumda
+   başlatıcı (`start.command`/`start.bat`) her açılışta güncellemeleri
+   otomatik çeker, elle bir şey yapmanız gerekmez. Kitaplarınız ve API
+   anahtarınız bundan hiç etkilenmez (`projects/` ve `key.txt` git'in
+   takip ettiği dosyalar değil).
 
 2. Bilgisayarınızda yoksa **Python 3.10 veya üstünü** https://python.org
    adresinden kurun. (Windows'ta kurulum sırasında "Add Python to PATH"
