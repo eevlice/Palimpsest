@@ -703,6 +703,14 @@ function loadCatalog(){
     }
   });
 }
+// A native <option> can't hold a styled bar, so the "visual" is just text -
+// filled vs. empty dots, 1-5, computed server-side (providers.py) from each
+// model's blended $/1M cost on a log scale across the WHOLE catalog. Log
+// scale because the cheapest and priciest models are ~100x apart; a linear
+// scale would flatten everything but Opus/Fable down to "empty".
+function costDots(level){
+  return '●'.repeat(level)+'○'.repeat(5-level);
+}
 function populateModelSelect(sel){
   sel.innerHTML='';
   MODEL_CATALOG.forEach(p=>{
@@ -711,7 +719,7 @@ function populateModelSelect(sel){
     p.models.forEach(m=>{
       const o=document.createElement('option');
       o.value=p.provider+'::'+m.id;
-      o.textContent=m.label;
+      o.textContent=`${m.label}  ${costDots(m.cost_level)}`;
       if(!p.has_key) o.disabled=true;
       grp.appendChild(o);
     });
@@ -1503,7 +1511,7 @@ function modelSelector(i){
       const val=p.provider+'::'+m.id;
       const selected=(val===def)?' selected':'';
       const disabled=p.has_key?'':' disabled';
-      opts+=`<option value="${val}"${selected}${disabled}>${esc(m.label)}</option>`;
+      opts+=`<option value="${val}"${selected}${disabled}>${esc(m.label)}  ${costDots(m.cost_level)}</option>`;
     });
     opts+='</optgroup>';
   });

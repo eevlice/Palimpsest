@@ -17,6 +17,8 @@ anything other than "off". Budgets are capped server-side (EFFORT_BUDGETS)
 so a client can't request an unbounded thinking spend.
 """
 
+import math
+
 import keys
 
 EFFORT_LEVELS = ("off", "low", "medium", "high")
@@ -33,9 +35,16 @@ PROVIDERS = {
             # cache_write is priced for the 1h TTL (2x base input) to match the
             # ttl:"1h" set in _call_anthropic below - it was 1.25x (5min TTL)
             # and quietly under-reported real spend once the TTL changed.
-            "claude-opus-4-8": {"label": "Opus 4.8", "in": 5.0, "out": 25.0, "cache_write": 10.0, "cache_read": 0.50, "effort": True},
+            #
+            # thinking_style:"adaptive" matters beyond labeling - budget_tokens
+            # is flat-out removed (400) on Opus 5/4.8/4.7 and deprecated on
+            # Sonnet 4.6, so any model here without it falls through to the
+            # old budget_tokens branch in _call_anthropic and 400s the moment
+            # a paragraph is run with effort != "off".
+            "claude-opus-5": {"label": "Opus 5", "in": 5.0, "out": 25.0, "cache_write": 10.0, "cache_read": 0.50, "effort": True, "thinking_style": "adaptive"},
+            "claude-opus-4-8": {"label": "Opus 4.8", "in": 5.0, "out": 25.0, "cache_write": 10.0, "cache_read": 0.50, "effort": True, "thinking_style": "adaptive"},
             "claude-sonnet-5": {"label": "Sonnet 5", "in": 3.0, "out": 15.0, "cache_write": 6.0, "cache_read": 0.30, "effort": True, "thinking_style": "adaptive"},
-            "claude-sonnet-4-6": {"label": "Sonnet 4.6", "in": 3.0, "out": 15.0, "cache_write": 6.0, "cache_read": 0.30, "effort": True},
+            "claude-sonnet-4-6": {"label": "Sonnet 4.6", "in": 3.0, "out": 15.0, "cache_write": 6.0, "cache_read": 0.30, "effort": True, "thinking_style": "adaptive"},
             "claude-haiku-4-5-20251001": {"label": "Haiku 4.5", "in": 1.0, "out": 5.0, "cache_write": 2.0, "cache_read": 0.10, "effort": True},
         },
     },
@@ -61,8 +70,25 @@ PROVIDERS = {
 }
 
 
+def _cost_level_fn():
+    """Returns a fn mapping a model's blended $/1M cost to a 1-5 tier, spread
+    log-scale across every model in the catalog (not just its own provider) -
+    linear buckets are useless here since the cheapest and priciest models
+    are ~100x apart and a linear scale would flatten everything but Opus/Fable
+    down to tier 1. Recomputed from PROVIDERS directly so it never drifts out
+    of sync with a price edited above."""
+    avgs = [(m["in"] + m["out"]) / 2 for p in PROVIDERS.values() for m in p["models"].values()]
+    lo, hi = math.log(min(avgs)), math.log(max(avgs))
+    span = (hi - lo) or 1.0
+    def level(avg):
+        t = (math.log(avg) - lo) / span
+        return max(1, min(5, 1 + round(4 * t)))
+    return level
+
+
 def list_catalog():
-    """[{provider, label, models:[{id, label, effort}]}] - for the frontend model picker."""
+    """[{provider, label, models:[{id, label, effort, cost_level}]}] - for the frontend model picker."""
+    cost_level = _cost_level_fn()
     out = []
     for pid, p in PROVIDERS.items():
         out.append({
@@ -70,7 +96,8 @@ def list_catalog():
             "label": p["label"],
             "has_key": bool(keys.get_key(pid)),
             "models": [
-                {"id": mid, "label": m["label"], "effort": m["effort"]}
+                {"id": mid, "label": m["label"], "effort": m["effort"],
+                 "cost_level": cost_level((m["in"] + m["out"]) / 2)}
                 for mid, m in p["models"].items()
             ],
         })
