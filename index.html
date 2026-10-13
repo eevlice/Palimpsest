@@ -1014,15 +1014,21 @@ function clearSearch(){
   $('search-count').textContent='';
   renderWindow();
 }
+// Case folding for search and glossary matching. toLocaleLowerCase('tr') maps
+// "I" to dotless "ı", so "Internet" never matched "internet". Fold İ/I/ı to
+// "i" FIRST, then lowercase without a locale: "İ".toLowerCase() alone yields
+// two characters, which would shift the highlight indices that depend on
+// the folded text keeping the original length.
+function foldCase(s){ return (s||'').replace(/[İIı]/g,'i').toLowerCase(); }
 function runSearch(){
   const q=$('search-input').value.trim();
   SEARCH.query=q;
   if(!q){ SEARCH.matches=[];SEARCH.idx=-1;$('search-count').textContent='';renderWindow();return; }
-  const ql=q.toLocaleLowerCase('tr');
+  const ql=foldCase(q);
   SEARCH.matches=[];
   P.segments.forEach((s,i)=>{
-    const srcHit=(s||'').toLocaleLowerCase('tr').includes(ql);
-    const tgtHit=(P.finals[i]||'').toLocaleLowerCase('tr').includes(ql);
+    const srcHit=foldCase(s).includes(ql);
+    const tgtHit=foldCase(P.finals[i]).includes(ql);
     if(srcHit||tgtHit) SEARCH.matches.push(i);
   });
   if(!SEARCH.matches.length){ SEARCH.idx=-1; $('search-count').textContent='Sonuç yok'; renderWindow(); return; }
@@ -1109,7 +1115,7 @@ function glossHitsForText(text){
   const hits=[];
   arr.forEach((t,idx)=>{
     if(!t.src) return;
-    if(text.toLocaleLowerCase('tr').includes(t.src.toLocaleLowerCase('tr'))) hits.push({idx,src:t.src,tgt:t.tgt});
+    if(foldCase(text).includes(foldCase(t.src))) hits.push({idx,src:t.src,tgt:t.tgt});
   });
   return hits;
 }
@@ -1120,7 +1126,7 @@ function findSpans(text,needle){
   // boundary from a coincidence. Only counts as a hit if neither the
   // character right before nor right after is itself a word character.
   const spans=[]; if(!needle) return spans;
-  const hay=text.toLocaleLowerCase('tr'), n=needle.toLocaleLowerCase('tr');
+  const hay=foldCase(text), n=foldCase(needle);
   let i=0;
   while(true){
     const at=hay.indexOf(n,i);
