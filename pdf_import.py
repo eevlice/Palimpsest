@@ -360,6 +360,15 @@ def _page_chars(page):
         u = raw.FPDFText_GetUnicode(tp, i)
         if u in (13, 10):
             continue
+        # a character beyond the BMP (an emoji) comes as two UTF-16 halves: one char on the first half's box; a
+        # lone half is no text (it cannot even be written as UTF-8)
+        if 0xDC00 <= u <= 0xDFFF:
+            continue
+        if 0xD800 <= u <= 0xDBFF:
+            low = raw.FPDFText_GetUnicode(tp, i + 1) if i + 1 < n else 0
+            if not 0xDC00 <= low <= 0xDFFF:
+                continue
+            u = 0x10000 + ((u - 0xD800) << 10) + (low - 0xDC00)
         raw.FPDFText_GetCharBox(tp, i, l, r, b, t)
         raw.FPDFText_GetCharOrigin(tp, i, ox, oy)
         raw.FPDFText_GetMatrix(tp, i, m)
@@ -980,9 +989,13 @@ class _Margins:
         # a running head carries the page number: a margin line of number + a few words whose number is the page's
         # (the same offset from the PDF page as most such lines; roman and arabic counted apart) goes whatever its
         # text, so heads that change from chapter to chapter go too
-        def folio(l):
+        # a footnote starts with the number of a callout on its page: never a running foot, even when one note per page
+        # keeps the same distance to the page number for a few pages (Sazima)
+        calls = {p["p"]: {r for b in p["blocks"] for l in b["lines"] for r in l["refs"]} for p in self.pages}
+
+        def folio(l, p):
             m = l["zone"] and l["size"] <= T["margin_size"] * bsize and FOLIO.match(l["plain"])
-            if not m or len(l["plain"].split()) > T["folio_words"]:
+            if not m or len(l["plain"].split()) > T["folio_words"] or (m.group(1) or "") in calls[p["p"]]:
                 return None
             n = m.group(1) or m.group(2)
             return ("a", int(n)) if n.isdigit() else ("r", _roman(n))
@@ -990,7 +1003,7 @@ class _Margins:
         for p in self.pages:
             for b in p["blocks"]:
                 for l in b["lines"]:
-                    f = folio(l)
+                    f = folio(l, p)
                     if f and f[1]:
                         offs[(f[0], f[1] - p["p"])] += 1
         best = {k: max((o for o in offs if o[0] == k), key=offs.get, default=None) for k in ("a", "r")}
@@ -1000,7 +1013,7 @@ class _Margins:
             p["running_removed"] = 0
             for b in p["blocks"]:
                 for l in b["lines"]:
-                    f = folio(l)
+                    f = folio(l, p)
                     head = bool(f and f[1] and best[f[0]] and offs[best[f[0]]] >= T["repeat_pages"] and f[1] - p["p"] == best[f[0]][1])
                     bodylike = l["style"] == bstyle or (abs(l["size"] - bsize) <= T["body_size_pt"] and l["x1"] - l["x0"] > T["half_measure"] * bwidth)
                     band = ((l["top"] < T["band_top"] * p["H"] or l["top"] > T["band_bot"] * p["H"]) and not bodylike
@@ -1764,9 +1777,13 @@ FOOT_START = re.compile(r"^\s*[*_]*(\d{1,3}|[" + NOTE_SIGNS + r"]{1,3})[.)]?[*_]
 
 class _Notes:
     """Stage 6d (Doc mixin): page-bottom footnotes. Below everything set at body size, smaller, starting with a number
-    (or sign) that a callout on the same page carries; the lines up to the next such start belong to it. Small lines
-    at the foot of the next page before any number go on with the last note when it ended mid-sentence.
-    Sets role "dipnot" and b["foot"] = [(number, or None for a continuation, lines)]."""
+    (or sign) that a callout on the same page carries; the lines up to the next such start belong to it, also when
+    its hanging-indented lines came out as a block of their own (same style). The bottom-edge blocks the role stage
+    removed as stray margin text are read too, and a "caption" under a figure that starts with a callout's number;
+    margin lines proper (folios, running feet) are not. Small lines at the
+    foot of the next page before any number go on with the last note when it ended mid-sentence.
+    Sets role "dipnot" and b["foot"] = [(number, or None for a continuation, lines)]; the review flags go, a footnote
+    is explained."""
 
     def _footnotes(self):
         if not self.body_style:
@@ -1775,13 +1792,17 @@ class _Notes:
         small = lambda b: b["size"] <= T["foot_size"] * bsize
         last = None                     # (style, text) of the last note, while it may go on overleaf
         for p in self.pages:
-            live = [b for b in p["blocks"] if b["role"] not in ("sil", "ön sayfa", "dizin", "altyazı")]
+            live = [b for b in p["blocks"] if b["role"] not in ("sil", "ön sayfa", "dizin", "altyazı")
+                    or (b["role"] == "sil" and b.get("flag_removed") and not b.get("sil"))]
             floor = max((b["bot"] for b in live if not small(b)), default=None)
             if floor is None:
                 last = None
                 continue
             refs = {r for b in live if not small(b) for l in b["lines"] for r in l["refs"]}
-            seen, carry = set(), last
+            # a note under a figure was taken for its caption: it starts with a callout's number
+            live += [b for b in p["blocks"] if b["role"] == "altyazı" and FOOT_START.match(b["lines"][0]["plain"])
+                     and FOOT_START.match(b["lines"][0]["plain"]).group(1) in refs]
+            seen, carry, open_ = set(), last, None      # open_: style of the note still open on this page
             last = None
             for b in sorted((b for b in live if small(b) and b["top"] >= floor and b["box"] is None), key=lambda b: b["top"]):
                 notes = []
@@ -1792,16 +1813,21 @@ class _Notes:
                         notes.append((m.group(1), [l]))
                     elif notes:
                         notes[-1][1].append(l)
-                    elif not seen and carry and carry[0] == b["style"] and not terminal(carry[1]):
+                    elif open_ == b["style"] or (not seen and carry and carry[0] == b["style"] and not terminal(carry[1])):
                         notes.append((None, [l]))
                     else:
                         break
                 else:
                     if notes:
-                        b["role"], b["foot"] = "dipnot", notes
-                        last = (b["style"], notes[-1][1][-1]["plain"])
+                        b["role"], b["foot"], b["flags"], b["conf"] = "dipnot", notes, [], None
+                        b.pop("flag_removed", None)
+                        for it in p.get("items", []):
+                            for k in ("before", "after"):
+                                if k in it:
+                                    it[k] = [x for x in it[k] if x is not b]
+                        last, open_ = (b["style"], notes[-1][1][-1]["plain"]), b["style"]
                         continue
-                last = None
+                last = open_ = None
 
 
 # ====================================================================================================================
@@ -2139,7 +2165,9 @@ def resolve_notes(md, stats):
     # write: notes
     for f in feet:
         if f in foot_label:
-            md[f] = ("raw", f"[^{foot_label[f]}]: " + FOOT_START.sub("", md[f][1]["text"], count=1), md[f][2])
+            body = FOOT_START.sub("", md[f][1]["text"], count=1)
+            body = re.sub(r"^" + re.escape(md[f][1]["num"]) + r"\s+", "", body)      # "21 21 It turns out": printed twice
+            md[f] = ("raw", f"[^{foot_label[f]}]: " + body, md[f][2])
         else:
             md[f][2]["flags"].add("not-eslesmedi")
     removed = 0
@@ -2319,13 +2347,33 @@ def build_markdown(doc, first_idx, last_idx):
                 continue                                    # written with its figure or table
             if role == "dipnot":                            # a paragraph running on overleaf stays open
                 for num, nl in b["foot"]:
-                    text = join_lines([l["md"].strip() for l in nl], lex, stats, amb)
+                    # a note of several paragraphs keeps them as hard breaks (a segment holds no blank line): a line
+                    # after a closing one (not the note's first) that starts at another left edge; also when the
+                    # new paragraph's indent made a block of its own
+                    prev = (last_foot[1]["last"], last_foot[1]["first"]) if num is None and last_foot else (None, None)
+                    text = ""
+                    for l in nl:
+                        a, first = prev
+                        new = (a is not None and a is not first and a["page"] == l["page"] and terminal(a["plain"])
+                               and abs(l["x0"] - a["x0"]) > T["indent_em"] * l["size"])
+                        t = l["md"].strip()
+                        if not text:
+                            text = ("\\\n" if new else "") + t
+                        elif new:
+                            text += "\\\n" + t
+                        else:
+                            text = join_lines([text, t], lex, stats, amb)
+                        prev = (l, first if first is not None else l)
                     if num is None and last_foot:
-                        j = join_hyphen(last_foot[1]["text"], text, doc.hyphen_real, stats, mark="-", amb=amb)
-                        last_foot[1]["text"] = j if j is not None else last_foot[1]["text"] + " " + text
+                        if text.startswith("\\\n"):
+                            last_foot[1]["text"] += text
+                        else:
+                            j = join_hyphen(last_foot[1]["text"], text, doc.hyphen_real, stats, mark="-", amb=amb)
+                            last_foot[1]["text"] = j if j is not None else last_foot[1]["text"] + " " + text
+                        last_foot[1]["last"] = prev[0]
                         _meta_add(last_foot[2], _meta_of(b))
                     elif num is not None:
-                        last_foot = ("note", dict(page=p["p"], num=num, text=text), _meta_of(b))
+                        last_foot = ("note", dict(page=p["p"], num=num, text=text, last=prev[0], first=prev[1]), _meta_of(b))
                         (feet if cur else md).append(last_foot)
                 continue
             if role == "dizin":

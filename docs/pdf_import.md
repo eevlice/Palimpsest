@@ -57,8 +57,13 @@ these are fixed values in `_shape_roles`, not thresholds. A deviation no rule na
   In the line's `md` a callout sits between two private-use characters until stage 8 resolves it; `plain` keeps
   its digits, as the block rules always read them.
 - **Page-bottom footnotes** (`_Notes`, stage 6d): below everything set at body size, smaller, starting with a number
-  a callout on the same page carries. Small lines at the foot of the next page before any number go on with the
-  last note when it ended mid-sentence.
+  or sign a callout on the same page carries (numbers restarting on every page are matched by page and number).
+  Blocks the role stage dropped as stray bottom-edge text and a "caption" under a figure that starts with a
+  callout's number are read too; folios and running feet are not. In the margin stage a line that starts with a
+  callout's number is never a running foot, even when one note per page keeps the same distance to the page
+  number (Sazima). A hanging-indented block of the same style goes on with the open note; small lines at the foot
+  of the next page before any number go on with the last note when it ended mid-sentence. A paragraph inside a
+  note is kept as a hard break; a number printed twice ("21 21") is dropped once more. Notes carry no review flag.
 - **Endnotes** (`resolve_notes`, stage 8): a "Notes" heading, numbered entries in groups under headings (a chapter's
   title, "Chapter N") or directly under it. A group counts when it starts at 1 and mostly runs 1, 2, 3…; page-keyed
   notes (John Reveal) and unnumbered source lists (NEI) are not notes. Bibliography, references, index and the like
@@ -311,8 +316,10 @@ first version of the importer; later rounds are the karne rounds, with the test 
 - Tables are recognised only when ruled; borderless tables stay text (an appendix list in Characters becomes
   short paragraphs and stray headings).
 - The index is looked for in the last quarter of the book only.
+- Inside a footnote, a one-line first paragraph followed by an indented second one is joined (it cannot be told
+  from a hanging indent).
 - Notes keyed by page and phrase ("2 Take John and Grace: …"), with no callouts in the text, are left as they
-  are. Page-bottom footnotes were tested only on synthetic pages (no tuning book has them).
+  are.
 - Unreachable-in-practice branches are kept as safety nets: a control-character glyph, an empty ruled grid, a
   book without styles (`_suggest`), no measurable text block (falls back to page bands), an unknown role in
   `build_markdown` (written as plain text), password-protected or empty PDFs.

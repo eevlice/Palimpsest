@@ -1146,6 +1146,47 @@ check("footnote: the import reorder puts the definitions after the paragraph cit
       re_segs[i1 + 1].startswith("[^b1-1]:") and re_segs[i1 + 2].startswith("[^b1-2]:") and not warns, (re_segs[i1 + 1:i1 + 3], warns))
 
 
+def foot2_page(p):
+    """page-bottom notes below the text block: a sign, numbers that restart on every page, one note per page at the
+    same distance from the page number (a folio pattern), a hanging indent, a number printed twice, two paragraphs"""
+    k = Chars()
+    notes = {2: ("*", ["* A note marked with a sign."]),
+             3: ("1", ["1 The first note on leaf three."]),
+             4: ("1", ["1 The first note on leaf four."]),
+             5: ("20", ["20 A note whose second line hangs", "  under the first and ends here."]),
+             6: ("21", ["21 21 A note whose number came twice."]),
+             7: ("22", ["22 First paragraph of this note runs", "on and ends.", "   A second paragraph opens here,", "and closes it."])}
+    for j in range(30):
+        t = "Body %d of the %d: %s" % (j, p, FULL[:48])
+        if j == 20 and p in notes:
+            k.sup(notes[p][0], k.text("A sentence on leaf %d that carries a note." % p, 100, 130 + 14 * j), 130 + 14 * j)
+        else:
+            k.text(t, 100, 130 + 14 * j)
+    for i, t in enumerate(notes.get(p, (None, []))[1]):
+        x = 100 + 5 * (len(t) - len(t.lstrip()))
+        k.text(t.strip(), x, 600 + 11 * i, "Note-Regular", 9)
+    return P.build_blocks(p, W, H, k.c, [])
+
+
+d = P.Doc([foot2_page(p) for p in range(1, 9)])
+md, st = P.build_markdown(d, 0, 7)
+segs = [x for x in md.split("\n\n") if x.strip()]
+defs = [x for x in segs if x.startswith("[^")]
+check("footnote: a sign callout and its note", any("leaf 2 that carries a note.[^b1-a]" in x for x in segs)
+      and "[^b1-a]: A note marked with a sign." in defs, defs)
+check("footnote: numbers restarting on every page match by page and number, labels stay unique",
+      any("leaf 3 that carries a note.[^b1-1]" in x for x in segs) and any("leaf 4 that carries a note.[^b1-1-4]" in x for x in segs)
+      and "[^b1-1]: The first note on leaf three." in defs and "[^b1-1-4]: The first note on leaf four." in defs, defs)
+check("footnote: one note per page at a fixed distance from the page number is no running foot",
+      all(any(x.startswith("[^b1-%d]" % n) for x in defs) for n in (20, 21, 22)), defs)
+check("footnote: a hanging-indented line belongs to its note", "[^b1-20]: A note whose second line hangs under the first and ends here." in defs, defs)
+check("footnote: a number printed twice is dropped once more", "[^b1-21]: A note whose number came twice." in defs, defs)
+check("footnote: two paragraphs in a note stay apart (hard break)",
+      "[^b1-22]: First paragraph of this note runs on and ends.\\\nA second paragraph opens here, and closes it." in defs, defs)
+check("footnote: all matched, no review flag on the notes", (st["note_refs"], st["note_refs_unmatched"], st["note_bodies_unmatched"]) == (6, 0, 0)
+      and not any("stil-farkli" in m["flags"] for x, m in zip(segs, d.seg_meta) if x.startswith("[^")), dict(st))
+
+
 def end_page(p):
     k = Chars()
     y = 130
