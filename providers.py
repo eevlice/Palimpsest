@@ -17,6 +17,7 @@ anything other than "off". Budgets are capped server-side (EFFORT_BUDGETS)
 so a client can't request an unbounded thinking spend.
 """
 
+import datetime
 import math
 
 import keys
@@ -27,67 +28,99 @@ EFFORT_LEVELS = ("off", "low", "medium", "high")
 # cannot get more than this no matter what it sends.
 EFFORT_BUDGETS = {"low": 2000, "medium": 6000, "high": 16000}
 
+# OpenAI's published long-context prices do not state the threshold. The code had no threshold before the
+# GPT-6 catalog; 272k input tokens is ASSUMED here (the figure OpenAI printed for the GPT-5.4 generation).
+# Change this one constant if the pricing page ever names a different one.
+OPENAI_LONG_CONTEXT_OVER = 272_000
+
+# Price fields are $/1M tokens, standard tier. Optional per-model keys:
+#   legacy:             True = kept only so cost accounting and projects that already use the model keep working;
+#                       pickers do not offer it (a project that already uses it still shows it, marked "eski").
+#   long_context:       prices that replace the base ones when ONE request's total input (cache included) is larger
+#                       than "over" (default: OPENAI_LONG_CONTEXT_OVER).
+#   dated:              [(ISO date, {price overrides})] - from that date on the override applies (call date decides).
+#   thinking_always_on: the API refuses thinking:disabled (checked against GET /v1/models capabilities.thinking);
+#                       effort "off" is mapped to "low" and the UI hides the "off" step.
 PROVIDERS = {
     "anthropic": {
         "label": "Claude",
         "effort_kind": "thinking_budget",
         "models": {
             # cache_write is priced for the 1h TTL (2x base input) to match the
-            # ttl:"1h" set in _call_anthropic below - it was 1.25x (5min TTL)
-            # and quietly under-reported real spend once the TTL changed.
+            # ttl:"1h" set in _call_anthropic below.
             #
             # thinking_style:"adaptive" matters beyond labeling - budget_tokens
-            # is flat-out removed (400) on Opus 5/4.8/4.7 and deprecated on
+            # is flat-out removed (400) on Opus 5/4.8/4.7 and every 5.x model and deprecated on
             # Sonnet 4.6, so any model here without it falls through to the
             # old budget_tokens branch in _call_anthropic and 400s the moment
             # a paragraph is run with effort != "off".
-            "claude-opus-5": {"label": "Opus 5", "in": 5.0, "out": 25.0, "cache_write": 10.0, "cache_read": 0.50, "effort": True, "thinking_style": "adaptive"},
-            "claude-opus-4-8": {"label": "Opus 4.8", "in": 5.0, "out": 25.0, "cache_write": 10.0, "cache_read": 0.50, "effort": True, "thinking_style": "adaptive"},
-            "claude-sonnet-5": {"label": "Sonnet 5", "in": 3.0, "out": 15.0, "cache_write": 6.0, "cache_read": 0.30, "effort": True, "thinking_style": "adaptive"},
-            "claude-sonnet-4-6": {"label": "Sonnet 4.6", "in": 3.0, "out": 15.0, "cache_write": 6.0, "cache_read": 0.30, "effort": True, "thinking_style": "adaptive"},
-            "claude-haiku-4-5-20251001": {"label": "Haiku 4.5", "in": 1.0, "out": 5.0, "cache_write": 2.0, "cache_read": 0.10, "effort": True},
+            "claude-fable-5-1": {"label": "Fable 5.1", "in": 10.0, "out": 50.0, "cache_write": 20.0, "cache_read": 0.25, "effort": True, "thinking_style": "adaptive", "thinking_always_on": True},
+            "claude-opus-5-5": {"label": "Opus 5.5", "in": 4.0, "out": 20.0, "cache_write": 8.0, "cache_read": 0.20, "effort": True, "thinking_style": "adaptive", "thinking_always_on": True},
+            "claude-sonnet-5-5": {"label": "Sonnet 5.5", "in": 2.0, "out": 10.0, "cache_write": 4.0, "cache_read": 0.10, "effort": True, "thinking_style": "adaptive", "thinking_always_on": True},
+            "claude-haiku-5-5": {"label": "Haiku 5.5", "in": 0.10, "out": 0.50, "cache_write": 0.20, "cache_read": 0.01, "effort": True, "thinking_style": "adaptive",
+                                 "long_context": {"over": 100_000, "in": 0.50, "out": 2.50, "cache_write": 1.00, "cache_read": 0.05}},
+            # --- legacy ---
+            "claude-opus-5": {"label": "Opus 5", "legacy": True, "in": 5.0, "out": 25.0, "cache_write": 10.0, "cache_read": 0.50, "effort": True, "thinking_style": "adaptive"},
+            "claude-opus-4-8": {"label": "Opus 4.8", "legacy": True, "in": 5.0, "out": 25.0, "cache_write": 10.0, "cache_read": 0.50, "effort": True, "thinking_style": "adaptive"},
+            "claude-sonnet-5": {"label": "Sonnet 5", "legacy": True, "in": 2.0, "out": 10.0, "cache_write": 4.0, "cache_read": 0.20, "effort": True, "thinking_style": "adaptive"},
+            "claude-sonnet-4-6": {"label": "Sonnet 4.6", "legacy": True, "in": 3.0, "out": 15.0, "cache_write": 6.0, "cache_read": 0.30, "effort": True, "thinking_style": "adaptive"},
+            "claude-haiku-4-5-20251001": {"label": "Haiku 4.5", "legacy": True, "in": 1.0, "out": 5.0, "cache_write": 2.0, "cache_read": 0.10, "effort": True},
         },
     },
     "openai": {
         "label": "ChatGPT",
         "effort_kind": "reasoning_effort",
         "models": {
-            "gpt-5.6-sol": {"label": "GPT-5.6 Sol", "in": 5.0, "out": 30.0, "cache_read": 0.50, "effort": True},
-            "gpt-5.6-terra": {"label": "GPT-5.6 Terra", "in": 2.5, "out": 15.0, "cache_read": 0.25, "effort": True},
-            "gpt-5.6-luna": {"label": "GPT-5.6 Luna", "in": 1.0, "out": 6.0, "cache_read": 0.10, "effort": True},
-            "gpt-5.4-mini": {"label": "GPT-5.4 mini", "in": 0.75, "out": 4.5, "cache_read": 0.075, "effort": False},
+            "gpt-6-astra": {"label": "GPT-6 Astra", "in": 10.0, "out": 50.0, "cache_read": 1.00, "effort": True,
+                            "long_context": {"in": 20.0, "out": 75.0, "cache_read": 2.00}},
+            "gpt-6.1-sol": {"label": "GPT-6.1 Sol", "in": 2.0, "out": 10.0, "cache_read": 0.10, "effort": True,
+                            "long_context": {"in": 4.0, "out": 15.0, "cache_read": 0.20}},
+            "gpt-6-luna": {"label": "GPT-6 Luna", "in": 0.10, "out": 0.50, "cache_read": 0.01, "effort": True,
+                           "long_context": {"in": 0.20, "out": 0.75, "cache_read": 0.02}},
+            # --- legacy ---
+            "gpt-5.6-sol": {"label": "GPT-5.6 Sol", "legacy": True, "in": 5.0, "out": 30.0, "cache_read": 0.50, "effort": True},
+            "gpt-5.6-terra": {"label": "GPT-5.6 Terra", "legacy": True, "in": 2.5, "out": 15.0, "cache_read": 0.25, "effort": True},
+            "gpt-5.6-luna": {"label": "GPT-5.6 Luna", "legacy": True, "in": 1.0, "out": 6.0, "cache_read": 0.10, "effort": True},
+            "gpt-5.4-mini": {"label": "GPT-5.4 mini", "legacy": True, "in": 0.75, "out": 4.5, "cache_read": 0.075, "effort": False},
         },
     },
     "google": {
         "label": "Gemini",
         "effort_kind": "thinking_budget",
         "models": {
-            "gemini-3.1-pro": {"label": "Gemini 3.1 Pro", "in": 2.0, "out": 12.0, "cache_read": 0.40, "effort": True},
-            "gemini-3.5-flash": {"label": "Gemini 3.5 Flash", "in": 1.5, "out": 9.0, "cache_read": 0.30, "effort": True},
-            "gemini-3-flash-lite": {"label": "Gemini 3 Flash-Lite", "in": 0.10, "out": 0.40, "cache_read": 0.02, "effort": False},
+            "gemini-4-argon": {"label": "Gemini 4 Argon", "in": 2.0, "out": 10.0, "cache_read": 0.10, "effort": True,
+                               "dated": [("2026-12-01", {"in": 4.0, "out": 20.0, "cache_read": 0.20})]},
+            "gemini-3.8-flash": {"label": "Gemini 3.8 Flash", "in": 0.75, "out": 3.75, "cache_read": 0.075, "effort": True,
+                                 "dated": [("2027-01-01", {"in": 1.50, "out": 7.50, "cache_read": 0.15})]},
+            "gemini-3.5-flash-lite": {"label": "Gemini 3.5 Flash-Lite", "in": 0.30, "out": 2.50, "cache_read": 0.03, "effort": False},
+            # --- legacy ---
+            "gemini-3.1-pro": {"label": "Gemini 3.1 Pro", "legacy": True, "in": 2.0, "out": 12.0, "cache_read": 0.40, "effort": True},
+            "gemini-3.5-flash": {"label": "Gemini 3.5 Flash", "legacy": True, "in": 1.5, "out": 9.0, "cache_read": 0.30, "effort": True},
+            "gemini-3-flash-lite": {"label": "Gemini 3 Flash-Lite", "legacy": True, "in": 0.10, "out": 0.40, "cache_read": 0.02, "effort": False},
         },
     },
 }
 
 
 def _cost_level_fn():
-    """Returns a fn mapping a model's blended $/1M cost to a 1-5 tier, spread
-    log-scale across every model in the catalog (not just its own provider) -
-    linear buckets are useless here since the cheapest and priciest models
-    are ~100x apart and a linear scale would flatten everything but Opus/Fable
-    down to tier 1. Recomputed from PROVIDERS directly so it never drifts out
-    of sync with a price edited above."""
-    avgs = [(m["in"] + m["out"]) / 2 for p in PROVIDERS.values() for m in p["models"].values()]
+    """Returns a fn mapping a model's blended $/1M cost to a 1-5 tier, spread log-scale across the CURRENT (non-legacy)
+    catalog of every provider - linear buckets are useless since the cheapest and priciest models are ~100x apart.
+    Uses today's short-context prices; recomputed from PROVIDERS so it never drifts from a price edited above."""
+    def blend(provider, mid):
+        p = _price(provider, mid)
+        return (p["in"] + p["out"]) / 2
+    avgs = [blend(pid, mid) for pid, p in PROVIDERS.items() for mid, m in p["models"].items() if not m.get("legacy")]
     lo, hi = math.log(min(avgs)), math.log(max(avgs))
     span = (hi - lo) or 1.0
-    def level(avg):
-        t = (math.log(avg) - lo) / span
+    def level(provider, mid):
+        t = (math.log(blend(provider, mid)) - lo) / span
         return max(1, min(5, 1 + round(4 * t)))
     return level
 
 
 def list_catalog():
-    """[{provider, label, models:[{id, label, effort, cost_level}]}] - for the frontend model picker."""
+    """[{provider, label, models:[{id, label, effort, effort_min, legacy, cost_level}]}] - for the frontend model picker.
+    effort_min is the lowest effort level the model can run at ("off" unless thinking cannot be disabled)."""
     cost_level = _cost_level_fn()
     out = []
     for pid, p in PROVIDERS.items():
@@ -97,7 +130,8 @@ def list_catalog():
             "has_key": bool(keys.get_key(pid)),
             "models": [
                 {"id": mid, "label": m["label"], "effort": m["effort"],
-                 "cost_level": cost_level((m["in"] + m["out"]) / 2)}
+                 "effort_min": "low" if m.get("thinking_always_on") else "off",
+                 "legacy": bool(m.get("legacy")), "cost_level": cost_level(pid, mid)}
                 for mid, m in p["models"].items()
             ],
         })
@@ -109,8 +143,19 @@ def model_supports_effort(provider, model):
     return bool(m and m["effort"])
 
 
-def _price(provider, model):
-    return PROVIDERS[provider]["models"][model]
+def _price(provider, model, when=None, input_total=0):
+    """Effective prices for one call: the model's base prices, then any dated change that has taken effect on `when`
+    (default today), then the long-context prices if this single request's total input (cache included) is over the threshold."""
+    m = PROVIDERS[provider]["models"][model]
+    p = {k: m[k] for k in ("in", "out", "cache_write", "cache_read") if k in m}
+    day = when or datetime.date.today()
+    for start, over in sorted(m.get("dated", [])):
+        if day >= datetime.date.fromisoformat(start):
+            p.update(over)
+    lc = m.get("long_context")
+    if lc and input_total > lc.get("over", OPENAI_LONG_CONTEXT_OVER):
+        p.update({k: v for k, v in lc.items() if k != "over"})
+    return p
 
 
 def _client_for(provider):
@@ -143,13 +188,18 @@ def _stop_info(stop_reason, output_tokens, cap):
 # --------------------------------------------------------------------------
 
 def _call_anthropic(client, model, system_text, standing_context, per_call_text, effort, max_tokens):
-    thinking_style = PROVIDERS["anthropic"]["models"][model].get("thinking_style", "budget")
+    info = PROVIDERS["anthropic"]["models"][model]
+    thinking_style = info.get("thinking_style", "budget")
+    if info.get("thinking_always_on") and effort == "off":
+        effort = "low"          # these models reject thinking:disabled; "low" is the lowest level they run at
     extra_body = {"thinking": {"type": "disabled"}}
     if effort != "off":
         if thinking_style == "adaptive":
             # Newer models (e.g. Sonnet 5) don't take budget_tokens - effort is
             # a sibling top-level field, and "enabled" isn't a valid type for them.
             extra_body = {"thinking": {"type": "adaptive"}, "output_config": {"effort": effort}}
+            # thinking tokens are spent out of max_tokens: leave room so the visible answer keeps its full cap
+            max_tokens += EFFORT_BUDGETS[effort]
         else:
             budget = EFFORT_BUDGETS[effort]
             extra_body = {"thinking": {"type": "enabled", "budget_tokens": budget}}
@@ -282,8 +332,9 @@ def call_simple(provider, model, system_text, user_text, max_tokens=4096):
     return call(provider, model, system_text, "", user_text, effort="off", max_tokens=max_tokens)
 
 
-def compute_cost(provider, model, tokens):
-    price = _price(provider, model)
+def compute_cost(provider, model, tokens, when=None):
+    input_total = (tokens.get("input", 0) or 0) + (tokens.get("cache_read", 0) or 0) + (tokens.get("cache_write", 0) or 0)
+    price = _price(provider, model, when, input_total)
     cost = (
         tokens["input"] / 1e6 * price["in"]
         + tokens["output"] / 1e6 * price["out"]

@@ -436,6 +436,8 @@
   .seg-effort .ef:hover{color:var(--ink);background:rgba(255,255,255,.7);}
   .seg-effort.open .ef.on{background:var(--paper-deep);color:var(--ink);}
   .seg-effort .ef svg{display:block;}
+  .seg-effort.no-off .ef[data-effort="off"]{display:none !important;}
+  .seg-effort.no-off.open{width:80px;}
   /* collapsed: only the current step, and a tinted box if effort is on at all */
   .seg-effort:not(.open) .ef{display:none;}
   .seg-effort:not(.open) .ef.on{display:inline-flex;border-right:none;}
@@ -711,7 +713,7 @@ function loadCatalog(){
     MODEL_CATALOG=catalog;
     if(!catalog.some(p=>p.has_key)) $('nokey').classList.remove('hidden');
     else $('nokey').classList.add('hidden');
-    populateModelSelect($('model'));
+    populateModelSelect($('model'),[defaultModel()]);
     $('model').value=defaultModel();
     // If a project is already open, re-render now that models are ready
     if(P&&P.segments&&P.segments.length){
@@ -727,15 +729,19 @@ function loadCatalog(){
 function costDots(level){
   return '●'.repeat(level)+'○'.repeat(5-level);
 }
-function populateModelSelect(sel){
+// Legacy models are not offered, but one that is already in use (the saved default, the project's model) must
+// stay selectable and readable, so callers pass those keys in `keep`.
+function modelOptionLabel(m){ return m.legacy ? m.label+' (eski)' : m.label; }
+function populateModelSelect(sel,keep=[]){
   sel.innerHTML='';
   MODEL_CATALOG.forEach(p=>{
     const grp=document.createElement('optgroup');
     grp.label=p.label+(p.has_key?'':' (anahtar yok)');
     p.models.forEach(m=>{
+      if(m.legacy&&!keep.includes(p.provider+'::'+m.id)) return;
       const o=document.createElement('option');
       o.value=p.provider+'::'+m.id;
-      o.textContent=`${m.label}  ${costDots(m.cost_level)}`;
+      o.textContent=`${modelOptionLabel(m)}  ${costDots(m.cost_level)}`;
       if(!p.has_key) o.disabled=true;
       grp.appendChild(o);
     });
@@ -746,7 +752,7 @@ function findModelInfo(key){
   const [provider,modelId]=(key||'').split('::');
   const p=MODEL_CATALOG.find(x=>x.provider===provider);
   const m=p&&p.models.find(x=>x.id===modelId);
-  return m ? {provider,modelId,label:m.label,effort:m.effort,has_key:p.has_key} : null;
+  return m ? {provider,modelId,label:m.label,effort:m.effort,effort_min:m.effort_min||'off',legacy:!!m.legacy,has_key:p.has_key} : null;
 }
 function loadPrefs(){
   return fetch('/prefs').then(r=>r.json()).then(p=>{ PREFS=p||{}; });
@@ -840,7 +846,7 @@ function savePref(key,value){
 function renderDefaultModelPref(el){
   const sel=document.createElement('select');
   sel.id='pref-default-model';
-  populateModelSelect(sel);
+  populateModelSelect(sel,[PREFS.default_model]);
   sel.value=PREFS.default_model||defaultModel();
   sel.onchange=()=>savePref('default_model',sel.value);
   el.appendChild(sel);
@@ -1624,16 +1630,18 @@ function defaultModel(){
     const info=findModelInfo(pref);
     if(info&&info.has_key) return pref;
   }
-  // Otherwise prefer Anthropic Sonnet 4.6 among providers that have a key.
+  // Otherwise prefer Anthropic Opus 5.5 among providers that have a key, then the first current model.
   const keyed=MODEL_CATALOG.filter(p=>p.has_key);
   const pool=keyed.length?keyed:MODEL_CATALOG;
   const anthropic=pool.find(p=>p.provider==='anthropic');
   if(anthropic){
-    const sonnet=anthropic.models.find(m=>m.id.includes('sonnet-4-6'));
-    if(sonnet) return 'anthropic::'+sonnet.id;
+    const opus=anthropic.models.find(m=>m.id==='claude-opus-5-5');
+    if(opus) return 'anthropic::'+opus.id;
   }
   const first=pool[0];
-  return first ? first.provider+'::'+first.models[0].id : '';
+  if(!first) return '';
+  const cur=first.models.find(m=>!m.legacy)||first.models[0];
+  return first.provider+'::'+cur.id;
 }
 function modelSelector(i){
   if(!MODEL_CATALOG.length){
@@ -1645,9 +1653,10 @@ function modelSelector(i){
     opts+=`<optgroup label="${esc(p.label)}${p.has_key?'':' (anahtar yok)'}">`;
     p.models.forEach(m=>{
       const val=p.provider+'::'+m.id;
+      if(m.legacy&&val!==def&&val!==(P&&P.model)) return;      // legacy: only where it is already the choice
       const selected=(val===def)?' selected':'';
       const disabled=p.has_key?'':' disabled';
-      opts+=`<option value="${val}"${selected}${disabled}>${esc(m.label)}  ${costDots(m.cost_level)}</option>`;
+      opts+=`<option value="${val}"${selected}${disabled}>${esc(modelOptionLabel(m))}  ${costDots(m.cost_level)}</option>`;
     });
     opts+='</optgroup>';
   });
@@ -1657,8 +1666,10 @@ function effortSelector(i){
   const btns=['off','low','medium','high'].map(e=>
     `<button type="button" class="ef" data-effort="${e}" title="${effortTitle(e)}"
       onclick="effortCellClick(event,${i},'${e}')">${EFFORT_ICON[e]}</button>`).join('');
-  return `<div class="seg-effort" id="esel-${i}" data-value="off"
-    title="${effortTitle('off')}">${btns}</div>`;
+  const dinfo=findModelInfo(defaultModel());
+  const start=(dinfo&&dinfo.effort_min==='low')?'low':'off';
+  return `<div class="seg-effort${start==='low'?' no-off':''}" id="esel-${i}" data-value="${start}"
+    title="${effortTitle(start)}">${btns}</div>`;
 }
 // Collapsed it shows only the current step; the first click opens the four,
 // the second picks one and closes again.
@@ -1677,6 +1688,7 @@ document.addEventListener('click',closeEffortMenus);
 window.setSegEffort=(i,val)=>{
   const el=$('esel-'+i); if(!el) return;
   if(!EFFORT_LABEL[val]) val='off';
+  if(val==='off'&&el.classList.contains('no-off')) val='low';    // the model cannot run without thinking
   el.dataset.value=val;
   el.title=effortTitle(val);
   el.querySelectorAll('.ef').forEach(b=>b.classList.toggle('on', b.dataset.effort===val));
@@ -1723,6 +1735,7 @@ function onModelChange(i){
   const info=findModelInfo(msel.value);
   const supportsEffort=!!(info&&info.effort);
   esel.classList.toggle('hidden', !supportsEffort);
+  esel.classList.toggle('no-off', !!(info&&info.effort_min==='low'));
   setSegEffort(i, supportsEffort ? (esel.dataset.value||'off') : 'off');
 }
 function getSegModel(i){

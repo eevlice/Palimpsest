@@ -51,7 +51,7 @@ if os.path.isdir(_OLD_PROJECTS_DIR) and not os.listdir(PROJECTS_DIR):
         if _fname.endswith(".json"):
             shutil.move(os.path.join(_OLD_PROJECTS_DIR, _fname), os.path.join(PROJECTS_DIR, _fname))
 
-DEFAULT_PROVIDER, DEFAULT_MODEL = "anthropic", "claude-sonnet-4-6"
+DEFAULT_PROVIDER, DEFAULT_MODEL = "anthropic", "claude-opus-5-5"
 
 
 def parse_model_key(s):
