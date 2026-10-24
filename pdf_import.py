@@ -102,7 +102,29 @@ def _page_chars(page):
                       w >= 600 or bool(re.search(r"bold|black|heavy", fn, re.I)),
                       idx=i, ox=ox.value, lr=loose.right, rot=rot))
         out[-1].gsp, gsp = gsp, False
-    return out
+    return _dedupe(out)
+
+
+def _dedupe(chars):
+    """Some producers draw part of the text a second time on top of a watermark (word pieces at exactly the same spot,
+    later in the stream); a glyph repeated at the same place in the same font and size is one glyph. The letters of a
+    ligature ("ff") also share one spot, but they come one right after the other: only a repeat further on counts.
+    Text set under 3 pt is hidden (running-head variables on chapter openers), never read."""
+    seen, keep = collections.defaultdict(list), []           # (char, font, size, x cell, y cell) -> [(x0, base, idx)]
+    for c in chars:
+        if not c.ch.strip():
+            keep.append(c)
+            continue
+        if c.size < 3:
+            continue
+        gx, gy = round(c.x0), round(c.base)
+        if any(abs(x - c.x0) < 0.3 and abs(y - c.base) < 0.3 and c.idx - i > 3
+               for dx in (-1, 0, 1) for dy in (-1, 0, 1)
+               for x, y, i in seen[(c.ch, c.font, round(c.size), gx + dx, gy + dy)]):
+            continue
+        seen[(c.ch, c.font, round(c.size), gx, gy)].append((c.x0, c.base, c.idx))
+        keep.append(c)
+    return keep
 
 
 def _tint_boxes(page):
@@ -292,7 +314,8 @@ def build_lines(chars, page_no, orn_fonts=frozenset()):
     first line they sit next to."""
     chars = [c for c in chars if c.font not in orn_fonts]
     body = statistics.median([c.size for c in chars if c.ch.strip()] or [10.0])
-    caps = [c for c in chars if c.size >= 2.5 * body and c.ch.isalpha() and c.size < 40]
+    # (an ornamental initial may be eight times the body size; a letter beyond twelve is art, not text)
+    caps = [c for c in chars if c.size >= 2.5 * body and c.ch.isalpha() and c.size < 12 * body]
     # a drop cap stands alone: big letters next to each other are a title on a page with little small text
     caps = [c for c in caps if not any(d is not c and abs(d.base - c.base) < 0.3 * c.size and abs(d.x0 - c.x0) < 2 * c.size
                                        for d in caps)]
@@ -357,7 +380,11 @@ def build_lines(chars, page_no, orn_fonts=frozenset()):
         dc.dropcap = True
         cands = [l for l in out if l["x0"] >= dc.x0 - 1 and abs(l["top"] - dc.top) <= 0.2 * dc.size + 3]
         if cands:
-            l = min(cands, key=lambda l: l["x0"])
+            # the line beside the initial's top (a tall initial reaches several lines; their left edges differ by
+            # hairs, so the top decides)
+            l = min(cands, key=lambda l: (abs(l["top"] - dc.top) > 0.5 * l["size"], abs(l["top"] - dc.top), l["x0"]))
+            # the initial is the first letter of the word, not a styled run of its own ("**O**ne" -> "One")
+            dc.italic, dc.bold = l["chars"][0].italic, l["chars"][0].bold
             l["chars"].insert(0, dc)
             l["x0"] = min(l["x0"], dc.x0)
             l["top"] = min(l["top"], dc.top)
@@ -686,11 +713,22 @@ class Doc:
         bstyle = max(swords, key=swords.get) if swords else None
         widths = [l["x1"] - l["x0"] for p in self.pages for b in p["blocks"] for l in b["lines"] if l["style"] == bstyle]
         bwidth = statistics.median(widths) if widths else 0.0
+        # The text block is where body lines sit. A running head set near the body size counts as one unless it is
+        # left out: lines short of the full measure whose text (page numbers ignored) recurs on 3+ pages, and, for the
+        # top edge, lines narrower than half the text block (a head, a folio with a title).
+        recur = collections.defaultdict(set)
+        for p in self.pages:
+            for b in p["blocks"]:
+                for l in b["lines"]:
+                    recur[_similar_key(l["plain"])].add(p["p"])
         tops, bots = [], []
         for p in self.pages:
-            bl = [l for b in p["blocks"] for l in b["lines"] if abs(l["size"] - bsize) <= 0.6 and len(l["plain"].split()) >= 3]
-            if len(bl) >= 3:
-                tops.append(min(l["top"] for l in bl))
+            bl = [l for b in p["blocks"] for l in b["lines"] if abs(l["size"] - bsize) <= 0.6 and len(l["plain"].split()) >= 3
+                  and not (len(recur[_similar_key(l["plain"])]) >= 3 and l["x1"] - l["x0"] < 0.9 * bwidth)]
+            # (narrow lines only say nothing about the top: at the bottom a paragraph's short last line is body text)
+            wide = [l for l in bl if l["x1"] - l["x0"] >= 0.5 * bwidth]
+            if len(bl) >= 3 and wide:
+                tops.append(min(l["top"] for l in wide))
                 bots.append(max(l["bot"] for l in bl))
         self.text_top = statistics.median(tops) if tops else None
         self.text_bot = statistics.median(bots) if bots else None
@@ -1240,6 +1278,11 @@ class Doc:
             if b["role"] in ("kutu", "kutu-başlık"):
                 b["conf"] = 0.9
                 continue
+            # a source line set in a heading style ("—A NAME (1988, p. 140)" in small caps) is still the attribution
+            if (b["role"] in HEAD and prev is not None and prev["role"] in named and DASH.match(b["text"].strip("* "))
+                    and len(b["lines"]) <= 2 and b["nwords"] <= 20):
+                b["role"], b["conf"] = "atıf", 0.8
+                continue
             if "why" not in b:
                 continue
             why, g = b["why"], b["geo"]
@@ -1278,15 +1321,18 @@ class Doc:
                 b["flags"] = why + ["stil-farkli"] if b.get("font_dev") else why
                 continue
             body_next = nxt is not None and nxt["role"] in ("gövde", "kutu", "liste", "atıf") + tuple(HEAD)
+            # a block drawn over another block's lines (stray pieces of a second text layer) is no quote or verse
+            over = any(o is not b and o["role"] != "sil" and o["top"] < b["bot"] - 1 and o["bot"] > b["top"] + 1
+                       and o["x0"] < b["x1"] - 1 and o["x1"] > b["x0"] + 1 for o in p["blocks"])
             layout = shape & {"indent", "indent-right", "narrow", "centered", "italic-block"}
             # verse: short irregular lines of words set apart by layout (a list of web addresses is not verse)
             # (prose broken over lines splits words at line ends; verse lines end with whole words)
             verse = (len(b["lines"]) >= 3 and "ragged" in why and not g["justified"] and bool(layout) and not g["hyphenated"]
                      and not re.search(r"://|www\.", b["text"]))
-            if verse or (b["role"] in ("şiir", "epigraf") and shape and not g["hyphenated"]):
+            if not over and (verse or (b["role"] in ("şiir", "epigraf") and shape and not g["hyphenated"])):
                 # (the style rule names short-lined multi-line blocks şiir/epigraf; away from a chapter start: verse)
                 b["role"], b["conf"] = "şiir", 0.9 if b["role"] == "şiir" else 0.7
-            elif (("indent" in why or "indent-right" in why) and "centered" not in why and prev is not None
+            elif (not over and ("indent" in why or "indent-right" in why) and "centered" not in why and prev is not None
                   and prev["role"] in ("gövde", "liste", "alıntı") + tuple(HEAD) and body_next):
                 b["role"], b["conf"] = "alıntı", 0.8 if "indent" in why and "indent-right" in why else 0.6
             elif b["role"] in ("şiir", "epigraf"):

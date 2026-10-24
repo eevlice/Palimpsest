@@ -987,5 +987,85 @@ boxed = [x for x in segs if _st(x)["type"] == "box"]
 check("box: title and text inside a tinted panel are Box segments", len(boxed) == 2 and "**Box Title**" in boxed[0]
       and "own panel line 0" in boxed[1] and "line 2." in boxed[1], boxed)
 
+# ================================================================ round 8
+# -- 1. a second text layer: text drawn again at the same spot (whole lines or word pieces) is read once
+def layered_page(p):
+    rows = [(f"Plain sentence {k} on page {p} keeps going for a while here.", 72, 600 - 14 * k, 11) for k in range(8)]
+    return rows + [rows[2], ("Plain sente", 72, 600 - 14 * 5, 11)]                # a whole line again, and a word piece
+md, warns = P.convert(synth_pdf([layered_page(p) for p in range(1, 5)]))
+check("a glyph drawn twice at the same spot is read once (whole line, word piece)",
+      md.count("Plain sentence 2 on page 3 keeps") == 1 and "sente Plain" not in md and "Plain sente\n" not in md
+      and md.count("Plain sentence 5 on page 3 keeps going") == 1, md[:400])
+
+lig = [P.Ch(ch, 100, 110, 190, 202, 200, "Body-Regular", 11.0, idx=k) for k, ch in enumerate("ff")] + line("ect", 110, 200, idx0=2)
+check("the letters of a ligature (one spot, one after the other) are both kept", "".join(c.ch for c in P._dedupe(lig)) == "ffect")
+far = line("word", 100, 200) + [P.Ch("o", 105.5, 111, 190, 202, 200, "Body-Regular", 11.0, idx=40)]
+check("the same glyph at the same spot further on in the stream is dropped", "".join(c.ch for c in P._dedupe(far)) == "word")
+near = line("word", 100, 200) + [P.Ch("o", 105.62, 111, 190, 202, 200.04, "Body-Regular", 11.0, idx=40)]   # a hair off the cell edge
+check("...also a tenth of a point off", "".join(c.ch for c in P._dedupe(near)) == "word")
+
+# -- 4. text set under 3 pt is hidden, never read
+md, warns = P.convert(synth_pdf([layered_page(p)[:8] + [("Hidden %s Variable" % ["one", "two", "three", "four"][p - 1], 72, 560, 1)]
+                                 for p in range(1, 5)]))
+check("text under 3 pt is not read", "Variable" not in md and "Plain sentence 4 on page 2" in md, md[:200])
+
+# -- 3. an ornamental initial far larger than 40 pt is still the drop cap
+dc = [P.Ch("O", 60, 140, 191, 271, 268, "Body-Regular", 100.0, idx=0)] + line("ne of the first things people ask", 145, 200, idx0=1)
+L = lines_text(dc)
+check("a 100 pt initial joins its line", len(L) == 1 and L[0]["plain"].startswith("One of the first"), [l["plain"] for l in L])
+dcb = [P.Ch("O", 60, 140, 191, 271, 268, "Display-Bold", 100.0, 700, False, True, idx=0)] + line("ne of the first things people ask", 145, 200, idx0=1)
+L = lines_text(dcb)
+check("a bold (or italic) initial carries no style of its own into the word", L[0]["md"].startswith("One of the first"), L[0]["md"][:30])
+tall = ([P.Ch("D", 60, 120, 191, 271, 268, "Body-Regular", 100.0, idx=0)] + line("o you overshare? Do you sometimes", 130.1, 200, idx0=1)
+        + line("reveal more than you intended, and", 130.0, 214, idx0=40) + line("story on a first date, before", 130.0, 228, idx0=80))
+L = lines_text(tall)
+check("a tall initial joins the line beside its top, not the next one starting a hair further left",
+      [l["plain"] for l in L][0].startswith("Do you overshare?"), [l["plain"] for l in L])
+
+# -- 2. a running head near body size (and its page number apart) is outside the text block and goes
+def head_body_page(p):
+    rows = [("THE RUNNING BOOK TITLE" if p % 2 else "Chapter Running Title", 300, 90, "Run-Regular", 10.5),   # below the 9% band
+            (str(p + 10), 100 if p % 2 else 420, 90, "Run-Regular", 10.5)]
+    return rows + body_rows(p, top=130, n=12)
+d = doc_from([head_body_page(p) for p in range(1, 9)])
+md, st = P.build_markdown(d, 0, 7)
+check("a running head set near body size is outside the text block and goes, page number too",
+      "RUNNING BOOK TITLE" not in md and "Chapter Running Title" not in md and not re.search(r"(^|\n)#*\s*1[0-9]\s*(\n|$)", md),
+      [x for x in md.split("\n\n") if "Running" in x or "RUNNING" in x or re.fullmatch(r"#*\s*\d+", x.strip())][:4])
+check("...the text block starts at the first body line", d.text_top is not None and d.text_top > 115, d.text_top)
+
+# -- 5. an attribution set in a heading style (dash, small caps) after an epigraph is the attribution
+WORDS = ["amber", "birch", "cedar", "dune", "ember", "fjord", "grove", "heath", "islet", "jade", "kelp", "larch"]
+
+
+def attr_page(p):
+    rows = [([("Chapter Title %d" % p, "Head-Bold")], 100, 90, 16)]
+    if p % 2:                                                     # every other chapter opens with an epigraph
+        w = WORDS[p - 1]
+        rows += [([(f"Plain {w} words set in a narrower measure, than when"[:55].ljust(55, "s"), B)], 130, 130),
+                 ([(f"they open the {w} chapter, says the sample.", B)], 130, 144),
+                 ([(f"—A {w.upper()} NAME (1988, P. 140)", "Attr-Bold")], 200, 166, 11)]
+        rows += prose(p, 200, 6)
+    else:                                                         # the attribution style is also the sub-head style
+        rows += prose(p, 130, 4) + [([("SECTION HEAD %d" % p, "Attr-Bold")], 100, 200, 11)] + prose(p, 220, 4)
+    return page_runs(p, rows)
+d = P.Doc([attr_page(p) for p in range(1, 13)])
+md, st = P.build_markdown(d, 0, 11)
+segs = [x for x in md.split("\n\n") if x.strip()]
+check("a dash line in a heading style after an epigraph is its attribution, not a heading",
+      not any(x.startswith("#") and " NAME (1988" in x for x in segs) and sum(_st(x)["type"] == "attribution" for x in segs) == 6,
+      [x[:60] for x in segs if " NAME (1988" in x][:3])
+
+# -- 7. a block drawn over other lines (pieces of a second layer) is no quote
+def over_page(p):
+    rows = prose(p, 130, 8)
+    if p == 4:
+        rows.append(([("a stray piece of words drawn over the last line of text", B)], 160, 233))   # over the last line
+    return page_runs(p, rows)
+d = P.Doc([over_page(p) for p in range(1, 9)])
+md, st = P.build_markdown(d, 0, 7)
+check("a block lying over other lines is no block quote (it keeps the review flag)", not any(x.startswith("> ") for x in md.split("\n\n")),
+      [x[:60] for x in md.split("\n\n") if "stray piece" in x])
+
 print("FAILED %d" % failed if failed else "ALL PASS")
 sys.exit(1 if failed else 0)
