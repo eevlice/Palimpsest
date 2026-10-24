@@ -1016,11 +1016,11 @@ check("a 100 pt initial joins its line", len(L) == 1 and L[0]["plain"].startswit
 dcb = [P.Ch("O", 60, 140, 191, 271, 268, "Display-Bold", 100.0, 700, False, True, idx=0)] + line("ne of the first things people ask", 145, 200, idx0=1)
 L = lines_text(dcb)
 check("a bold (or italic) initial carries no style of its own into the word", L[0]["md"].startswith("One of the first"), L[0]["md"][:30])
-tall = ([P.Ch("D", 60, 120, 191, 271, 268, "Body-Regular", 100.0, idx=0)] + line("o you overshare? Do you sometimes", 130.1, 200, idx0=1)
-        + line("reveal more than you intended, and", 130.0, 214, idx0=40) + line("story on a first date, before", 130.0, 228, idx0=80))
+tall = ([P.Ch("O", 60, 120, 191, 271, 268, "Body-Regular", 100.0, idx=0)] + line("ne grey morning the sample begins", 130.1, 200, idx0=1)
+        + line("its second line runs on from here", 130.0, 214, idx0=40) + line("and a third line follows it", 130.0, 228, idx0=80))
 L = lines_text(tall)
 check("a tall initial joins the line beside its top, not the next one starting a hair further left",
-      [l["plain"] for l in L][0].startswith("Do you overshare?"), [l["plain"] for l in L])
+      [l["plain"] for l in L][0].startswith("One grey morning"), [l["plain"] for l in L])
 
 # -- 2. a running head near body size (and its page number apart) is outside the text block and goes
 def head_body_page(p):
