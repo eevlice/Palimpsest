@@ -1016,13 +1016,18 @@ function exportSeg(s,f){
   if(t.type==='blockquote'&&!SEG_BQ.test(f)) return wrapSeg(f,t.type);
   return f;
 }
+// The Markdown export: <project name>.md as text/markdown. The link goes into the page before the click, which
+// Safari needs to honour the file name.
+function mdFileName(name){ return (String(name||'').replace(/[^a-z0-9]+/gi,'_')||'ceviri')+'.md'; }
+function mdBlob(text){ return new Blob([text],{type:'text/markdown;charset=utf-8'}); }
+function downloadMarkdown(name,text){
+  const a=document.createElement('a');
+  a.href=URL.createObjectURL(mdBlob(text)); a.download=mdFileName(name);
+  document.body.appendChild(a); a.click(); a.remove();
+  setTimeout(()=>URL.revokeObjectURL(a.href),1000);
+}
 function exportProject(pid){
-  fetch('/project/'+encodeURIComponent(pid)).then(r=>r.json()).then(d=>{
-    const out=exportText(d.segments,d.finals);
-    const blob=new Blob([out],{type:'text/plain;charset=utf-8'});
-    const a=document.createElement('a');a.href=URL.createObjectURL(blob);
-    a.download=d.name.replace(/[^a-z0-9]+/gi,'_')+'.'+d.target_lang.toLowerCase()+'.txt';a.click();
-  });
+  fetch('/project/'+encodeURIComponent(pid)).then(r=>r.json()).then(d=>downloadMarkdown(d.name,exportText(d.segments,d.finals)));
 }
 
 // ================================================================
@@ -2723,10 +2728,7 @@ async function exportAs(mode){
   }catch(err){ $('export-meta').textContent='· Sunucuya ulaşılamadı'; }
 }
 function exportMarkdown(){
-  const out=exportText(P.segments,P.finals);
-  const blob=new Blob([out],{type:'text/plain;charset=utf-8'});
-  const a=document.createElement('a');a.href=URL.createObjectURL(blob);
-  a.download=P.name.replace(/[^a-z0-9]+/gi,'_')+'.'+P.target_lang.toLowerCase()+'.txt';a.click();
+  downloadMarkdown(P.name,exportText(P.segments,P.finals));
   $('export-meta').textContent=`· ${P.segments.length} paragraftan ${P.segments.filter((s,i)=>isDone(P.segments,P.approved,i)).length} tanesi dışa aktarıldı`;
 };
 </script>

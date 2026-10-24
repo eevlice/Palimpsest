@@ -35,12 +35,12 @@ const code = [
   line('const esc='), line('const SEG_H='), line('const SEG_REF='), line('const SEG_IMG='), line('const SEG_CAP='), line('const SEG_TAB='), line('const CAP_OPEN='), line('const SEG_FENCE='), line('const FENCE_TYPE='), line('const SEG_BQ='), line('const FENCE_STYLE_OF='), line('const NAMED='), line("const MASK="), line('const PARSE_CACHE='), line('const WIN='), line('const RAIL_PER_ROW='), line('const STATE_CLS='), line('const PAGE_REF_NOTE='),
   ...['foldCase', 'segType', 'segMarkerLen', 'segTailLen', 'wrapSeg', 'fnNumber', 'typeOf', 'refLabels', 'maskRefs',
       'inlineParse', 'isWordChar', 'findSpans', 'parseTerms', 'glossHitsForText',
-      'searchSpans', 'renderSource', 'refMismatch', 'neighborText', 'canMerge', 'exportText', 'exportSeg', 'hasPageRef', 'pageRefFlag', 'docxComment',
+      'searchSpans', 'renderSource', 'refMismatch', 'neighborText', 'canMerge', 'exportText', 'exportSeg', 'mdFileName', 'mdBlob', 'hasPageRef', 'pageRefFlag', 'docxComment',
       'normalizeProject', 'isDone', 'mergeMeta', 'projectForSave', 'splitRow', 'parseMdTable', 'cellEsc', 'buildMdTable', 'emptyLike', 'tableShapeOf', 'tableMismatch', 'gridFits', 'mdInline', 'tableHTML', 'hasSource', 'srcBtn', 'devFlag', 'firstSegForPage', 'linkifyPages', 'autoTermsFilter', 'headingTitle', 'computeSections', 'sectionStats', 'segState', 'padWidth', 'railLabel',
       'windowStartFor', 'windowLabel', 'goToWindow', 'railGoto', 'pageEarlier', 'pageLater', 'jumpToLastTranslated', 'lastTranslatedIndex',
       'roman', 'headingDepths', 'railModel', 'flowCells', 'railWhere', 'railCellClass', 'railOpen', 'applyRailOpen', 'setRailOpen'].map(fn), block('const ICON='), block('window.mergeDown='), block('window.undoMerge='),
   'return {segType,inlineParse,findSpans,renderSource,refMismatch,neighborText,canMerge,exportText,normalizeProject,' +
-  'headingTitle,computeSections,sectionStats,isDone,mergeMeta,projectForSave,parseMdTable,buildMdTable,emptyLike,tableShapeOf,tableMismatch,gridFits,tableHTML,hasSource,srcBtn,devFlag,hasPageRef,pageRefFlag,docxComment,firstSegForPage,linkifyPages,autoTermsFilter,mergeDown:(i)=>window.mergeDown(i),undoMerge:()=>window.undoMerge(),getP:()=>P,segState,railLabel,roman,headingDepths,railModel,flowCells,railWhere,railCellClass,railOpen,applyRailOpen,setRailOpen,RAIL_PER_ROW,' +
+  'headingTitle,computeSections,sectionStats,isDone,mergeMeta,projectForSave,parseMdTable,buildMdTable,emptyLike,tableShapeOf,tableMismatch,gridFits,tableHTML,hasSource,srcBtn,devFlag,mdFileName,mdBlob,hasPageRef,pageRefFlag,docxComment,firstSegForPage,linkifyPages,autoTermsFilter,mergeDown:(i)=>window.mergeDown(i),undoMerge:()=>window.undoMerge(),getP:()=>P,segState,railLabel,roman,headingDepths,railModel,flowCells,railWhere,railCellClass,railOpen,applyRailOpen,setRailOpen,RAIL_PER_ROW,' +
   'windowStartFor,windowLabel,goToWindow,railGoto,pageEarlier,pageLater,jumpToLastTranslated,PREFS_:()=>PREFS,LAYOUT,SAVED,' +
   'getWin:()=>winStart,setWin:v=>{winStart=v},calls:CALLS,setMerge:v=>{MERGE_MODE=v},setP:p=>{P=p},setSearch:q=>{SEARCH={query:q}}};'
 ].join('\n');
@@ -320,6 +320,10 @@ check('sections: heading with a footnote ref keeps the title clean', api.heading
   check('export: a placeholder goes out as it is, translated or not', api.exportText([img], [null]) === img && api.exportText([img], ['x']) === img);
   check('export: a caption translation goes back into its fence', api.exportText([cap], ['*Şek. 5:* Bir kedi']) === '::: {custom-style="Caption"}\n*Şek. 5:* Bir kedi\n:::');
   check('export: an untranslated table stays a table', api.exportText([tab], [null]) === tab);
+  // the Markdown export downloads <project name>.md as text/markdown
+  check('markdown export: the file is <project name>.md', api.mdFileName('My Book') === 'My_Book.md' && api.mdFileName('') === 'ceviri.md'
+        && !api.mdFileName('Kitap').endsWith('.txt'), api.mdFileName('My Book'));
+  check('markdown export: the blob is text/markdown in UTF-8', api.mdBlob('# Başlık').type === 'text/markdown;charset=utf-8', api.mdBlob('x').type);
   // in-book page references: a gutter mark and, in the Word export, a Pandoc comment span around the text only
   api.setP({segments: ['See p. 42.', 'Plain.'], segMeta: [{pages: [3], flags: ['sayfa-gonderme'], page_refs: ['s.42']}, {pages: [3], flags: []}]});
   check('page reference: a gutter mark with the note, none elsewhere', api.pageRefFlag(0).includes('Sayfa göndermesi: Türkçe baskıda sayfa numarası değişecek.') && api.pageRefFlag(1) === '');
