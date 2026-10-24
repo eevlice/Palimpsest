@@ -92,6 +92,49 @@ check("review copy: inline italics and footnote refs as runs", any(r_.italic and
       and any(r_.font.superscript and r_.text == "1" for r_ in t.cell(2, 1).paragraphs[0].runs))
 check("review copy: placeholders as text, untranslated marked", t.cell(3, 0).text == "[Görsel · s.4]" and t.cell(4, 1).text.startswith("[UNTRANSLATED]"))
 
+# ---------------------------------------------------------------- Word: named blocks get their own styles
+md = "\n\n".join([
+    "# Bölüm",
+    '::: {custom-style="Epigraph"}\nÖrnek bir epigraf cümlesi.\n:::',
+    '::: {custom-style="Attribution"}\n—Bir Şair, *Bir Kitap*\n:::',
+    "Gövde paragrafı.",
+    "> Girintili bir alıntı burada duruyor.",
+    '::: {custom-style="Verse"}\nBirinci dize\\\nİkinci dize\\\nÜçüncü dize\n:::',
+    '::: {custom-style="Box"}\nKutudaki metin.\n:::',
+])
+r = c.post("/export_docx", json={"mode": "word", "name": "adli", "markdown": md})
+d = docx.Document(io.BytesIO(r.data))
+by_text = {p.text: p.style.name for p in d.paragraphs if p.text.strip()}
+check("named blocks: Epigraph, Attribution, Block Text, Box styles", by_text.get("Örnek bir epigraf cümlesi.") == "Epigraph"
+      and by_text.get("—Bir Şair, Bir Kitap") == "Attribution" and by_text.get("Girintili bir alıntı burada duruyor.") == "Block Text"
+      and by_text.get("Kutudaki metin.") == "Box", by_text)
+verse = [p for p in d.paragraphs if p.text.startswith("Birinci dize")]
+check("a verse is one Verse paragraph with its line breaks", len(verse) == 1 and verse[0].style.name == "Verse"
+      and verse[0].text == "Birinci dize\nİkinci dize\nÜçüncü dize", [(p.text, p.style.name) for p in verse])
+styles = {s.name for s in d.styles}
+check("reference.docx carries the named block styles", {"Epigraph", "Block Text", "Verse", "Attribution", "Box"} <= styles)
+rows = [{"src": '::: {custom-style="Verse"}\nOne line\\\nTwo line\n:::', "tgt": '::: {custom-style="Verse"}\nBir dize\\\nİki dize\n:::'},
+        {"src": "> A quote.", "tgt": "> Bir alıntı."}]
+r = c.post("/export_docx", json={"mode": "redaksiyon", "name": "r", "rows": rows})
+t = docx.Document(io.BytesIO(r.data)).tables[0]
+check("review copy: verse keeps its lines, the quote is Block Text", t.cell(1, 1).paragraphs[0].style.name == "Verse"
+      and t.cell(1, 1).text == "Bir dize\nİki dize" and t.cell(2, 1).paragraphs[0].style.name == "Block Text" and t.cell(2, 1).text == "Bir alıntı.",
+      (t.cell(1, 1).text, t.cell(2, 1).text))
+
+# ---------------------------------------------------------------- verse: the prompt asks for lines (no model call)
+seen = {}
+server.keys.get_key = lambda provider: "test-key"
+server.spending.log_call = lambda *a, **k: None
+def fake_call(provider, model, system_text, standing, per_call, effort="off"):
+    seen["system"], seen["per_call"] = system_text, per_call
+    return "Bir dize iki dize", 0.0, {"input": 1, "output": 1, "cache_read": 0, "cache_write": 0}
+server.providers.call = fake_call
+r = c.post("/translate_simple", json={"model": "anthropic::claude-opus-5-5", "text": '::: {custom-style="Verse"}\nOne line\\\nTwo line\n:::'})
+j = r.get_json()
+check("verse: the prompt asks to keep the lines, the model sees no fence or backslash", "verse" in seen["system"] and "One line\nTwo line" in seen["per_call"]
+      and ":::" not in seen["per_call"] and "\\" not in seen["per_call"], seen.get("per_call", "")[-200:])
+check("verse collapsed to one line: a warning", any("tek satıra" in w for w in j["warnings"]), j)
+
 # ---------------------------------------------------------------- no Pandoc: a clear Turkish error, nothing else breaks
 saved = sys.modules.get("pypandoc")
 sys.modules["pypandoc"] = None

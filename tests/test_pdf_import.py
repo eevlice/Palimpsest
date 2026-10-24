@@ -176,9 +176,10 @@ def extra_poem(p):
             ("poem line three ends", 117, 372, "Verse-Italic", 12), ("POET NAME", 117, 392, "Verse-Bold", 9)]
 d2 = make_doc(extra=extra_poem)
 md2, _ = P.build_markdown(d2, 0, 7)
-check("poem lines keep line breaks inside one segment", "*POEM LINE ONE short*  \n*poem line two is also short*" in md2 or "POEM LINE ONE short  \n" in md2, md2[md2.find("POEM") - 5: md2.find("POEM") + 120])
+check("poem lines keep line breaks inside one Verse segment", '::: {custom-style="Verse"}\n*POEM LINE ONE short*\\\n*poem line two is also short*\\\n'
+      in md2, md2[md2.find("POEM") - 40: md2.find("POEM") + 120])
 seg = [s for s in md2.split("\n\n") if "POEM LINE ONE" in s]
-check("poem is a single blank-line-delimited segment", len(seg) == 1 and seg[0].count("\n") == 2, seg)
+check("poem is a single blank-line-delimited segment", len(seg) == 1 and seg[0].count("\n") == 4, seg)
 
 # one-off heading inside the body (style seen once)
 check("a short, larger, one-off style between paragraphs is promoted to a heading", any("one off heading" in h for h in heads), heads)
@@ -584,7 +585,8 @@ segs = [s for s in md.split("\n\n") if s.strip()]
 meta = d.seg_meta
 check("seg_meta: one entry per segment", len(meta) == len(segs), (len(meta), len(segs)))
 i_odd = next(i for i, s in enumerate(segs) if "stray line" in s)
-check("a block set apart from body text that joins nothing is flagged", meta[i_odd]["flags"] == ["stil-farkli"] and st["style_flags"] == 1, meta[i_odd])
+check("a block set apart from body text that joins nothing is flagged", "stil-farkli" in meta[i_odd]["flags"] and "font" in meta[i_odd]["flags"]
+      and st["style_flags"] == 1, meta[i_odd])
 i_cut = next(i for i, s in enumerate(segs) if "Even among CEOs" in s)
 check("seg_meta of a joined paragraph: its page, both boxes, the body style", meta[i_cut]["pages"] == [4] and len(meta[i_cut]["boxes"]) == 2
       and meta[i_cut]["style"] == "Body-Regular 11" and meta[i_cut]["boxes"][0][0] == 4, meta[i_cut])
@@ -899,6 +901,91 @@ d = P.Doc([flag_page(p) for p in range(1, 9)])
 md, st = P.build_markdown(d, 0, 7)
 check("a set-apart block in the margin band goes and is counted", "Odd margin note" not in md and st["flag_removed"] == 1, st["flag_removed"])
 check("a set-apart block in the text stays, flagged for review", "odd set-apart remark" in md and st["style_flags"] == 1, st["style_flags"])
+
+# ================================================================ round 7: named block roles from shape
+from segtypes import seg_type as _st
+
+
+def named_page(p):
+    rows = [([("Chapter Title %d" % p, "Head-Bold")], 100, 90, 16)]
+    if p == 3:                                                    # epigraph + attribution with the work's title
+        rows += [([("Plain sample words set in a narrower measure, than when", B)], 130, 130),
+                 ([("they open a chapter, says the sample.", B)], 130, 144),
+                 ([("—A. Poet,", "Small-Regular")], 405 - 9 * 5.5, 160, 11),
+                 ([("A Book of Lines", "Small-Italic")], 405 - 15 * 5.5, 174, 11)]
+        rows += prose(p, 210, 6)
+    elif p == 4:                                                  # block quote inside the flow
+        rows += prose(p, 130, 4) + [([("A quoted passage from another book that runs on over a long", B)], 130, 200),
+                                    ([("second line and ends right here with a full stop.", B)], 130, 214),
+                                    ([("(A. Writer)", "Small-Regular")], 130, 230, 10)] + prose(p, 254, 4)
+    elif p == 5:                                                  # verse: short lines of irregular length
+        rows += prose(p, 130, 4) + [([(t, "Verse-Italic")], 130, 196 + 14 * k) for k, t in enumerate(
+            ["Short line one", "a much longer second line of the poem", "third", "and the fourth and last one"])] + prose(p, 270, 4)
+    elif p == 7:                                                  # a deviation no rule names: centered
+        rows += prose(p, 130, 4) + [([("A centered remark", B)], 281.5 - 17 * 2.75, 200)] + prose(p, 226, 4)
+    else:
+        rows += prose(p, 130, 8)
+    return page_runs(p, rows)
+d = P.Doc([named_page(p) for p in range(1, 9)])
+md, st = P.build_markdown(d, 0, 7)
+segs = [x for x in md.split("\n\n") if x.strip()]
+meta = d.seg_meta
+types = [_st(x)["type"] for x in segs]
+i_epi = next(i for i, x in enumerate(segs) if "Plain sample words set" in x)
+check("epigraph: set apart right after a chapter heading, one Epigraph segment", types[i_epi] == "epigraph" and types[i_epi - 1] == "heading"
+      and "measure, than when they open a chapter" in segs[i_epi], segs[i_epi - 1:i_epi + 2])
+check("attribution: the dash line and the work's title line are one Attribution segment", types[i_epi + 1] == "attribution"
+      and "—A. Poet, *A Book of Lines*" in segs[i_epi + 1], segs[i_epi + 1])
+check("epigraph meta: role, confidence and the shape reasons", meta[i_epi]["role"] == "epigraph" and meta[i_epi]["conf"] >= 0.7
+      and {"indent", "indent-right"} <= set(meta[i_epi]["flags"]) and "stil-farkli" not in meta[i_epi]["flags"], meta[i_epi])
+i_q = next(i for i, x in enumerate(segs) if "quoted passage" in x)
+check("block quote: indented inside the flow, '> ' segment, body before and after", types[i_q] == "blockquote" and types[i_q - 1] == "para"
+      and types[i_q + 2] == "para" and "over a long second line" in segs[i_q], segs[i_q])
+check("a name in parentheses under a quote is its attribution", types[i_q + 1] == "attribution" and "(A. Writer)" in segs[i_q + 1], segs[i_q + 1])
+i_v = next(i for i, x in enumerate(segs) if "Short line one" in x)
+check("verse: lines kept with hard breaks in one Verse segment", types[i_v] == "verse"
+      and "*Short line one*\\\n*a much longer second line of the poem*\\\n*third*\\\n" in segs[i_v], segs[i_v])
+i_c = next(i for i, x in enumerate(segs) if "centered remark" in x)
+check("a deviation no rule names keeps the review flag, with its reason", types[i_c] == "para" and "centered" in meta[i_c]["flags"]
+      and "stil-farkli" in meta[i_c]["flags"] and meta[i_c]["role"] is None, meta[i_c])
+plain = [i for i, x in enumerate(segs) if x.startswith("Body 0 of page 2")]
+check("a normal paragraph has no reasons", plain and meta[plain[0]]["flags"] == [], meta[plain[0]] if plain else None)
+check("role counts in the stats", st["role_epigraph"] == 1 and st["role_attribution"] == 2 and st["role_blockquote"] == 1 and st["role_verse"] == 1, st)
+
+# a quote cut by a page break goes on in a one-line, unindented rest at the top of the next page
+def cut_page(p):
+    rows = [([("Chapter Title %d" % p, "Head-Bold")], 100, 90, 16)] if p != 4 else []
+    if p == 3:
+        rows += prose(p, 130, 30) + [([("A quoted passage from another book that runs on over a long", B)], 130, 560),
+                                     ([("way down the page and is broken at the end of it with frag-", B)], 130, 574)]
+    elif p == 4:
+        rows += [([("mentation of the sample.", B)], 100, 130)] + prose(p, 160, 6)
+    else:
+        rows += prose(p, 130, 8)
+    return page_runs(p, rows)
+d = P.Doc([cut_page(p) for p in range(1, 9)])
+md, st = P.build_markdown(d, 0, 7)
+q = [x for x in md.split("\n\n") if x.startswith("> ")]
+check("a quote cut by a page break takes its rest from the next page (hyphen joined)", len(q) == 1
+      and q[0].endswith("with fragmentation of the sample."), q)
+
+# box: a tinted panel's paragraphs are Box segments, its first short line in another style the box title
+def box_page(p):
+    rows = [([("Chapter Title %d" % p, "Head-Bold")], 100, 90, 16)] + prose(p, 130, 4)
+    if p == 2:
+        rows += [([("Box Title", "BoxHead-Bold")], 110, 210)] + [([("Inside the box the text reads on in its own panel line %d." % k, B)], 110, 226 + 14 * k)
+                                                               for k in range(3)]
+    rows += prose(p, 300, 4)
+    chars = []
+    for r in rows:
+        chars += runs_line(r[0], r[1], r[2], len(chars), *r[3:])
+    return P.build_blocks(p, W, H, chars, [(100, 195, 470, 270)] if p == 2 else [])
+d = P.Doc([box_page(p) for p in range(1, 9)])
+md, st = P.build_markdown(d, 0, 7)
+segs = [x for x in md.split("\n\n") if x.strip()]
+boxed = [x for x in segs if _st(x)["type"] == "box"]
+check("box: title and text inside a tinted panel are Box segments", len(boxed) == 2 and "**Box Title**" in boxed[0]
+      and "own panel line 0" in boxed[1] and "line 2." in boxed[1], boxed)
 
 print("FAILED %d" % failed if failed else "ALL PASS")
 sys.exit(1 if failed else 0)

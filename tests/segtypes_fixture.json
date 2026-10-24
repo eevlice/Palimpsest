@@ -27,5 +27,14 @@
   {"text": "| a | b |\n| :---: | ---: |", "type": {"type": "table"}},
   {"text": "| a | b |", "type": {"type": "para"}},
   {"text": "| a | b |\n|--|--|", "type": {"type": "para"}},
-  {"text": "| a | b |\n|---|---|\nson satır çubuksuz", "type": {"type": "para"}}
+  {"text": "| a | b |\n|---|---|\nson satır çubuksuz", "type": {"type": "para"}},
+  {"text": "::: {custom-style=\"Epigraph\"}\nÖrnek epigraf.\n:::", "type": {"type": "epigraph"}},
+  {"text": "::: {custom-style=\"Verse\"}\nBirinci dize\\\nİkinci dize\n:::", "type": {"type": "verse"}},
+  {"text": "::: {custom-style=\"Attribution\"}\n—Bir Şair\n:::", "type": {"type": "attribution"}},
+  {"text": "::: {custom-style=\"Box\"}\nKutu metni.\n:::", "type": {"type": "box"}},
+  {"text": "::: {custom-style=\"Sidebar\"}\nBilinmeyen stil\n:::", "type": {"type": "para"}},
+  {"text": "> Bir alıntı.", "type": {"type": "blockquote"}},
+  {"text": ">bitişik", "type": {"type": "blockquote"}},
+  {"text": "Metin > içinde", "type": {"type": "para"}},
+  {"text": "::: {custom-style=\"Verse\"}\nTek satır\n:::\n", "type": {"type": "para"}}
 ]

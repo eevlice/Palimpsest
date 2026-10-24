@@ -32,8 +32,8 @@ function line(prefix) {           // a one-line top-level statement
   return src.slice(at, src.indexOf('\n', at));
 }
 const code = [
-  line('const esc='), line('const SEG_H='), line('const SEG_REF='), line('const SEG_IMG='), line('const SEG_CAP='), line('const SEG_TAB='), line('const CAP_OPEN='), line("const MASK="), line('const PARSE_CACHE='), line('const WIN='), line('const RAIL_PER_ROW='), line('const STATE_CLS='),
-  ...['foldCase', 'segType', 'segMarkerLen', 'segTailLen', 'fnNumber', 'typeOf', 'refLabels', 'maskRefs',
+  line('const esc='), line('const SEG_H='), line('const SEG_REF='), line('const SEG_IMG='), line('const SEG_CAP='), line('const SEG_TAB='), line('const CAP_OPEN='), line('const SEG_FENCE='), line('const FENCE_TYPE='), line('const SEG_BQ='), line('const FENCE_STYLE_OF='), line('const NAMED='), line("const MASK="), line('const PARSE_CACHE='), line('const WIN='), line('const RAIL_PER_ROW='), line('const STATE_CLS='),
+  ...['foldCase', 'segType', 'segMarkerLen', 'segTailLen', 'wrapSeg', 'fnNumber', 'typeOf', 'refLabels', 'maskRefs',
       'inlineParse', 'isWordChar', 'findSpans', 'parseTerms', 'glossHitsForText',
       'searchSpans', 'renderSource', 'refMismatch', 'neighborText', 'canMerge', 'exportText',
       'normalizeProject', 'isDone', 'mergeMeta', 'projectForSave', 'splitRow', 'parseMdTable', 'cellEsc', 'buildMdTable', 'emptyLike', 'tableShapeOf', 'tableMismatch', 'gridFits', 'mdInline', 'tableHTML', 'hasSource', 'srcBtn', 'devFlag', 'firstSegForPage', 'linkifyPages', 'autoTermsFilter', 'headingTitle', 'computeSections', 'sectionStats', 'segState', 'padWidth', 'railLabel',
@@ -98,6 +98,14 @@ check('visible text drops marker', api.inlineParse('## Alt başlık').vis === 'A
 check('visible text drops delimiters', api.inlineParse('a **b** *c* d').vis === 'a b c d');
 check('refs are barriers in visible text', api.inlineParse('x[^a-1]y').vis === 'x\u0001\u0001\u0001\u0001\u0001\u0001y');
 check('stray asterisks are text', api.inlineParse('5 * 3 * 2').vis === '5 * 3 * 2');
+// named blocks: markers and a verse's hard breaks are not visible; export puts a marker-less translation back in
+const V = '::: {custom-style="Verse"}\n*One* line\\\nTwo line\n:::';
+check('verse: visible text keeps the lines, drops fence and backslashes', api.inlineParse(V).vis === 'One line\nTwo line', JSON.stringify(api.inlineParse(V).vis));
+check('blockquote: visible text drops "> "', api.inlineParse('> Bir alıntı').vis === 'Bir alıntı');
+check('export re-wraps a verse translation with hard breaks', api.exportText([V], ['Bir dize\nİki dize']) === '::: {custom-style="Verse"}\nBir dize\\\nİki dize\n:::', JSON.stringify(api.exportText([V], ['Bir dize\nİki dize'])));
+check('export re-wraps epigraph, attribution, box and quote', api.exportText(['::: {custom-style="Epigraph"}\nA\n:::', '::: {custom-style="Attribution"}\n—B\n:::', '::: {custom-style="Box"}\nC\n:::', '> D'], ['a', '—b', 'c', 'd'])
+  === '::: {custom-style="Epigraph"}\na\n:::\n\n::: {custom-style="Attribution"}\n—b\n:::\n\n::: {custom-style="Box"}\nc\n:::\n\n> d');
+check('untranslated named block keeps its fence', api.exportText(['::: {custom-style="Epigraph"}\nA\n:::'], [null]) === '::: {custom-style="Epigraph"}\n[UNTRANSLATED] A\n:::');
 check('unclosed ** is text', api.inlineParse('**oops and *oops').vis === '**oops and *oops');
 check('nested italic inside bold', api.inlineParse('**a *b* c**').vis === 'a b c');
 check('glossary: "b1" does not match inside [^b1-1]', api.findSpans(P.segments[1], 'b1').length === 0);

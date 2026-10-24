@@ -3,6 +3,9 @@ Segment types, derived from the source markdown every time - never stored.
 
     "![Görsel · s.94](gorsel-94-1)" -> image (a placeholder; never translated)
     '::: {custom-style="Caption"}' / text / ':::' -> caption (translated; Pandoc gives it the Word style "Caption")
+    the same fence with Epigraph / Verse / Attribution / Box -> epigraph, verse, attribution, box (Word styles of
+                                    the same names); a verse keeps its lines, each but the last ending in "\"
+    "> text"                      -> blockquote (Word style "Block Text")
     "| a | b |" / "|---|---|" ...    -> table (a markdown table; translated cell by cell)
     "# Title", "## Sub" ...        -> heading (with level)
     "[^label]: text"              -> footnote (with label)
@@ -27,19 +30,28 @@ PLACEHOLDER = re.compile(r"⟦(\d+)⟧")
 IMAGE = re.compile(r"^!\[[^\]\r\n]*\]\([^)\s]+\)\Z")
 CAPTION_OPEN, CAPTION_CLOSE = '::: {custom-style="Caption"}\n', "\n:::"
 CAPTION = re.compile(r'^::: \{custom-style="Caption"\}\n([\s\S]*)\n:::\Z')
+# the named blocks share the caption's fence; FENCED covers all of them, CAPTION stays for the caption alone
+FENCED = re.compile(r'^::: \{custom-style="(Caption|Epigraph|Verse|Attribution|Box)"\}\n([\s\S]*)\n:::\Z')
+FENCE_TYPE = {"Caption": "caption", "Epigraph": "epigraph", "Verse": "verse", "Attribution": "attribution", "Box": "box"}
+FENCE_STYLE = {v: k for k, v in FENCE_TYPE.items()}
+BLOCKQUOTE = re.compile(r"^>[ \t]?")
+HARD_BREAK = re.compile(r"\\\n")             # a Pandoc hard line break: backslash at the end of a line
 TABLE = re.compile(r"^\|[^\n]*\|[ \t]*\n\|(?:[ \t]*:?-{3,}:?[ \t]*\|)+[ \t]*(?:\n\|[^\n]*\|[ \t]*)*\Z")
 
 
 def seg_type(s):
     if IMAGE.match(s):
         return {"type": "image"}
-    if CAPTION.match(s):
-        return {"type": "caption"}
+    m = FENCED.match(s)
+    if m:
+        return {"type": FENCE_TYPE[m.group(1)]}
     if TABLE.match(s):
         return {"type": "table"}
     m = HEADING.match(s)
     if m:
         return {"type": "heading", "level": len(m.group(1))}
+    if BLOCKQUOTE.match(s):
+        return {"type": "blockquote"}
     m = FOOTNOTE.match(s)
     if m:
         return {"type": "footnote", "label": m.group(1)}
@@ -47,12 +59,25 @@ def seg_type(s):
 
 
 def strip_marker(s):
-    """Drop the leading '## ' or '[^label]: ', or a caption's fence lines - nothing else."""
-    m = CAPTION.match(s)
+    """Drop the leading '## ' or '[^label]: ', a fence's lines (and a verse's line-end backslashes: the lines stay
+    lines), or a block quote's '> ' - nothing else."""
+    m = FENCED.match(s)
     if m:
-        return m.group(1)
+        return HARD_BREAK.sub("\n", m.group(2))
+    if BLOCKQUOTE.match(s):
+        return re.sub(r"(?m)^>[ \t]?", "", s)
     m = HEADING.match(s) or FOOTNOTE.match(s)
     return s[m.end():] if m else s
+
+
+def wrap(text, t):
+    """the inverse of strip_marker for the types whose translation is kept without its marker"""
+    if t in ("epigraph", "verse", "attribution", "box", "caption"):
+        body = "\\\n".join(text.split("\n")) if t in ("verse", "epigraph") else text
+        return '::: {custom-style="%s"}\n%s\n:::' % (FENCE_STYLE[t], body)
+    if t == "blockquote":
+        return "\n".join("> " + x for x in text.split("\n"))
+    return text
 
 
 def table_shape(s):
@@ -85,9 +110,16 @@ def from_model(out, prompt_text, labels, src_type):
         out = HEADING.sub("", out, count=1)
     elif src_type["type"] == "footnote":
         out = FOOTNOTE.sub("", out, count=1)
-    elif src_type["type"] == "caption":
-        m = CAPTION.match(out.strip())
-        out = m.group(1) if m else out
+    elif src_type["type"] in FENCE_STYLE:
+        m = FENCED.match(out.strip())
+        out = HARD_BREAK.sub("\n", m.group(2)) if m else out.strip()
+        if src_type["type"] in ("verse", "epigraph"):
+            out = re.sub(r"\\$", "", out, flags=re.M)        # a hard break echoed back
+            n_src, n_out = prompt_text.count("\n") + 1, out.strip().count("\n") + 1
+            if n_src > 1 and n_out == 1:
+                warnings.append("Şiir satırları tek satıra indi: kaynakta %d satır, çeviride 1" % n_src)
+    elif src_type["type"] == "blockquote":
+        out = re.sub(r"(?m)^>[ \t]?", "", out.strip())
     elif src_type["type"] == "table":
         out = out.strip()
         (rs, cs), (ro, co) = table_shape(prompt_text), table_shape(out)

@@ -515,6 +515,12 @@ def _cell(cell, seg):
     elif t == "caption":
         par.style = "Caption"
         _runs(par, st.strip_marker(seg))
+    elif t in ("epigraph", "verse", "attribution", "box", "blockquote"):
+        par.style = {"blockquote": "Block Text"}.get(t, st.FENCE_STYLE.get(t))
+        for k, line in enumerate(st.strip_marker(seg).split("\n")):
+            if k:
+                par.add_run().add_break()
+            _runs(par, line)
     elif t == "image":
         par.style = "Body Text"
         par.add_run("[" + seg[2:seg.index("]")] + "]")
@@ -551,7 +557,8 @@ def redaction_docx(rows, ref):
 @app.route("/export_docx", methods=["POST"])
 def export_docx():
     """Word export. mode "word": the translation through Pandoc with reference.docx (Heading 1-3, Body Text, First
-    Paragraph, Caption; tables as Word tables, footnotes as Word footnotes). mode "redaksiyon": a two-column review
+    Paragraph, Caption, Epigraph, Block Text, Verse, Attribution, Box; tables as Word tables, footnotes as Word
+    footnotes). mode "redaksiyon": a two-column review
     table. The markdown and the rows come from the page (the same exportText the Markdown export uses)."""
     d = request.get_json() or {}
     ref = os.path.join(HERE, "reference.docx")
@@ -711,6 +718,11 @@ def translate_simple():
             system_text += (" The text to translate is a markdown table: translate only the text inside the cells. "
                             "Keep every | character, every row, the |---| separator row and the empty cells exactly "
                             "as they are; do not add or remove rows or columns.")
+        if src_type["type"] == "verse" or (src_type["type"] == "epigraph" and "\n" in text):
+            # a poem: from_model warns when its lines come back as one
+            system_text += (" The text to translate is verse: keep it in lines, one line of the translation per "
+                            "line break; the number of lines may differ where the translation needs it, but never "
+                            "run the poem together into a single line.")
         standing = build_standing_context(
             d.get("synopsis", ""), d.get("terms", ""),
             d.get("rules", ""), segtypes.strip_block(d.get("style_sample", "") or ""))

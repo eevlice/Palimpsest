@@ -30,7 +30,7 @@ class PdfImportError(Exception):
 
 
 ROLES = ["kısım", "bölüm", "alt başlık 1", "alt başlık 2", "gövde", "kutu", "kutu-başlık",
-         "şiir", "epigraf", "atıf", "liste", "ön sayfa", "sil"]
+         "şiir", "epigraf", "alıntı", "atıf", "liste", "ön sayfa", "sil"]
 HEAD = {"kısım": 1, "bölüm": 2, "alt başlık 1": 3, "alt başlık 2": 4}   # internal depth
 MD_LEVEL = {1: 1, 2: 1, 3: 2, 4: 3}                                    # '#' count written to the markdown
 NUM = re.compile(r"^\s*\d+\.\s")
@@ -593,6 +593,11 @@ def build_blocks(page_no, W, H, chars, boxes, orn_fonts=frozenset(), images=(), 
             return False
         return (cur["style"] in l["mix"] or l["style"] in a["mix"]
                 or (not terminal(a["plain"]) and bool(re.match(r"[\W\d_]*[a-z]", l["plain"]))))
+    def indented_run(l, a, mg):
+        """an indented line under a line with the same indent is no first-line indent but an indented block (a quote,
+        an epigraph) going on: the line above ran to the right edge without ending its sentence"""
+        return (abs(l["x0"] - a["x0"]) < 1 and a["x0"] - mg > 0.7 * l["size"] and a["x1"] >= right - 3 * a["size"]
+                and not terminal(a["plain"]))
     for l in lines:
         if cur is None:
             cur = new(l)
@@ -609,7 +614,8 @@ def build_blocks(page_no, W, H, chars, boxes, orn_fonts=frozenset(), images=(), 
             brk = True
         elif ITEM.match(l["plain"]) and len(l["plain"].strip()) > 3:
             brk = True
-        elif l["x0"] - mg > 0.7 * l["size"] and not (cur["list"] and l["x0"] >= cur["lines"][0]["x0"] - 1):
+        elif (l["x0"] - mg > 0.7 * l["size"] and not (cur["list"] and l["x0"] >= cur["lines"][0]["x0"] - 1)
+              and not indented_run(l, a, mg)):
             brk = True
         else:
             brk = False
@@ -657,6 +663,7 @@ class Doc:
         self._title_running_heads()
         self._index_pages()
         self._object_groups()
+        self._shape_roles()
         self.lex = self._hyphen_lexicon()
 
     # -- margin text: running heads/feet, page numbers, slug, watermark ------------------------------
@@ -1056,7 +1063,7 @@ class Doc:
 
         def fits(b, where):
             cap = bool(CAPTION.match(b["text"].replace("*", "")))
-            if b["role"] in ("kısım", "bölüm", "liste", "şiir", "epigraf", "atıf", "dizin") or b.get("obj"):
+            if b["role"] in ("kısım", "bölüm", "liste", "şiir", "epigraf", "alıntı", "atıf", "dizin") or b.get("obj"):
                 return False
             if b["role"] in HEAD and where == "below" and not cap:
                 return False
@@ -1100,7 +1107,196 @@ class Doc:
                     if band or PAGE_NO.match(b["text"]) or re.fullmatch(r"[\W\d_]*", b["text"]):
                         b["role"], b["flag_removed"] = "sil", True
                     else:
-                        b["flags"] = ["stil-farkli"]
+                        b["font_dev"] = True            # a deviation reason; _shape_roles names it or flags it
+
+    # -- named block roles from shape: epigraph, block quote, verse, attribution, box -------------------------------
+    def _columns(self):
+        """the body text column of every page: (left, right) from its body paragraphs (first lines may be indented,
+        last lines short, so those are left out); pages without enough body take the median of pages of the same
+        parity (facing pages mirror their margins)"""
+        col, par = {}, {0: ([], []), 1: ([], [])}
+        for p in self.pages:
+            xs, rs = [], []
+            for b in p["blocks"]:
+                if b["role"] == "gövde" and b["style"] in self.body_styles and b["box"] is None and len(b["lines"]) >= 2:
+                    xs += [l["x0"] for l in b["lines"][1:]]
+                    rs += [l["x1"] for l in b["lines"][:-1]]
+            if len(xs) >= 3:
+                col[p["p"]] = (statistics.median(xs), statistics.median(rs))
+                par[p["p"] % 2][0].append(col[p["p"]][0])
+                par[p["p"] % 2][1].append(col[p["p"]][1])
+        every = par[0][0] + par[1][0], par[0][1] + par[1][1]
+        for p in self.pages:
+            if p["p"] not in col:
+                L, R = par[p["p"] % 2] if par[p["p"] % 2][0] else every
+                col[p["p"]] = (statistics.median(L), statistics.median(R)) if L else (0.12 * p["W"], 0.88 * p["W"])
+        return col
+
+    def _geometry(self, b, L, R):
+        """indents against the body column, width, alignment and line-length spread of one block"""
+        ls, z = b["lines"], b["size"]
+        x0s, x1s = [l["x0"] for l in ls], [l["x1"] for l in ls]
+        n, colw = len(ls), max(1.0, R - L)
+        g = dict(n=n, first=x0s[0] - L, left=(statistics.median(x0s[1:]) if n > 1 else x0s[0]) - L,
+                 right=R - (statistics.median(x1s[:-1]) if n > 1 else x1s[0]), width=max(l["x1"] - l["x0"] for l in ls) / colw)
+        g["centered"] = all(abs((l["x0"] - L) - (R - l["x1"])) < 0.8 * z and l["x0"] - L > 1.5 * z for l in ls)
+        g["flush_right"] = all(abs(R - l["x1"]) < 0.8 * z for l in ls) and x0s[0] - L > 0.3 * colw
+        widths = [l["x1"] - l["x0"] for l in ls]
+        top = max(x1s)
+        g["justified"] = n >= 2 and all(abs(top - x) < 0.8 * z for x in x1s[:-1])
+        # spread of the line lengths, a paragraph's short last line left out
+        g["spread"] = statistics.pstdev(widths[:-1]) / statistics.mean(widths[:-1]) if n >= 3 else 0.0
+        g["hyphenated"] = any(re.search(r"[A-Za-z][\x02-]$", l["plain"].rstrip()) for l in ls[:-1])
+        return g
+
+    def _reasons(self, b, g):
+        """what sets a block apart from the book's normal paragraph (calibrated on the test books: a body paragraph
+        sits flush with the column within 1.2 body sizes, its first line indented by the book's usual amount)"""
+        z, pr = self.bsize, self.profile
+        r = []
+        if b.get("font_dev"):
+            r.append("font")
+        if g["centered"]:
+            r.append("centered")
+        elif g["flush_right"]:
+            r.append("right")
+        else:
+            # a body paragraph's lines after the first sit flush (within a point or two); an indented block's do not
+            if (g["left"] > 0.6 * z) if g["n"] > 1 else (g["first"] - pr["first"] > 1.2 * z):
+                r.append("indent")
+            if g["n"] > 1 and (g["right"] > 2.5 * z or (g["right"] > 0.6 * z and g["left"] > 0.6 * z)):
+                r.append("indent-right")
+        if g["n"] >= 2 and g["width"] < 0.75:
+            r.append("narrow")
+        if g["n"] >= 3 and g["spread"] > 0.2 and not g["justified"]:
+            r.append("ragged")
+        if b["italic_share"] > 0.6 and pr["italic"] < 0.3:
+            r.append("italic-block")
+        if b["size"] < z - 0.6:
+            r.append("smaller")
+        if g["n"] > 1 and g["left"] - g["first"] > 0.6 * z:
+            r.append("hanging")             # a reference or list entry: first line out, the rest indented
+        return r
+
+    @staticmethod
+    def _nameable(b):
+        """hanging-indent entries, list items, references and lists of web addresses are set apart, but never a quote
+        or verse"""
+        return ("hanging" not in b["why"] and not ITEM.match(b["text"]) and not re.search(r"://|www\.", b["text"])
+                and not re.search(r"\(\d{4}[a-z]?\)|\bet al\.|\bdoi\b|\bpp\. \d", b["text"]))
+
+    def _shape_roles(self):
+        """Every body-like block is measured against the book's normal paragraph; what deviates is named by rule:
+        - attribution: a short line that starts with a dash or sits flush right, right after an epigraph, quote or
+          verse (a second flush-right line, the work's title, joins it);
+        - epigraph: set apart, right after a heading (chapter or part start), body text following;
+        - verse: three or more short lines of irregular length, set apart, not justified;
+        - block quote: indented (one or both sides) inside the body flow, body text on both sides;
+        - box: the tinted/framed box logic.
+        Each named block keeps its reasons in flags and a confidence; a deviation no rule explains keeps the review
+        flag ("stil-farkli")."""
+        col = self._columns()
+        body = [b for p in self.pages for b in p["blocks"] if b["role"] == "gövde" and b["style"] in self.body_styles
+                and b["box"] is None]
+        firsts = [b["lines"][0]["x0"] - col[b["page"]][0] for b in body if len(b["lines"]) >= 2]
+        self.profile = dict(first=statistics.median(firsts) if firsts else 0.0,
+                            italic=statistics.median([b["italic_share"] for b in body]) if body else 0.0)
+        flow = [(p, b) for p in self.pages for b in p["blocks"]
+                if b["role"] not in ("sil", "ön sayfa", "dizin", "altyazı") and not b.get("obj")]
+        for p, b in flow:
+            if b["role"] in ("gövde", "kutu", "şiir", "epigraf", "atıf"):
+                b["geo"] = self._geometry(b, *col[p["p"]])
+                b["why"] = self._reasons(b, b["geo"])
+        named = ("epigraf", "alıntı", "şiir")
+        front = {p["p"] for p in self.pages[:min(8, max(2, int(0.03 * self.NP)))]}
+        # epigraphs first: right after a heading of the top two levels (a sub-section's own title starts none), a run
+        # of at most four short set-apart blocks (60 words each, 150 in all), an attribution possibly among them, and
+        # then the body resumes with a normal paragraph or a sub-heading
+        for k, (p, b) in enumerate(flow):
+            if b["role"] not in ("kısım", "bölüm", "alt başlık 1"):
+                continue
+            run, words, j = [], 0, k + 1
+            while (j < len(flow) and len(run) < 4 and flow[j][1].get("why") and flow[j][1]["role"] not in HEAD
+                   and flow[j][1]["nwords"] <= 60 and self._nameable(flow[j][1])):
+                run.append(flow[j][1])
+                words += flow[j][1]["nwords"]
+                j += 1
+            nb = flow[j][1] if j < len(flow) else None
+            if run and words <= 150 and nb is not None and ((nb["role"] == "gövde" and nb.get("why") == []) or nb["role"] in HEAD):
+                for x in run:
+                    if x is not run[0] and len(x["lines"]) <= 3 and x["nwords"] <= 25 and (DASH.match(x["text"]) or "right" in x["why"]):
+                        x["role"] = "atıf"      # named in the main pass below, with its title line
+                    else:
+                        x["role"], x["conf"], x["start"] = "epigraf", 0.9 if {"indent", "italic-block"} & set(x["why"]) else 0.7, True
+                        # an epigraph set in lines (a poem): most lines stop well short of the longest one
+                        ws = [l["x1"] - l["x0"] for l in x["lines"]]
+                        x["breaks"] = len(ws) >= 3 and sum(w < 0.9 * max(ws) for w in ws[:-1]) >= 0.5 * (len(ws) - 1)
+        k = 0
+        while k < len(flow):
+            p, b = flow[k]
+            prev = flow[k - 1][1] if k else None
+            nxt = flow[k + 1][1] if k + 1 < len(flow) else None
+            k += 1
+            if b["role"] in ("kutu", "kutu-başlık"):
+                b["conf"] = 0.9
+                continue
+            if "why" not in b:
+                continue
+            why, g = b["why"], b["geo"]
+            shape = set(why) - {"ragged"}
+            short = len(b["lines"]) <= 3 and b["nwords"] <= 25
+            # a source line: dash, flush right, a name in parentheses, or a few italic words ("Female, 16-17")
+            source = (DASH.match(b["text"]) or "right" in why or re.fullmatch(r"\(.{2,80}\)", b["text"].strip("* "))
+                      or (b["nwords"] <= 6 and "italic-block" in why))
+            if prev is not None and prev["role"] in named and short and source:
+                b["role"], b["conf"] = "atıf", 0.9 if DASH.match(b["text"]) else 0.7
+                # the work's title on its own line, right edge on the attribution's, belongs to the attribution
+                while (nxt is not None and abs(nxt["x1"] - b["x1"]) < 1.5 and len(nxt["lines"]) <= 2 and nxt["size"] <= b["size"] + 0.6
+                       and nxt["page"] == b["page"] and 0 <= nxt["top"] - b["bot"] < 1.5 * b["size"]):
+                    b["lines"] += nxt["lines"]
+                    _finish_block(b)
+                    p["blocks"].remove(nxt)
+                    flow.pop(k)
+                    nxt = flow[k][1] if k < len(flow) else None
+                continue
+            if b["role"] == "atıf" and prev is not None and prev["role"] in named:
+                b["conf"] = 0.8
+                continue
+            # a chapter or part start: a heading of the top two levels (a sub-section's own title starts no epigraph),
+            # or an epigraph that began there
+            if b.get("start"):
+                b["flags"] = why
+                continue
+            # a quote or poem cut by a page break (or by a note number between its parts) goes on at the same left edge
+            # and size
+            if (prev is not None and prev["role"] in ("alıntı", "şiir") and abs(b["x0"] - prev["x0"]) < 1.5
+                    and abs(b["size"] - prev["size"]) < 0.3
+                    and (prev["page"] != b["page"] or (not terminal(prev["text"]) and re.match(r"[*_]*[a-z]", b["text"])))):
+                b["role"], b["conf"], b["flags"] = prev["role"], prev.get("conf"), why
+                continue
+            if not self._nameable(b):
+                b["flags"] = why + ["stil-farkli"] if b.get("font_dev") else why
+                continue
+            body_next = nxt is not None and nxt["role"] in ("gövde", "kutu", "liste", "atıf") + tuple(HEAD)
+            layout = shape & {"indent", "indent-right", "narrow", "centered", "italic-block"}
+            # verse: short irregular lines of words set apart by layout (a list of web addresses is not verse)
+            # (prose broken over lines splits words at line ends; verse lines end with whole words)
+            verse = (len(b["lines"]) >= 3 and "ragged" in why and not g["justified"] and bool(layout) and not g["hyphenated"]
+                     and not re.search(r"://|www\.", b["text"]))
+            if verse or (b["role"] in ("şiir", "epigraf") and shape and not g["hyphenated"]):
+                # (the style rule names short-lined multi-line blocks şiir/epigraf; away from a chapter start: verse)
+                b["role"], b["conf"] = "şiir", 0.9 if b["role"] == "şiir" else 0.7
+            elif (("indent" in why or "indent-right" in why) and "centered" not in why and prev is not None
+                  and prev["role"] in ("gövde", "liste", "alıntı") + tuple(HEAD) and body_next):
+                b["role"], b["conf"] = "alıntı", 0.8 if "indent" in why and "indent-right" in why else 0.6
+            elif b["role"] in ("şiir", "epigraf"):
+                b["conf"] = 0.5                 # named by its style only
+            elif why:
+                # italics or a smaller size alone are emphasis or notes, not a layout to review; nor is the layout of
+                # the front pages (title, copyright, dedication, contents are set centered or narrow)
+                b["flags"] = why + ["stil-farkli"] if shape - {"smaller", "italic-block"} and p["p"] not in front else why
+                continue
+            b["flags"] = why
 
     def _index_pages(self):
         """A back-of-book index: pages in the last quarter of the book whose lines are mostly short entries ending in
@@ -1173,6 +1369,19 @@ class Doc:
 
 # ---------------------------------------------------------------------------- markdown writer
 CAPTION_OPEN, CAPTION_CLOSE = '::: {custom-style="Caption"}', ":::"
+# named block roles -> the segment type segtypes derives from the markdown, and its Word style (Pandoc custom-style)
+ROLE_TYPE = {"epigraf": "epigraph", "alıntı": "blockquote", "şiir": "verse", "atıf": "attribution", "kutu": "box",
+             "kutu-başlık": "box"}
+FENCE = {"epigraf": "Epigraph", "şiir": "Verse", "atıf": "Attribution", "kutu": "Box", "kutu-başlık": "Box"}
+
+
+def fenced(role, text):
+    return '::: {custom-style="%s"}\n%s\n:::' % (FENCE[role], text)
+
+
+def verse_lines(texts):
+    """lines kept as written: a Pandoc hard break (backslash at the line end) after every line but the last"""
+    return "\\\n".join(t.replace("\x02", "-") for t in texts)
 
 
 def terminal(s):
@@ -1219,8 +1428,9 @@ def _meta_of(b=None, page=None, box=None):
     """where a segment comes from: pages, boxes [page, x0, y0, x1, y1] (PDF points, top-left origin), style, flags"""
     if b is not None:
         return dict(pages={b["page_no"]}, boxes=[[b["page_no"]] + [round(v, 1) for v in (b["x0"], b["top"], b["x1"], b["bot"])]],
-                    style=_style_name(b["style"]), flags=set(b.get("flags", ())))
-    return dict(pages={page}, boxes=[[page] + [round(v, 1) for v in box]], style=None, flags=set())
+                    style=_style_name(b["style"]), flags=set(b.get("flags", ())),
+                    role=ROLE_TYPE.get(b["role"]) if b.get("conf") else None, conf=b.get("conf"))
+    return dict(pages={page}, boxes=[[page] + [round(v, 1) for v in box]], style=None, flags=set(), role=None, conf=None)
 
 
 def _meta_add(m, other):
@@ -1228,6 +1438,7 @@ def _meta_add(m, other):
     m["boxes"] += other["boxes"]
     m["flags"] |= other["flags"]
     m["style"] = m["style"] or other["style"]
+    m["role"], m["conf"] = m.get("role") or other.get("role"), m.get("conf") or other.get("conf")
 
 
 def build_markdown(doc, first_idx, last_idx):
@@ -1314,12 +1525,22 @@ def build_markdown(doc, first_idx, last_idx):
             if role in ("gövde", "kutu") and (len(re.sub(r"[\s*]", "", b["text"])) <= 2 or (len(toks_) <= 6 and all(len(t) == 1 for t in toks_))):
                 stats["dropped_words"] += b["nwords"]       # single stray letters: ornate lettering, not text
                 continue
-            if b.get("flags"):
+            if "stil-farkli" in b.get("flags", ()):
                 stats["style_flags"] += 1
+            if b.get("conf") and role in ROLE_TYPE:
+                stats["role_" + ROLE_TYPE[role]] += 1
             texts = [(l["md_nobold"] if role in HEAD else l["md"]).strip() for l in ls]
             box_here = b["box"] is not None
             if role in ("gövde", "kutu"):
                 text = join_lines(texts, lex, stats, amb)
+                last = md[-1] if md and cur is None else None
+                # a quote cut by a page break whose rest did not keep the quote's shape (one line, no indent)
+                if (last and last[0] == "quote" and not box_here and not terminal(last[1])
+                        and re.match(r"[*_]*[a-z]", text)):
+                    j = join_hyphen(last[1], text, doc.hyphen_real, stats, mark="-", amb=amb)
+                    md[-1] = ("quote", j if j is not None else last[1] + " " + text, last[2])
+                    _meta_add(last[2], _meta_of(b))
+                    continue
                 # a paragraph cut by a page break, or split into two blocks on the same page (around a drop cap, a
                 # removed running head, a line set mostly in italics): same family and size (italic/bold variants
                 # included), same box, no closing punctuation, lowercase start. With a figure or table in between
@@ -1361,11 +1582,21 @@ def build_markdown(doc, first_idx, last_idx):
                 else:
                     md.append(("head", dict(lvl=lvl, page=p["p"], base=b["lines"][-1]["base"], size=b["size"], text=t), _meta_of(b)))
             elif role == "kutu-başlık":
-                md.append(("raw", "**" + re.sub(r"\*+", "", join_lines(texts, lex, stats, amb)) + "**", _meta_of(b)))
-            elif role in ("şiir", "epigraf"):
-                md.append(("raw", "\n".join(t.replace("\x02", "-") + ("  " if i < len(texts) - 1 else "") for i, t in enumerate(texts)), _meta_of(b)))
-            elif role == "atıf":
-                md.append(("raw", "**" + re.sub(r"\*+", "", join_lines(texts, lex, stats, amb)) + "**", _meta_of(b)))
+                md.append(("raw", fenced(role, "**" + re.sub(r"\*+", "", join_lines(texts, lex, stats, amb)) + "**"), _meta_of(b)))
+            elif role == "şiir" or (role == "epigraf" and b.get("breaks")):
+                md.append(("raw", fenced(role, verse_lines(texts)), _meta_of(b)))
+            elif role in ("epigraf", "atıf"):
+                md.append(("raw", fenced(role, join_lines(texts, lex, stats, amb)), _meta_of(b)))
+            elif role == "alıntı":
+                text = join_lines(texts, lex, stats, amb)
+                last = md[-1] if md else None
+                # a quote cut by a page break goes on in the next page's quote
+                if last and last[0] == "quote" and not terminal(last[1]) and re.match(r"[*_]*[a-z]", text):
+                    j = join_hyphen(last[1], text, doc.hyphen_real, stats, mark="-", amb=amb)
+                    md[-1] = ("quote", j if j is not None else last[1] + " " + text, last[2])
+                    _meta_add(last[2], _meta_of(b))
+                else:
+                    md.append(("quote", text, _meta_of(b)))
             elif role == "liste":
                 t = join_lines(texts, lex, stats, amb)
                 # the number goes first, outside any emphasis: "**1. Lead-in.** text" -> "1. **Lead-in.** text"
@@ -1382,11 +1613,13 @@ def build_markdown(doc, first_idx, last_idx):
     flush()
     out, meta = [], []
     for kind, v, m in md:
-        text = v["text"] if kind == "p" else ("#" * MD_LEVEL[v["lvl"]] + " " + v["text"] if kind == "head" else v)
+        text = (v["text"] if not v.get("box") else fenced("kutu", v["text"])) if kind == "p" else (
+            "#" * MD_LEVEL[v["lvl"]] + " " + v["text"] if kind == "head" else "> " + v if kind == "quote" else v)
         if not text.strip():
             continue
         out.append(text)
-        meta.append(dict(pages=sorted(m["pages"]), boxes=m["boxes"], style=m["style"], flags=sorted(m["flags"])))
+        meta.append(dict(pages=sorted(m["pages"]), boxes=m["boxes"], style=m["style"], flags=sorted(m["flags"]),
+                         role=m.get("role"), conf=m.get("conf")))
     doc.seg_meta = meta
     return "\n\n".join(out) + "\n", stats
 

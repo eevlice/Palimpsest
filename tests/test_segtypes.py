@@ -96,5 +96,25 @@ check("table: an extra column is a warning", len(w) == 1 and "sütun" in w[0])
 check("table shape ignores an escaped pipe inside a cell", table_shape("| a \\| b | c |\n|---|---|") == (2, [2, 2]))
 check("context text of a caption has no fences", strip_for_context(cap) == "*Fig. 5:* A cat")
 
+# named blocks: epigraph, verse, attribution, box (fenced) and block quote
+import segtypes as ST
+verse = '::: {custom-style="Verse"}\nOne line\\\n*Two* line\n:::'
+check("verse: the model sees lines, no fence, no hard-break backslashes", ST.to_prompt(verse)[0] == "One line\n*Two* line")
+check("verse: a translation keeps its lines and wraps back to the same form", ST.wrap("Bir dize\nİki dize", "verse")
+      == '::: {custom-style="Verse"}\nBir dize\\\nİki dize\n:::')
+out, w = ST.from_model('::: {custom-style="Verse"}\nBir dize\\\nİki dize\n:::', "One line\nTwo line", [], {"type": "verse"})
+check("verse: an echoed fence and hard breaks come off", out == "Bir dize\nİki dize" and not w)
+out, w = ST.from_model("Bir dize iki dize", "One line\nTwo line", [], {"type": "verse"})
+check("verse run into one line: a warning", any("tek satıra" in x for x in w))
+out, w = ST.from_model("Bir\nüç\nbeş", "One line\nTwo line", [], {"type": "verse"})
+check("verse: a different line count is allowed", not w)
+check("block quote: '> ' off for the model, back on export", ST.to_prompt("> A quote.")[0] == "A quote." and ST.wrap("Alıntı.", "blockquote") == "> Alıntı.")
+check("block quote: an echoed '> ' comes off", ST.from_model("> Alıntı.", "A quote.", [], {"type": "blockquote"})[0] == "Alıntı.")
+for t, style in (("epigraph", "Epigraph"), ("attribution", "Attribution"), ("box", "Box")):
+    seg = '::: {custom-style="%s"}\nText[^n1] here.\n:::' % style
+    text, labels = ST.to_prompt(seg)
+    check(t + ": fence off, refs as placeholders", text == "Text⟦1⟧ here." and labels == ["n1"])
+    check(t + ": context text without fence", ST.strip_for_context(seg) == "Text here.")
+
 print("FAILED %d" % failed if failed else "ALL PASS")
 sys.exit(1 if failed else 0)

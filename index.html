@@ -220,6 +220,14 @@
   .seg.tab .src{font-family:'Spline Sans Mono',monospace;font-size:11.5px;line-height:1.55;white-space:pre-wrap;overflow-x:auto;}
   .seg.tab .tgt-edit{font-family:'Spline Sans Mono',monospace;font-size:11.5px;}
   .seg.img{padding-top:6px;padding-bottom:6px;}
+  /* named blocks: the source column hints at the book's layout, quietly */
+  .seg.epigraph .src{font-style:italic;padding-left:28px;font-size:15.5px;}
+  .seg.blockquote .src{padding-left:28px;font-size:16px;}
+  .seg.verse .src{padding-left:28px;font-style:italic;}
+  .seg.attribution .src{text-align:right;font-size:14.5px;}
+  .seg.box .src{border-left:1px solid var(--rule);padding-left:14px;}
+  .nb-note{font-family:'Spline Sans Mono',monospace;font-size:10.5px;color:var(--pencil);font-style:normal;margin-top:8px;
+    letter-spacing:.02em;}
   /* source preview: the PDF page beside the text, the segment's boxes washed in */
   .src-panel{position:fixed;top:0;right:0;bottom:0;width:min(46vw,680px);background:var(--paper);border-left:1px solid var(--rule);
     z-index:60;display:flex;flex-direction:column;}
@@ -998,7 +1006,8 @@ function exportText(segments,finals){
     if(f===''||f===undefined) return f;
     if(t.type==='heading'&&!SEG_H.test(f)) return '#'.repeat(t.level)+' '+f;
     if(t.type==='footnote'&&!SEG_F.test(f)) return '[^'+t.label+']: '+f;
-    if(t.type==='caption'&&!SEG_CAP.test(f)) return CAP_OPEN+f+CAP_CLOSE;
+    if(t.type in FENCE_STYLE_OF&&!SEG_FENCE.test(f)) return wrapSeg(f,t.type);
+    if(t.type==='blockquote'&&!SEG_BQ.test(f)) return wrapSeg(f,t.type);
     return f;
   }).join('\n\n');
 }
@@ -1158,20 +1167,35 @@ const SEG_IMG=/^!\[[^\]\r\n]*\]\([^)\s]+\)$/;
 const SEG_CAP=/^::: \{custom-style="Caption"\}\n([\s\S]*)\n:::$/;
 const SEG_TAB=/^\|[^\n]*\|[ \t]*\n\|(?:[ \t]*:?-{3,}:?[ \t]*\|)+[ \t]*(?:\n\|[^\n]*\|[ \t]*)*$/;
 const CAP_OPEN='::: {custom-style="Caption"}\n', CAP_CLOSE='\n:::';
+// named blocks share the caption's fence (segtypes.py FENCED); a block quote is "> text"
+const SEG_FENCE=/^::: \{custom-style="(Caption|Epigraph|Verse|Attribution|Box)"\}\n([\s\S]*)\n:::$/;
+const FENCE_TYPE={Caption:'caption',Epigraph:'epigraph',Verse:'verse',Attribution:'attribution',Box:'box'};
+const SEG_BQ=/^>[ \t]?/;
+const FENCE_STYLE_OF={caption:1,epigraph:1,verse:1,attribution:1,box:1};
+const NAMED={epigraph:'EPİGRAF',blockquote:'ALINTI',verse:'ŞİİR',attribution:'ATIF',box:'KUTU'};
 function segType(s){
   if(SEG_IMG.test(s)) return {type:'image'};
-  if(SEG_CAP.test(s)) return {type:'caption'};
+  let m=SEG_FENCE.exec(s); if(m) return {type:FENCE_TYPE[m[1]]};
   if(SEG_TAB.test(s)) return {type:'table'};
-  let m=SEG_H.exec(s); if(m) return {type:'heading',level:m[1].length};
+  m=SEG_H.exec(s); if(m) return {type:'heading',level:m[1].length};
+  if(SEG_BQ.test(s)) return {type:'blockquote'};
   m=SEG_F.exec(s); if(m) return {type:'footnote',label:m[1]};
   return {type:'para'};
 }
 function segMarkerLen(s){
-  if(SEG_CAP.test(s)) return CAP_OPEN.length;
-  const m=SEG_H.exec(s)||SEG_F.exec(s); return m?m[0].length:0;
+  if(SEG_FENCE.test(s)) return s.indexOf('\n')+1;
+  const m=SEG_H.exec(s)||SEG_F.exec(s)||(segType(s).type==='blockquote'?SEG_BQ.exec(s):null); return m?m[0].length:0;
 }
-// a caption's closing fence line is not shown and never matched
-function segTailLen(s){ return SEG_CAP.test(s)?CAP_CLOSE.length:0; }
+// a fence's closing line is not shown and never matched
+function segTailLen(s){ return SEG_FENCE.test(s)?CAP_CLOSE.length:0; }
+// a translation is kept without its marker; export puts it back (segtypes.wrap). A verse's lines get their hard
+// breaks again.
+function wrapSeg(f,t){
+  const style={caption:'Caption',epigraph:'Epigraph',verse:'Verse',attribution:'Attribution',box:'Box'}[t];
+  if(style) return '::: {custom-style="'+style+'"}\n'+((t==='verse'||t==='epigraph')?f.split('\n').join('\\\n'):f)+'\n:::';
+  if(t==='blockquote') return f.split('\n').map(x=>'> '+x).join('\n');
+  return f;
+}
 function fnNumber(label){ const m=/(\d+)$/.exec(label); return m?m[1]:label; }
 function typeOf(i){ return segType(P.segments[i]||''); }
 function refLabels(s){ return Array.from((s||'').matchAll(SEG_REF),m=>m[1]); }
@@ -1204,6 +1228,7 @@ function inlineParse(raw){
   w=w.split('').map((ch,k)=>delim[k]?'\u0003':ch).join('');
   pair(/\*([^\s*](?:[^*]*?[^\s*])?)\*/g,1,ital);
   for(let k=n-tail;k<n;k++) delim[k]=1;
+  if(SEG_FENCE.test(raw)) for(let k=off;k<n-tail;k++) if(raw[k]==='\\'&&raw[k+1]==='\n') delim[k]=1;   // hard breaks
   const chars=[],map=[];
   for(let k=off;k<n;k++){ if(delim[k]) continue; chars.push(ref[k]?MASK:raw[k]); map.push(k); }
   c={off,ref,delim,bold,ital,vis:chars.join(''),map};
@@ -2388,11 +2413,15 @@ function renderWindow(){
     const ty=typeOf(i);
     div.className='seg'+(P.approved[i]?' done':'')+
       (ty.type==='heading'?' heading h'+ty.level:ty.type==='footnote'?' fn':ty.type==='image'?' img'
-        :ty.type==='caption'?' cap':ty.type==='table'?' tab':'');div.id='seg-'+i;
+        :ty.type==='caption'?' cap':ty.type==='table'?' tab':NAMED[ty.type]?' nb '+ty.type:'');div.id='seg-'+i;
     const gutter=ty.type==='heading'?'H'+ty.level
       :ty.type==='footnote'?'NOT '+esc(fnNumber(ty.label))
       :ty.type==='image'?'GÖRSEL':ty.type==='caption'?'ALTYAZI':ty.type==='table'?'TABLO'
+      :NAMED[ty.type]?NAMED[ty.type]
       :'¶ '+String(i+1).padStart(padWidth(),'0');
+    // a quoted text may already exist in Turkish: the translator checks before translating it anew
+    const quoteNote=(ty.type==='epigraph'||ty.type==='blockquote'||ty.type==='verse')
+      ?'<div class="nb-note">Alıntı: yayımlanmış Türkçe çevirisi var mı kontrol et.</div>':'';
     if(ty.type==='image'){
       // a placeholder: one quiet line, nothing to translate or approve (no "done" tint either)
       const label=(/^!\[([^\]]*)\]/.exec(P.segments[i])||[])[1]||'Görsel';
@@ -2428,7 +2457,7 @@ function renderWindow(){
       mergeCtl=`<div class="merge-join">${inner}</div>`;
     }
     div.innerHTML=`<div class="seg-num">${gutter}${devFlag(i)}</div>
-      <div class="src">${ty.type==='table'?`<div class="tab-box">${tableHTML(P.segments[i])}</div>`:renderSource(i)}</div><div class="tgt-area">${right}</div><div class="seg-warn" id="warn-${i}"></div>${mergeCtl}`;
+      <div class="src">${ty.type==='table'?`<div class="tab-box">${tableHTML(P.segments[i])}</div>`:renderSource(i)}${quoteNote}</div><div class="tgt-area">${right}</div><div class="seg-warn" id="warn-${i}"></div>${mergeCtl}`;
     c.appendChild(div);
     if(P.finals[i]!==null){
       const ed=$('edit-'+i);
