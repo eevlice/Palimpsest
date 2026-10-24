@@ -488,9 +488,16 @@
     </div>
     <div class="drop" id="drop">
       <p class="big">Kitabını buraya bırak</p>
-      <p>ya da seç — .txt, .md veya .docx</p>
-      <input type="file" id="file" accept=".txt,.md,.docx" class="hidden">
+      <p>ya da seç — .txt, .md, .docx veya .pdf</p>
+      <input type="file" id="file" accept=".txt,.md,.docx,.pdf" class="hidden">
     </div>
+    <div class="row2 hidden" id="pdf-range" style="margin:18px 0 0;">
+      <div class="field"><label for="pdf-first">Başlangıç sayfası</label>
+        <input id="pdf-first" type="number" min="1" inputmode="numeric" placeholder="1"></div>
+      <div class="field"><label for="pdf-last">Bitiş sayfası</label>
+        <input id="pdf-last" type="number" min="1" inputmode="numeric" placeholder="son"></div>
+    </div>
+    <p class="meta hidden" id="pdf-range-note" style="margin:6px 0 16px;">Boş bırakırsan tüm PDF okunur. Numaralar PDF görüntüleyicideki sayfa numarasıdır.</p>
     <button class="run run-full" id="analyze" disabled>Kitabı oku ve bağlamı oluştur</button>
     <div class="meta" id="setup-status" style="margin-top:12px;"></div>
     <div id="setup-err"></div>
@@ -947,6 +954,8 @@ function pickFile(){
   fileObj=fileInput.files[0];
   if(fileObj){drop.querySelector('.big').textContent=fileObj.name;
     drop.querySelector('p:not(.big)').textContent='ready';$('analyze').disabled=false;}
+  const isPdf=!!fileObj&&/\.pdf$/i.test(fileObj.name);
+  $('pdf-range').classList.toggle('hidden',!isPdf);$('pdf-range-note').classList.toggle('hidden',!isPdf);
 }
 
 $('analyze').onclick=async()=>{
@@ -958,6 +967,7 @@ $('analyze').onclick=async()=>{
   fd.append('file',fileObj);fd.append('source_lang',$('src').value);
   fd.append('target_lang',$('tgt').value);fd.append('model',$('model').value);
   fd.append('name',name);
+  if(/\.pdf$/i.test(fileObj.name)){fd.append('first_page',$('pdf-first').value.trim());fd.append('last_page',$('pdf-last').value.trim());}
   try{
     const res=await fetch('/setup',{method:'POST',body:fd});
     const data=await res.json();

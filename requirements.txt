@@ -4,3 +4,4 @@ openai
 google-genai
 python-docx
 cryptography
+pypdfium2

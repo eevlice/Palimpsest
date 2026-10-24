@@ -28,6 +28,7 @@ import spending
 import providers
 import prefs
 import segtypes
+import pdf_import
 
 app = Flask(__name__, static_folder=".")
 
@@ -425,8 +426,14 @@ def setup():
     provider, model = parse_model_key(request.form.get("model"))
     if not f:
         return jsonify({"error": "No file received."}), 400
+    pdf_warnings = []
     try:
-        text = extract_text(f.filename, f.read())
+        if f.filename.lower().endswith(".pdf"):
+            text, pdf_warnings = pdf_import.convert(f.read(), request.form.get("first_page"), request.form.get("last_page"))
+        else:
+            text = extract_text(f.filename, f.read())
+    except pdf_import.PdfImportError as e:
+        return jsonify({"error": str(e)}), 400
     except Exception as e:
         return jsonify({"error": f"Could not read the file: {e}"}), 400
     segs, import_warnings = segment(text)
@@ -457,7 +464,7 @@ def setup():
             cost2, tokens2 = condense_info
             spending.log_call("", project_name, provider, model, "off", tokens2, cost2)
             total_cost += cost2
-        warnings = [w["message"] for w in import_warnings] + ([condense_note] if condense_note else [])
+        warnings = pdf_warnings + [w["message"] for w in import_warnings] + ([condense_note] if condense_note else [])
         return jsonify({"segments": segs, "synopsis": condensed, "terms": terms,
                         "setup_cost": round(total_cost, 4), "count": len(segs),
                         "warnings": warnings})
