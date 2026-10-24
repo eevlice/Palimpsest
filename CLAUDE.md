@@ -10,7 +10,7 @@ Local, single-user book translation tool. Flask backend + one vanilla-JS file fr
 - keys.py (Fernet-encrypted keys), prefs.py, spending.py (JSONL log): all store under ~/.palimpsest/
 - index.html: entire UI (CSS + JS inline). Served from disk on every request, so UI edits need no restart.
 - Python changes DO need a server restart.
-- start.command / start.bat: launchers (git pull --ff-only on launch if .git exists)
+- start.command / start.bat: launchers (git pull --ff-only on launch if .git exists). They run the server from the repo's .venv (made with Python 3.10+ if missing) and pip install -r requirements.txt whenever its SHA-256 differs from .venv/requirements.sha256; a new dependency only needs a line in requirements.txt.
 - scripts/release-homebrew.sh: tag + formula bump. Needs an SSH clone of the tap at ~/homebrew-palimpsest. Versions: semver, MINOR for new features, PATCH for fixes. Homebrew users stay pinned to the last tag.
 - scripts/check_book_text.py + scripts/hooks/pre-commit: stops a commit whose files share 6 words in a row with a test book (tuning and holdout books under ~/palimpsest-spike/karne*, read only locally; warns and passes without them). Enable once per clone: `git config core.hooksPath scripts/hooks`. By hand: `python3 scripts/check_book_text.py FILE...`.
   Exceptions only by exact path in scripts/book_text_allowlist.txt, one per line with its reason (no globs); only for text that must stay verbatim (a licence).

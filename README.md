@@ -66,6 +66,9 @@ kapatın ve başlatıcının açtığı küçük terminal penceresini kapatın.
 > Mac'te `start.command` ilk seferde açılmazsa, sağ tıklayın → Aç → Aç.
 > Bunu yalnızca bir kez yapmanız gerekir.
 
+İlk açılışta ve bir güncelleme yeni kütüphane getirdiğinde başlatıcı gerekli
+kütüphaneleri uygulama klasöründeki `.venv`'e kurar; bu birkaç dakika sürebilir.
+
 ---
 
 ## Nasıl çalışır

@@ -11,9 +11,32 @@ if [ -d .git ]; then
   echo "Checking for updates..."
   GIT_TERMINAL_PROMPT=0 git pull --ff-only --quiet 2>/dev/null || true
 fi
-# Install libraries if missing (first run only), quietly.
-python3 -c "import flask, anthropic, openai, google.genai, docx, cryptography, pypdfium2, pdfminer, pypandoc" 2>/dev/null || {
-  echo "First run: installing the required libraries..."
-  pip3 install --quiet -r requirements.txt
-}
-python3 server.py
+# Palimpsest keeps its libraries in its own environment, .venv in this folder (gitignored, so updates never touch
+# it): no installing into the system Python, which Homebrew's Python refuses anyway (PEP 668). It is made once, with
+# the newest Python 3.10+ found; libraries installed into the system Python by older versions are left alone.
+if [ ! -x .venv/bin/python ]; then
+  PY=""
+  for c in python3.13 python3.12 python3.11 python3.10 python3; do
+    if command -v "$c" >/dev/null 2>&1 && "$c" -c 'import sys; sys.exit(sys.version_info < (3, 10))' 2>/dev/null; then
+      PY="$c"; break
+    fi
+  done
+  if [ -z "$PY" ]; then
+    echo "Palimpsest needs Python 3.10 or newer: https://www.python.org/downloads/"
+    read -r -p "Press Enter to close."
+    exit 1
+  fi
+  echo "Setting up Palimpsest's own Python environment (.venv) with $("$PY" --version), once."
+  "$PY" -m venv .venv || { echo "Could not create .venv."; read -r -p "Press Enter to close."; exit 1; }
+fi
+# Libraries: installed again whenever requirements.txt changes (its SHA-256 is kept in .venv after a good install).
+WANT=$(.venv/bin/python -c 'import hashlib, sys; print(hashlib.sha256(open(sys.argv[1], "rb").read()).hexdigest())' requirements.txt)
+if [ "$WANT" != "$(cat .venv/requirements.sha256 2>/dev/null)" ]; then
+  echo "Installing the required libraries..."
+  if .venv/bin/python -m pip install --quiet --disable-pip-version-check -r requirements.txt; then
+    echo "$WANT" > .venv/requirements.sha256
+  else
+    echo "Installing the libraries failed; Palimpsest will try again next time."
+  fi
+fi
+exec .venv/bin/python server.py
