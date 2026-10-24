@@ -425,7 +425,7 @@ def setup():
     provider, model = parse_model_key(request.form.get("model"))
     if not f:
         return jsonify({"error": "No file received."}), 400
-    pdf_warnings = []
+    pdf_warnings, pdf_scanned = [], False
     try:
         if f.filename.lower().endswith(".pdf"):
             # imported here, not at the top: a missing pypdfium2 must only switch PDF import off,
@@ -436,6 +436,7 @@ def setup():
                 return jsonify({"error": "PDF içe aktarma için pypdfium2 gerekli: pip3 install -r requirements.txt"}), 400
             try:
                 text, pdf_warnings = pdf_import.convert(f.read(), request.form.get("first_page"), request.form.get("last_page"))
+                pdf_scanned = pdf_import.SCANNED_WARNING in pdf_warnings
             except pdf_import.PdfImportError as e:
                 return jsonify({"error": str(e)}), 400
         else:
@@ -473,7 +474,7 @@ def setup():
         warnings = pdf_warnings + [w["message"] for w in import_warnings] + ([condense_note] if condense_note else [])
         return jsonify({"segments": segs, "synopsis": condensed, "terms": terms,
                         "setup_cost": round(total_cost, 4), "count": len(segs),
-                        "warnings": warnings})
+                        "warnings": warnings, "scanned": pdf_scanned})
     except Exception as e:
         spent = f" ({_spent(spent_tokens, spent_cost)})" if spent_tokens else ""
         return jsonify({"error": f"Bağlam okuması başarısız: {e}{spent}"}), 500

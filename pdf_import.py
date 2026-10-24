@@ -16,6 +16,7 @@ segment with trailing double-space breaks, attribution as its own paragraph, one
 Everything here is derived from the document itself; no per-book constants.
 """
 import re
+import math
 import ctypes
 import statistics
 import collections
@@ -35,20 +36,23 @@ MD_LEVEL = {1: 1, 2: 1, 3: 2, 4: 3}                                    # '#' cou
 NUM = re.compile(r"^\s*\d+\.\s")
 DASH = re.compile(r"^\s*[—–―]")
 ORNAMENT_FONT = re.compile(r"dingbat|symbol|ornament|wingding|fleuron|picto", re.I)
-
+PAGE_NO = re.compile(r"^[\s—–\-·•|]*(\d{1,4}|[ivxlcdm]{1,7})[\s—–\-·•|]*$", re.I)
+OCR_PRODUCER = re.compile(r"abbyy|finereader|tesseract|omnipage|readiris|paper capture|clearscan|\bocr\b", re.I)
+SCANNED_WARNING = "Bu PDF taranmış görünüyor, metin güvenilir olmayabilir."
 
 # ---------------------------------------------------------------------------- characters
 class Ch:
     __slots__ = ("idx", "ch", "ox", "lr", "x0", "x1", "top", "bot", "base", "font", "size", "weight",
-                 "italic", "bold", "dropcap")
+                 "italic", "bold", "dropcap", "rot")
 
     def __init__(self, ch, x0, x1, top, bot, base, font, size, weight=400, italic=False, bold=False,
-                 idx=0, ox=None, lr=None):
+                 idx=0, ox=None, lr=None, rot=False):
         self.idx, self.ch, self.x0, self.x1, self.top, self.bot, self.base = idx, ch, x0, x1, top, bot, base
         self.font, self.size, self.weight, self.italic, self.bold = font, size, weight, italic, bold
         self.ox = x0 if ox is None else ox          # glyph origin
         self.lr = x1 if lr is None else lr          # end of the advance box (loose box)
         self.dropcap = False
+        self.rot = rot                              # set at an angle (diagonal watermark, vertical edge tab)
 
 
 def size_key(font, size):
@@ -84,11 +88,12 @@ def _page_chars(page):
         raw.FPDFText_GetFontInfo(tp, i, buf, 96, ctypes.byref(fl))
         fn = buf.value.decode("latin-1")
         w = raw.FPDFText_GetFontWeight(tp, i)
+        rot = abs(m.b) + abs(m.c) > 0.1 * (abs(m.a) + abs(m.d))
         out.append(Ch(chr(u), l.value, r.value, H - t.value, H - b.value, H - oy.value, fn,
-                      raw.FPDFText_GetFontSize(tp, i) * (abs(m.d) or 1.0), w,
+                      raw.FPDFText_GetFontSize(tp, i) * (math.hypot(m.c, m.d) or 1.0), w,
                       bool(fl.value & 0x40) or bool(re.search(r"italic|oblique", fn, re.I)),
                       w >= 600 or bool(re.search(r"bold|black|heavy", fn, re.I)),
-                      idx=i, ox=ox.value, lr=loose.right))
+                      idx=i, ox=ox.value, lr=loose.right, rot=rot))
     return out
 
 
@@ -157,7 +162,10 @@ def build_lines(chars, page_no, orn_fonts=frozenset()):
         r.sort(key=lambda c: c.idx)
         seg = [r[0]]
         for a, b in zip(r, r[1:]):
-            fwd, back = b.x0 - a.x1, a.x1 - b.x0
+            # a ligature (Th, fi, ffl ...) comes out as several chars on ONE glyph box: the second starts where the
+            # first did, which is not a jump back to an earlier part of the line
+            same_box = abs(b.x0 - a.x0) < 0.05 * max(b.size, 1.0)
+            fwd, back = b.x0 - a.x1, (0.0 if same_box else a.x1 - b.x0)
             if (fwd > max(2.5 * b.size, 18) or back > 0.9 * b.size) and b.ch.strip() and a.ch.strip():
                 segs.append(seg)
                 seg = [b]
@@ -189,20 +197,46 @@ def build_lines(chars, page_no, orn_fonts=frozenset()):
     return out
 
 
+def _two_clusters(gaps):
+    """Otsu split of a list of gap widths: (threshold, mean of the small gaps, mean of the large gaps)"""
+    s = sorted(gaps)
+    n, tot, left, best = len(s), sum(s), 0.0, None
+    for k in range(1, n):
+        left += s[k - 1]
+        m1, m2 = left / k, (tot - left) / (n - k)
+        v = k * (n - k) * (m1 - m2) ** 2
+        if best is None or v > best[0]:
+            best = (v, (s[k - 1] + s[k]) / 2, m1, m2)
+    return best[1:] if best else (float("inf"), 0.0, 0.0)
+
+
 def line_tokens(line):
-    """(char, italic, bold) tokens with inferred word spaces. Real ' ' chars are honoured; extra spaces are
-    inferred from the advance gap: tracked lettering 1.7x the median gap, tracked ALL-CAPS 0.5 em,
-    ordinary text 0.2 em."""
+    """(char, italic, bold) tokens with inferred word spaces.
+    Letter-spaced (tracked) lines: the gaps between glyphs fall into two clusters, letter gaps and word gaps; a word
+    break is a gap in the large cluster, and the line's own space glyphs are ignored (some PDFs put one between every
+    letter). One tracked word has a single cluster: no break.
+    Other lines: real ' ' chars are honoured; extra spaces are inferred from the advance gap: 0.5 em for ALL-CAPS
+    with real spaces, 0.2 em otherwise."""
     cs = line["chars"]
+    size = line["size"]
+    ink = [c for c in cs if c.ch != " "]
+    gaps = [b.ox - a.lr for a, b in zip(ink, ink[1:])]
+    med = sorted(gaps)[len(gaps) // 2] if gaps else 0.0
+    if len(ink) >= 4 and med > 0.08 * size:
+        thr, m1, m2 = _two_clusters(gaps)
+        if not (m2 - m1 > 0.15 * size and m2 > 1.8 * max(m1, 0.02 * size)):
+            thr = float("inf")
+        toks, prev = [], None
+        for c in ink:
+            if prev is not None and not prev.dropcap and c.ox - prev.lr > thr:
+                toks.append((" ", prev.italic, prev.bold))
+            toks.append((c.ch, c.italic, c.bold))
+            prev = c
+        return toks
     has_space = any(c.ch == " " for c in cs)
     letters = [c for c in cs if c.ch.isalpha()]
     caps = sum(c.ch.isupper() for c in letters) / max(1, len(letters))
-    gaps = sorted(b.ox - a.lr for a, b in zip(cs, cs[1:]) if a.ch != " " and b.ch != " ")
-    med = gaps[len(gaps) // 2] if gaps else 0.0
-    size = line["size"]
-    if len(cs) >= 6 and med > 0.3 * size:
-        thr = 1.7 * med
-    elif has_space and caps > 0.8:
+    if has_space and caps > 0.8:
         thr = 0.5 * size
     else:
         thr = 0.2 * size
@@ -273,9 +307,23 @@ def _in_box(l, boxes):
     return None
 
 
+def _finish_block(b):
+    ls = b["lines"]
+    b["top"], b["bot"] = min(l["top"] for l in ls), max(l["bot"] for l in ls)
+    b["x0"], b["x1"] = min(l["x0"] for l in ls), max(l["x1"] for l in ls)
+    b["size"] = ls[0]["size"]
+    b["nwords"] = sum(len(l["plain"].split()) for l in ls)
+    tot = max(1, sum(len(l["plain"]) for l in ls))
+    b["italic_share"] = sum(l["italic_share"] * len(l["plain"]) for l in ls) / tot
+    b["text"] = " ".join(l["plain"] for l in ls)
+
+
 def build_blocks(page_no, W, H, chars, boxes, orn_fonts=frozenset()):
     # text outside the page box (facing-page copies in spreads) is not part of this page
     chars = [c for c in chars if -2 <= (c.x0 + c.x1) / 2 <= W + 2 and -2 <= (c.top + c.bot) / 2 <= H + 2]
+    # text set at an angle is a watermark or an edge tab, never part of the reading flow
+    rotated = sum(1 for c in chars if c.rot and c.ch.strip())
+    chars = [c for c in chars if not c.rot]
     lines = build_lines(chars, page_no, orn_fonts)
     for l in lines:
         _prepare_line(l)
@@ -319,15 +367,8 @@ def build_blocks(page_no, W, H, chars, boxes, orn_fonts=frozenset()):
     if cur:
         blocks.append(cur)
     for b in blocks:
-        ls = b["lines"]
-        b["top"], b["bot"] = min(l["top"] for l in ls), max(l["bot"] for l in ls)
-        b["x0"], b["x1"] = min(l["x0"] for l in ls), max(l["x1"] for l in ls)
-        b["size"] = ls[0]["size"]
-        b["nwords"] = sum(len(l["plain"].split()) for l in ls)
-        tot = max(1, sum(len(l["plain"]) for l in ls))
-        b["italic_share"] = sum(l["italic_share"] * len(l["plain"]) for l in ls) / tot
-        b["text"] = " ".join(l["plain"] for l in ls)
-    return dict(p=page_no, W=W, H=H, blocks=blocks, boxes=boxes)
+        _finish_block(b)
+    return dict(p=page_no, W=W, H=H, blocks=blocks, boxes=boxes, rotated=rotated)
 
 
 # ---------------------------------------------------------------------------- document level analysis
@@ -345,21 +386,58 @@ class Doc:
         self._block_roles()
         self.lex = self._hyphen_lexicon()
 
-    # -- repeated text at the same place on many pages (watermark, slug, running footer) ------------
+    # -- margin text: running heads/feet, page numbers, slug, watermark ------------------------------
     def _mark_cover_and_repeats(self):
-        rep = collections.defaultdict(set)
+        """The margin is what lies above or below the book's text block: the median top of the first and bottom of
+        the last body-size line over all pages (a fixed share of the page height misses books whose text block sits
+        in the middle of a large page). In the margin a lone number is a page number, and a line whose letters
+        (spaces, digits and punctuation ignored, so letter-spaced heads compare too) recur on 3+ pages and is not
+        larger than body text is a running head/foot or slug. In the outer bands of the page (top 9%, bottom 14%), a
+        style at the same spot on 35%+ of the pages is a watermark or footer whatever its text."""
+        words = collections.Counter()
         for p in self.pages:
             for b in p["blocks"]:
                 for l in b["lines"]:
-                    rep[(l["style"], round(l["top"] / 4))].add(p["p"])
+                    words[l["size"]] += len(l["plain"].split())
+        bsize = max(words, key=words.get) if words else 10.0
+        tops, bots = [], []
+        for p in self.pages:
+            bl = [l for b in p["blocks"] for l in b["lines"] if abs(l["size"] - bsize) <= 0.6 and len(l["plain"].split()) >= 3]
+            if len(bl) >= 3:
+                tops.append(min(l["top"] for l in bl))
+                bots.append(max(l["bot"] for l in bl))
+        self.text_top = statistics.median(tops) if tops else None
+        self.text_bot = statistics.median(bots) if bots else None
+
+        def zone(p, l):
+            if self.text_top is None:
+                return "top" if l["top"] < 0.09 * p["H"] else "bot" if l["top"] > 0.86 * p["H"] else None
+            return "top" if l["bot"] <= self.text_top - 0.5 else "bot" if l["top"] >= self.text_bot + 0.5 else None
+        rep, pos = collections.defaultdict(set), collections.defaultdict(set)
+        for p in self.pages:
+            for b in p["blocks"]:
+                for l in b["lines"]:
+                    l["zone"] = zone(p, l)
+                    l["key"] = "".join(ch for ch in l["plain"].lower() if ch.isalpha())
+                    if l["zone"] and l["key"]:
+                        rep[(l["zone"], l["key"])].add(p["p"])
+                    pos[(l["style"], round(l["top"] / 4))].add(p["p"])
         need = max(4, 0.35 * self.NP)
         for p in self.pages:
             p["cover"] = bool(self.W0) and abs(p["W"] - self.W0) > 0.2 * self.W0
             for b in p["blocks"]:
-                def rp(l):
-                    return (len(rep[(l["style"], round(l["top"] / 4))]) >= need
-                            and (l["top"] < 0.09 * p["H"] or l["top"] > 0.86 * p["H"]))
-                b["sil"] = all(rp(l) for l in b["lines"])
+                for l in b["lines"]:
+                    band = l["top"] < 0.09 * p["H"] or l["top"] > 0.86 * p["H"]
+                    l["sil"] = bool(
+                        (l["zone"] and PAGE_NO.match(l["plain"]))
+                        or (l["zone"] and l["key"] and len(rep[(l["zone"], l["key"])]) >= 3 and l["size"] <= 1.05 * bsize)
+                        or (band and len(pos[(l["style"], round(l["top"] / 4))]) >= need))
+                kept = [l for l in b["lines"] if not l["sil"]]
+                b["sil"] = not kept
+                if kept and len(kept) < len(b["lines"]):
+                    b["lines"] = kept
+                    _finish_block(b)
+                b["edge"] = all(l["zone"] for l in b["lines"])
 
     def _filter_boxes(self, min_words=15):
         """tinted shapes holding fewer than min_words words are figure panels, not boxes"""
@@ -387,7 +465,7 @@ class Doc:
                     continue
                 s = S.setdefault(b["style"], dict(words=0, pages=set(), first=p["p"], last=p["p"], blocks=0, lines=0,
                                                   chars=0, inbox=0, caps=0, short=0, ital=0, num=0, dash=0, letters=0,
-                                                  multiline=0, mlines=0, sent=0, wts=[]))
+                                                  multiline=0, mlines=0, sent=0, wts=[], edge=0))
                 txt = b["text"]
                 letters = [c for c in txt if c.isalpha()]
                 s["words"] += b["nwords"]
@@ -406,6 +484,7 @@ class Doc:
                 s["multiline"] += len(b["lines"]) >= 2
                 s["mlines"] += len(b["lines"]) if len(b["lines"]) >= 2 else 0
                 s["sent"] += bool(re.search(r"[.!?]\s*$", txt))
+                s["edge"] += b.get("edge", False)
                 s["wts"] += [l["w0"] for l in b["lines"]]
         for s in S.values():
             s["weight"] = statistics.median(s["wts"]) if s["wts"] else 400
@@ -428,6 +507,7 @@ class Doc:
         self.bfam, self.bsize = bfam, bsize
         sugg, why = {}, {}
         body_styles = {k for k, s in S.items() if s["words"] >= 0.15 * S[body_style]["words"] and s["lines"] / s["blocks"] >= 3}
+        body_styles.add(body_style)         # the most-worded style is body even when its paragraphs come out short
         body_keys = {fam_of(k) for k in body_styles}
         self.variant_of_body = lambda k: fam_of(k) in body_keys and k not in body_styles
         for k, s in S.items():
@@ -464,10 +544,15 @@ class Doc:
                 sugg[k] = ("ön sayfa", "yalnızca ilk sayfalarda")
                 continue
         emph = lambda k: (fam_of(k)[1] > bsize * 0.95 or S[k]["caps"] / S[k]["blocks"] > 0.5 or S[k]["weight"] >= 600 or "Bold" in k)
+        # a heading is at least 0.6 of the body size (small bold sub-heads exist; 4.5pt lettering above the text block
+        # is a running head); a small style that mostly sits in the margin is a running head that varied too much to
+        # be removed, not a heading
+        big_enough = lambda k: fam_of(k)[1] >= 0.6 * bsize
+        marginal = lambda k: S[k]["edge"] / S[k]["blocks"] >= 0.5 and fam_of(k)[1] <= 1.05 * bsize
         cands = [k for k, s in S.items() if k not in sugg and s["blocks"] >= 5 and len(s["pages"]) >= 3
                  and s["chars"] / s["blocks"] >= 4 and s["short"] / s["blocks"] >= 0.9 and s["words"] / s["blocks"] <= 12
                  and s["sent"] / s["blocks"] < 0.5 and emph(k) and s["inbox"] / s["blocks"] < 0.5
-                 and s["words"] >= 8 and s["num"] / s["blocks"] < 0.3]
+                 and s["words"] >= 8 and s["num"] / s["blocks"] < 0.3 and big_enough(k) and not marginal(k)]
         cands.sort(key=lambda k: -self.score(k, S[k]))
         tiers = []
         for k in cands:
@@ -556,13 +641,29 @@ class Doc:
                     bl[0]["role"] = "kutu-başlık"
 
     def _hyphen_lexicon(self):
-        lex = set()
+        """compounds the book writes with a hyphen mid-line; and how often each word occurs, for counting the
+        line-end joins that have no evidence either way"""
+        lex, words = set(), collections.Counter()
         for p in self.pages:
             for b in p["blocks"]:
                 for l in b["lines"]:
-                    for m in re.finditer(r"[A-Za-z]+(?:-[A-Za-z]+)+", l["plain"].rstrip()):
+                    t = l["plain"].rstrip()
+                    for m in re.finditer(r"[A-Za-z]+(?:-[A-Za-z]+)+", t):
                         lex.add(m.group().lower())
+                    words.update(x.lower() for x in re.findall(r"[^\W\d_]+", t))
+        self.words = words
         return lex
+
+    def hyphen_real(self, left, right):
+        """A line-end hyphen before a lowercase word is real only when the book writes that compound with a hyphen
+        elsewhere; otherwise the word is joined."""
+        return (left + "-" + right).lower() in self.lex
+
+    def hyphen_ambiguous(self, left, right):
+        """A join with no evidence in the book: the joined form never occurs, yet both pieces do as words of their own
+        ("stress" + "free"). Only counted, for a later review list; the join itself does not change."""
+        a, b = left.lower(), right.split("-")[0].lower()
+        return (a + b) not in self.words and a in self.words and b in self.words
 
 
 # ---------------------------------------------------------------------------- markdown writer
@@ -570,20 +671,34 @@ def terminal(s):
     return bool(re.search(r"[.!?…:;\"”’)\]»][*_]*\s*$", s))
 
 
-def join_lines(texts, lex, stats):
+def join_hyphen(left, right, hy, stats, mark="\x02", amb=None):
+    """left ends with a line-end hyphen (`mark`, possibly followed by emphasis markers): the joined text, or None.
+    A real hyphen stays, a soft one goes. Emphasis that closes before the hyphen and reopens after it is one
+    emphasised word ("*Geogra-*" + "*phy*" -> "*Geography*"), so both markers go."""
+    m = re.search(r"([A-Za-z]+)" + re.escape(mark) + r"([*_]*)$", left)
+    if not m:
+        return None
+    real_fn = hy if callable(hy) else (lambda a, b: (a + "-" + b).lower() in hy)
+    r = re.match(r"([*_]*)([A-Za-z]+(?:-[A-Za-z]+)*)?", right)
+    opener, rw = r.group(1), r.group(2) or ""
+    first = right[len(opener):][:1]
+    real = real_fn(m.group(1), rw) if (rw and first.islower()) else (first.isupper() or first.isdigit())
+    stats["hyphen_real" if real else "hyphen_soft"] += 1
+    if not real and amb and rw and first.islower() and amb(m.group(1), rw):
+        stats["hyphen_ambiguous"] += 1
+    closer = m.group(2)
+    if closer and closer == opener:
+        return left[:m.end(1)] + ("-" if real else "") + right[len(opener):]
+    return left[:m.end(1)] + ("-" if real else "") + closer + right
+
+
+def join_lines(texts, hy, stats, amb=None):
     """Line breaks inside a block. Hyphenation chars arrive as U+0002 (the PDF cannot say soft from real): join,
-    keeping the hyphen only for a compound the book itself writes hyphenated elsewhere ('real')."""
+    keeping the hyphen only when it is a real one. `hy` is Doc.hyphen_real, or a set of hyphenated compounds."""
     out = texts[0]
     for nxt in texts[1:]:
-        m = re.search(r"([A-Za-z]+)\x02[*_]*$", out)
-        if m:
-            right = re.match(r"[*_]*([A-Za-z]+(?:-[A-Za-z]+)*)", nxt)
-            rw = right.group(1) if right else ""
-            real = ((m.group(1) + "-" + rw).lower() in lex) if (rw and nxt[:1].islower()) else (nxt[:1].isupper() or nxt[:1].isdigit())
-            stats["hyphen_real" if real else "hyphen_soft"] += 1
-            out = re.sub(r"\x02([*_]*)$", ("-" if real else "") + r"\1", out) + nxt
-        else:
-            out = out + " " + nxt
+        j = join_hyphen(out, nxt, hy, stats, amb=amb)
+        out = j if j is not None else out + " " + nxt
     return out.replace("\x02", "-")
 
 
@@ -591,7 +706,7 @@ def build_markdown(doc, first_idx, last_idx):
     """pages[first_idx..last_idx] (0-based, inclusive) -> markdown, stats"""
     md, cur = [], None
     stats = collections.Counter()
-    lex = doc.lex
+    lex, amb = doc.hyphen_real, doc.hyphen_ambiguous
 
     def flush():
         nonlocal cur
@@ -611,18 +726,15 @@ def build_markdown(doc, first_idx, last_idx):
             texts = [(l["md_nobold"] if role in HEAD else l["md"]).strip() for l in ls]
             box_here = b["box"] is not None
             if role in ("gövde", "kutu"):
-                text = join_lines(texts, lex, stats)
-                if (cur and cur["page"] < p["p"] and cur["style"] == b["style"] and cur["box"] == box_here
+                text = join_lines(texts, lex, stats, amb)
+                # a paragraph cut by a page break, or split into two blocks on the same page (around a drop cap, a
+                # removed running head, a figure, a line set mostly in italics): same family and size (italic/bold
+                # variants included), same box, no closing punctuation, lowercase start
+                if (cur and cur["page"] <= p["p"] and fam_of(cur["style"]) == fam_of(b["style"]) and cur["box"] == box_here
                         and not terminal(cur["text"]) and re.match(r"[*_]*[a-z]", text)):
-                    m = re.search(r"([A-Za-z]+)-$", cur["text"])
-                    if m:
-                        rw = re.match(r"[*_]*([A-Za-z]+(?:-[A-Za-z]+)*)", text).group(1)
-                        real = (m.group(1) + "-" + rw).lower() in lex
-                        stats["hyphen_real" if real else "hyphen_soft"] += 1
-                        cur["text"] = cur["text"] + text if real else cur["text"][:-1] + text
-                    else:
-                        cur["text"] += " " + text
-                    stats["page_merges"] += 1
+                    j = join_hyphen(cur["text"], text, doc.hyphen_real, stats, mark="-", amb=amb)
+                    cur["text"] = j if j is not None else cur["text"] + " " + text
+                    stats["page_merges" if cur["page"] < p["p"] else "inpage_merges"] += 1
                     cur["page"] = p["p"]
                     continue
                 flush()
@@ -630,7 +742,7 @@ def build_markdown(doc, first_idx, last_idx):
                 continue
             flush()
             if role in HEAD:
-                t = join_lines([re.sub(r"(?<!\*)\*\*(?!\*)", "", x) for x in texts], lex, stats)
+                t = join_lines([re.sub(r"(?<!\*)\*\*(?!\*)", "", x) for x in texts], lex, stats, amb)
                 if len(re.sub(r"[\s*]", "", t)) <= 2:
                     stats["dropped_words"] += b["nwords"]
                     continue
@@ -645,17 +757,17 @@ def build_markdown(doc, first_idx, last_idx):
                 else:
                     md.append(("head", dict(lvl=lvl, page=p["p"], base=b["lines"][-1]["base"], size=b["size"], text=t)))
             elif role == "kutu-başlık":
-                md.append(("raw", "**" + re.sub(r"\*+", "", join_lines(texts, lex, stats)) + "**"))
+                md.append(("raw", "**" + re.sub(r"\*+", "", join_lines(texts, lex, stats, amb)) + "**"))
             elif role in ("şiir", "epigraf"):
                 md.append(("raw", "\n".join(t.replace("\x02", "-") + ("  " if i < len(texts) - 1 else "") for i, t in enumerate(texts))))
             elif role == "atıf":
-                md.append(("raw", "**" + re.sub(r"\*+", "", join_lines(texts, lex, stats)) + "**"))
+                md.append(("raw", "**" + re.sub(r"\*+", "", join_lines(texts, lex, stats, amb)) + "**"))
             elif role == "liste":
-                t = join_lines(texts, lex, stats)
+                t = join_lines(texts, lex, stats, amb)
                 m = re.match(r"\s*\**(\d+\.)\**\s*(.*)", t, re.S)
                 md.append(("raw", (m.group(1) + " " + m.group(2)) if m else t))
             else:
-                md.append(("raw", join_lines(texts, lex, stats)))
+                md.append(("raw", join_lines(texts, lex, stats, amb)))
     flush()
     out = []
     for kind, v in md:
@@ -676,7 +788,32 @@ def _pages_text(pages, first_idx, last_idx):
     return sum(len(b["text"].strip()) for p in pages[first_idx:last_idx + 1] for b in p["blocks"])
 
 
-def convert(pdf_bytes, first_page=None, last_page=None):
+def _scan_signals(page):
+    """(an image covers 80%+ of the page, text objects drawn invisible, text objects drawn visible)"""
+    W, H = page.get_width(), page.get_height()
+    big, inv, vis = False, 0, 0
+    for o in page.get_objects(filter=[raw.FPDF_PAGEOBJ_IMAGE, raw.FPDF_PAGEOBJ_TEXT]):
+        if o.type == raw.FPDF_PAGEOBJ_IMAGE:
+            l, b, r, t = o.get_bounds()
+            big = big or (r - l) * (t - b) >= 0.8 * W * H
+        elif raw.FPDFTextObj_GetTextRenderMode(o.raw) == raw.FPDF_TEXTRENDERMODE_INVISIBLE:
+            inv += 1
+        else:
+            vis += 1
+    return big, inv, vis
+
+
+def is_scanned(producer, signals):
+    """A scanned book with an OCR text layer: made by OCR software, or most text-bearing pages are a full-page image
+    under invisible text. The text of such a layer can be wrong in ways the importer cannot repair (pdfium drops the
+    last letter of most words in some ABBYY layers)."""
+    text_pages = [s for s in signals if s[1] + s[2]]
+    scan_pages = [s for s in text_pages if s[0] and s[1] and s[1] >= 9 * s[2]]
+    return bool(OCR_PRODUCER.search(producer or "")) or (bool(text_pages) and len(scan_pages) >= 0.5 * len(text_pages))
+
+
+def _analyse(pdf_bytes, first_page=None, last_page=None):
+    """convert() with its internals: dict(md, warnings, doc, stats, tint, orn, info)"""
     try:
         doc = pdfium.PdfDocument(pdf_bytes)
     except pdfium.PdfiumError as e:
@@ -691,6 +828,7 @@ def convert(pdf_bytes, first_page=None, last_page=None):
     # pass 1: characters of every page; ornament fonts (a handful of dingbat glyphs in the whole book) are known only now
     raw_pages = []
     font_count = collections.Counter()
+    signals = []
     for i in range(n):
         page = doc[i]
         chars = _page_chars(page)
@@ -698,11 +836,13 @@ def convert(pdf_bytes, first_page=None, last_page=None):
             if c.ch.strip():
                 font_count[c.font] += 1
         raw_pages.append((page.get_width(), page.get_height(), chars, _tint_boxes(page)))
+        signals.append(_scan_signals(page))
     total_chars = sum(len(c) for _, _, c, _ in raw_pages[first - 1:last])
     if total_chars < 20 * (last - first + 1) and total_chars < 400:
         raise PdfImportError("Bu PDF'te (seçilen sayfalarda) metin katmanı yok ya da çok az. Taranmış bir PDF olabilir; "
                              "önce OCR ile metin katmanı eklenmeli.")
     orn = frozenset(f for f, c in font_count.items() if c < 30 and ORNAMENT_FONT.search(f))
+    tint = {i + 1: rp[3] for i, rp in enumerate(raw_pages)}
     pages = []
     for i, (W, H, chars, boxes) in enumerate(raw_pages):
         pages.append(build_blocks(i + 1, W, H, chars, boxes, orn))
@@ -712,7 +852,11 @@ def convert(pdf_bytes, first_page=None, last_page=None):
     if len(md.split()) < 20:
         raise PdfImportError("Seçilen sayfalardan okunabilir metin çıkmadı (yalnızca filigran/üst-alt bilgi olabilir). "
                              "Sayfa aralığını kontrol et.")
-    warnings = []
+    meta = doc.get_metadata_dict()
+    producer = " ".join(v for v in (meta.get("Producer"), meta.get("Creator")) if v)
+    scanned = is_scanned(producer, signals)
+    rotated = sum(p.get("rotated", 0) for p in d.pages[first - 1:last])
+    warnings = [SCANNED_WARNING] if scanned else []
     two = [p["p"] for p in d.pages[first - 1:last] if p["two_col"]]
     if two:
         warnings.append("İki sütun şüphesi olan sayfalar: " + _fmt_pages(two) + " (sütun sırası düzeltilmedi, metni kontrol et).")
@@ -721,10 +865,21 @@ def convert(pdf_bytes, first_page=None, last_page=None):
     if stats["hyphen_real"]:
         warnings.append(f"{stats['hyphen_real']} satır sonu tiresi gerçek tire sayıldı (kitapta aynı sözcük tireli de geçiyor); "
                         f"{stats['hyphen_soft']} tanesi hece bölme sayılıp birleştirildi.")
+    if stats["hyphen_ambiguous"]:
+        warnings.append(f"{stats['hyphen_ambiguous']} belirsiz tire birleştirildi.")
+    if rotated >= 20:
+        warnings.append(f"Eğik ya da dikey yazılmış {rotated} karakter (filigran, kenar yazısı) metne alınmadı.")
     skipped = [p["p"] for p in d.pages[first - 1:last] if p["cover"]]
     if skipped:
         warnings.append("Kapak/açık yayılım sayfası atlandı: " + _fmt_pages(skipped) + ".")
-    return md, warnings
+    return dict(md=md, warnings=warnings, doc=d, stats=stats, tint=tint, orn=orn,
+                info=dict(scanned=scanned, producer=producer, rotated_chars=rotated,
+                          scan_pages=sum(1 for s in signals if s[0] and s[1] and s[1] >= 9 * s[2])))
+
+
+def convert(pdf_bytes, first_page=None, last_page=None):
+    a = _analyse(pdf_bytes, first_page, last_page)
+    return a["md"], a["warnings"]
 
 
 def _fmt_pages(nums):

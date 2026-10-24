@@ -4,6 +4,8 @@ import os
 import sys
 import ctypes
 import collections
+import math
+import re
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, os.path.dirname(HERE))
@@ -237,6 +239,179 @@ try:
     check("convert(): a PDF without text raises the 'no text layer' error", False)
 except P.PdfImportError as e:
     check("convert(): a PDF without text raises the 'no text layer' error", "metin katmanı" in str(e), str(e))
+
+# ================================================================ fix round 1 (karne items 1, 2, 3, 4, 6, 7, 9)
+def doc_from(pages_rows, size=(W, H)):
+    """pages_rows: per page [(text, x, base, font, size)] -> Doc"""
+    pages = []
+    for p, rows in enumerate(pages_rows, 1):
+        chars, i = [], 0
+        for text, x, bs, font, sz in rows:
+            chars += line(text, x, bs, font, sz, idx0=i, italic="Italic" in font, bold="Bold" in font,
+                          weight=700 if "Bold" in font else 400)
+            i += len(text)
+        pages.append(P.build_blocks(p, size[0], size[1], chars, []))
+    return P.Doc(pages)
+
+
+def body_rows(p, top=300, n=10, last=None):
+    rows, base = [], top
+    for k in range(n):
+        rows.append(("Body line %d of page %d is an ordinary line of running prose here." % (k, p), 100, base, "Body-Regular", 11))
+        base += 14
+    if last:
+        rows[-1] = (last, 100, base - 14, "Body-Regular", 11)
+    return rows
+
+
+# -- 1. margin text is found relative to the text block, not by a fixed share of the page height
+def mid_page(p):
+    rows = [("F A R  C A L L S" if p % 2 else "FAR CALLS", 200, 270, "Head-Track", 6),     # running head, spaced or not
+            (str(p + 40), 260, 470, "Body-Regular", 10)]                                  # page number below the block
+    if p in (2, 4, 6):
+        rows.append(("Chapter %d" % p, 100, 270, "Head-Bold", 20))                          # chapter label, also above
+    return rows + body_rows(p)
+d = doc_from([mid_page(p) for p in range(1, 9)])
+md, st = P.build_markdown(d, 0, 7)
+check("running head above a mid-page text block is removed (spaced and unspaced alike)", "FAR" not in md and "C A L" not in md, md[:160])
+check("a lone number below the text block is a page number and goes", not any(re.fullmatch(r"\d+", s.strip()) for s in md.split("\n\n")))
+check("a large chapter label above the block is not mistaken for a running head", "Chapter 2" in md and "Chapter 6" in md, md[:200])
+check("the text block is measured from body lines", d.text_top == 300 - 11 * 0.8 and abs(d.text_bot - (300 + 9 * 14 + 11 * 0.2)) < 0.01, (d.text_top, d.text_bot))
+
+rot = line("Body text that stays here", 100, 200) + [P.Ch(c, 300 + k, 305 + k, 300 - k, 310 - k, 310 - k, "Wm-Arial", 30, idx=100 + k, rot=True)
+                                                     for k, c in enumerate("SAMPLE COPY")]
+pg = P.build_blocks(1, W, H, rot, [])
+check("rotated characters (watermark, edge tab) are kept out of the text", all("SAMPLE" not in b["text"] for b in pg["blocks"]) and pg["rotated"] == 10, [b["text"] for b in pg["blocks"]])
+
+# -- 2. a ligature is two chars on one glyph box: not a jump back, not a new line segment
+lig = line("Things go on", 100, 200)
+lig[1].x0, lig[1].x1, lig[1].ox, lig[1].lr = lig[0].x0, lig[0].x1 + 5.5, lig[0].ox, lig[0].lr + 5.5   # 'h' shares the 'T' box
+lig[0].x1 = lig[1].x1
+L = lines_text(lig)
+check("ligature components on one box stay in one line", len(L) == 1 and L[0]["plain"].replace(" ", "") == "Thingsgoon", [l["plain"] for l in L])
+fi = line("a fine day", 100, 200)
+fi[3].x0, fi[3].ox = fi[2].x0, fi[2].ox                                                    # 'fi' ligature
+check("any ligature, not only Th", len(lines_text(fi)) == 1)
+
+# -- 6. letter-spaced text: letter gaps and word gaps are two clusters
+def tracked(text, x, size, letter_gap, word_gap, with_spaces=False):
+    out, cx, k = [], x, 0
+    for w_i, word in enumerate(text.split(" ")):
+        if w_i:
+            if with_spaces:
+                out.append(P.Ch(" ", cx, cx + 0.25 * size, 190, 200, 200, "Head-Track", size, idx=k, ox=cx, lr=cx + 0.25 * size))
+                k += 1
+            cx += word_gap - letter_gap
+        for c in word:
+            w = 0.6 * size
+            out.append(P.Ch(c, cx, cx + w, 190, 200, 200, "Head-Track", size, idx=k, ox=cx, lr=cx + w))
+            cx += w + letter_gap
+            k += 1
+    return out
+check("letter-spaced heading splits at word gaps only", lines_text(tracked("FAR CALLS", 100, 4.5, 1.2, 4.1))[0]["plain"] == "FAR CALLS",
+      lines_text(tracked("FAR CALLS", 100, 4.5, 1.2, 4.1))[0]["plain"])
+check("one tracked word stays one word", lines_text(tracked("CONTENTS", 100, 12.5, 1.8, 1.8))[0]["plain"] == "CONTENTS")
+sp = tracked("THE INTERVAL", 100, 12.5, 1.9, 6.1, with_spaces=True)
+check("tracked words with real spaces between them", lines_text(sp)[0]["plain"] == "THE INTERVAL", lines_text(sp)[0]["plain"])
+
+# -- 4. a paragraph split into two blocks on the same page is joined; an open line-end hyphen is resolved
+rows = body_rows(1, top=200, n=4, last="the paragraph goes on without a stop and an ele\x02")
+rows += [("mentary school sits at the end of this second block.", 100, 290, "Body-Regular", 11),
+         ("A new paragraph starts here and ends properly.", 112, 304, "Body-Regular", 11)]
+d = doc_from([rows] + [body_rows(p) for p in range(2, 6)])
+md, st = P.build_markdown(d, 0, 0)
+check("same-page split paragraph is joined, hyphen resolved", "an elementary school sits" in md and st["inpage_merges"] == 1, (md[-260:], st))
+check("a paragraph that ends with a full stop is not joined to the next", "properly." in md and "\n\nA new paragraph" in md)
+ital = body_rows(1, top=200, n=3, last="then the word in italics")
+ital += [("*continues* on a line set mostly in italics.", 100, 262, "Body-Italic", 11)]
+md, st = P.build_markdown(doc_from([ital] + [body_rows(p) for p in range(2, 6)]), 0, 0)
+check("an italic-variant line of the same size continues the paragraph", "in italics" in md and "italics *continues*" in md.replace("**", "*") or "italics continues" in md.replace("*", ""), md[-200:])
+st = collections.Counter()
+check("emphasis closed before a line-end hyphen and reopened after is one word", P.join_lines(["the *Geogra\x02*", "*phy* of"], set(), st) == "the *Geography* of")
+
+# -- 7. style roles
+def page_with(p, extra):
+    return body_rows(p, top=200, n=6) + extra(p)
+tiny = doc_from([page_with(p, lambda p: [("TINY BOLD LABEL %s" % "ABCDEFGH"[p - 1], 100, 300, "Tiny-Bold", 5),
+                                          ("Body line after label %d of page %d is ordinary prose text." % (p, p), 100, 320, "Body-Regular", 11)])
+                 for p in range(1, 9)])
+check("a style half the body size is never a heading", tiny.sugg["Tiny-Bold|5"][0] not in P.HEAD, tiny.sugg["Tiny-Bold|5"])
+edge = doc_from([page_with(p, lambda p: [(["Alpha notes", "Beta notes", "Gamma notes", "Delta notes", "Epsilon notes", "Zeta notes",
+                                           "Eta notes", "Theta notes"][p - 1], 100, 150, "Side-Bold", 10)]) for p in range(1, 9)])
+check("a small style living above the text block is not a heading", edge.sugg["Side-Bold|10"][0] not in P.HEAD, edge.sugg["Side-Bold|10"])
+short = doc_from([[("Short paragraph number %d of page %d here." % (k, p), 112 if k % 2 == 0 else 100, 200 + 14 * k, "Body-Regular", 11)
+                   for k in range(12)] for p in range(1, 7)])
+check("the most-worded style is body even when its paragraphs are short", short.sugg[short.body_style] == ("gövde", "en çok kelimeli stil"), short.sugg[short.body_style])
+
+# -- hyphen joins without evidence are counted, never decided differently
+words_doc = doc_from([body_rows(1, top=200, n=2) + [("some stress and free time and elementary things and self-aware people", 100, 260, "Body-Regular", 11)]]
+                     + [body_rows(p) for p in range(2, 5)])
+check("only a compound the book writes with a hyphen keeps it", words_doc.hyphen_real("self", "aware") and not words_doc.hyphen_real("stress", "free"))
+st = collections.Counter()
+out = P.join_lines(["a stress\x02", "free week"], words_doc.hyphen_real, st, words_doc.hyphen_ambiguous)
+check("both pieces are words, joined form unseen: still joined, counted as ambiguous", out == "a stressfree week" and st["hyphen_ambiguous"] == 1, (out, st))
+st = collections.Counter()
+P.join_lines(["an ele\x02", "mentary school"], words_doc.hyphen_real, st, words_doc.hyphen_ambiguous)
+check("a join the book confirms (the joined word occurs) is not ambiguous", st["hyphen_ambiguous"] == 0 and st["hyphen_soft"] == 1, st)
+
+# -- 3. scanned PDF: OCR producer, or a full-page image under invisible text
+check("OCR software in the producer means scanned", P.is_scanned("ABBYY PDF Transformer 2.0", []) and not P.is_scanned("Adobe InDesign 20.1", []))
+
+
+def scanned_pdf(n=4, invisible=True, image=True, size=(522, 738)):
+    pdf = pdfium.PdfDocument.new()
+    for p in range(n):
+        page = pdf.new_page(*size)
+        if image:
+            bm = raw.FPDFBitmap_Create(8, 8, 0)
+            raw.FPDFBitmap_FillRect(bm, 0, 0, 8, 8, 0xFFEEEEEE)
+            img = raw.FPDFPageObj_NewImageObj(pdf.raw)
+            raw.FPDFImageObj_SetBitmap(None, 0, img, bm)
+            raw.FPDFPageObj_Transform(img, size[0], 0, 0, size[1], 0, 0)
+            raw.FPDFPage_InsertObject(page.raw, img)
+        for k in range(8):
+            text = f"Recognised line {k} of scanned page {p} with some ordinary words in it."
+            obj = raw.FPDFPageObj_NewTextObj(pdf.raw, b"Helvetica", 11)
+            buf = (ctypes.c_ushort * (len(text) + 1))(*([ord(c) for c in text] + [0]))
+            raw.FPDFText_SetText(obj, buf)
+            if invisible:
+                raw.FPDFTextObj_SetTextRenderMode(obj, raw.FPDF_TEXTRENDERMODE_INVISIBLE)
+            raw.FPDFPageObj_Transform(obj, 1, 0, 0, 1, 72, 600 - 14 * k)
+            raw.FPDFPage_InsertObject(page.raw, obj)
+        raw.FPDFPage_GenerateContent(page.raw)
+    out = io.BytesIO()
+    pdf.save(out)
+    return out.getvalue()
+
+
+md, warns = P.convert(scanned_pdf())
+check("full-page image under invisible text: the scanned warning comes first", warns[:1] == [P.SCANNED_WARNING], warns)
+md, warns = P.convert(scanned_pdf(invisible=False, image=False))
+check("an ordinary text PDF gets no scanned warning", P.SCANNED_WARNING not in warns, warns)
+
+
+def rotated_pdf(n=5, size=(522, 738)):
+    pdf = pdfium.PdfDocument.new()
+    for p in range(n):
+        page = pdf.new_page(*size)
+        rows = [(f"Plain sentence {k} on page {p} keeps going for a while here.", 72, 600 - 14 * k, 0) for k in range(8)]
+        rows.append(("NOT FOR SALE OR DISTRIBUTION", 150, 300, 45))
+        for text, x, y, angle in rows:
+            obj = raw.FPDFPageObj_NewTextObj(pdf.raw, b"Helvetica", 11)
+            buf = (ctypes.c_ushort * (len(text) + 1))(*([ord(c) for c in text] + [0]))
+            raw.FPDFText_SetText(obj, buf)
+            a = math.radians(angle)
+            raw.FPDFPageObj_Transform(obj, math.cos(a), math.sin(a), -math.sin(a), math.cos(a), x, y)
+            raw.FPDFPage_InsertObject(page.raw, obj)
+        raw.FPDFPage_GenerateContent(page.raw)
+    out = io.BytesIO()
+    pdf.save(out)
+    return out.getvalue()
+
+
+md, warns = P.convert(rotated_pdf())
+check("convert(): a diagonal watermark is not in the text, and the warning says so", "SALE" not in md and "Plain sentence 3 on page 2" in md
+      and any("Eğik ya da dikey" in w for w in warns), (md[:120], warns))
 
 print("FAILED %d" % failed if failed else "ALL PASS")
 sys.exit(1 if failed else 0)

@@ -221,6 +221,9 @@
   .review-warn{margin-top:14px;font-family:'Spline Sans Mono',monospace;font-size:11px;
     color:var(--pencil);white-space:pre-line;}
   .review-warn:empty{display:none;}
+  /* a scanned PDF: the one warning that has to be seen before anything else on the review screen */
+  .review-scan{border:1px solid var(--pencil);color:var(--pencil);padding:12px 14px;margin:0 0 20px;
+    font-family:'Newsreader',Georgia,serif;font-size:16px;line-height:1.45;}
   .seg-num{font-family:'Spline Sans Mono',monospace;font-size:11px;color:var(--pencil);
     grid-column:1 / -1;margin-bottom:-6px;}
   .tgt-area{display:flex;flex-direction:column;gap:8px;}
@@ -523,6 +526,7 @@
   <!-- ========== CONTEXT REVIEW ========== -->
   <section id="review" class="hidden">
     <div class="panel-title"><span class="n">02</span> Bağlamı gözden geçir</div>
+    <div class="review-scan hidden" id="review-scan"></div>
     <p class="sub" style="margin-bottom:20px;">İstediğini düzenle. Bunların tamamı her paragrafla birlikte taşınır.</p>
     <label for="synopsis">Özet — ses, ton, korunacaklar</label>
     <textarea id="synopsis" style="min-height:140px;"></textarea>
@@ -997,7 +1001,10 @@ $('analyze').onclick=async()=>{
     $('synopsis').value=data.synopsis;$('terms').value=data.terms;$('rules').value='';$('style').value='';
     $('setup-status').textContent='';
     $('review-meta').textContent=`${data.count} paragraphs · context read $${data.setup_cost.toFixed(4)}`;
-    $('review-warn').textContent=(data.warnings||[]).join('\n');
+    // the scanned-PDF warning gets its own box at the top; the rest stay in the small list at the bottom
+    const scanW=data.scanned?(data.warnings||[]).find(w=>/taranmış/.test(w)):null;
+    $('review-scan').textContent=scanW||'';$('review-scan').classList.toggle('hidden',!scanW);
+    $('review-warn').textContent=(data.warnings||[]).filter(w=>w!==scanW).join('\n');
     showScreen('review');
   }catch(e){$('setup-err').innerHTML=`<div class="err">Server unreachable.</div>`;
     $('analyze').disabled=false;$('setup-status').textContent='';}
