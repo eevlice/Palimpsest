@@ -187,6 +187,8 @@
   .mx:focus{outline:none;}
   .mx:focus-visible{outline:2px solid var(--r-ink);outline-offset:1px;}
   .mx.fn{border-radius:50%;}
+  /* a figure placeholder: a hollow square (nothing to translate) */
+  .mx.img,.mx.img.s-a,.mx.img.s-t,.mx.img.s-p{background:transparent;box-shadow:inset 0 0 0 1.5px var(--r-mid);}
   .mx.h1{clip-path:polygon(64% 0,100% 0,100% 100%,0 100%,0 64%);}
   .mx.h2{clip-path:polygon(46% 0,100% 0,100% 100%,0 100%,0 46%);}
   .mx.h3{clip-path:polygon(30% 0,100% 0,100% 100%,0 100%,0 30%);}
@@ -213,6 +215,13 @@
   .seg.heading .tgt-edit,.seg.fn .tgt-edit{min-height:44px;}
   .seg.fn{padding:10px 12px;}
   .seg.fn .src{font-size:14px;line-height:1.5;}
+  .seg.cap .src{font-size:14px;line-height:1.5;font-style:italic;color:var(--ink-soft);}
+  .seg.cap .tgt-edit{font-size:14px;}
+  .seg.tab .src{font-family:'Spline Sans Mono',monospace;font-size:11.5px;line-height:1.55;white-space:pre-wrap;overflow-x:auto;}
+  .seg.tab .tgt-edit{font-family:'Spline Sans Mono',monospace;font-size:11.5px;}
+  .seg.img{padding-top:6px;padding-bottom:6px;}
+  .img-line{grid-column:1 / -1;font-family:'Spline Sans Mono',monospace;font-size:11px;letter-spacing:.06em;
+    text-transform:uppercase;color:var(--ink-soft);}
   .fn-ref{font-family:'Spline Sans Mono',monospace;font-size:.62em;color:var(--pencil);
     vertical-align:super;line-height:0;margin:0 1px;}
   .seg-warn{grid-column:1 / -1;font-family:'Spline Sans Mono',monospace;font-size:11px;
@@ -941,13 +950,15 @@ function exportText(segments,finals){
   return segments.map((s,i)=>{
     const f=finals[i];
     const t=segType(s);
+    if(t.type==='image') return s;                 // a placeholder is never translated
     if(f===null){
       const m=segMarkerLen(s);
-      return s.slice(0,m)+'[UNTRANSLATED] '+s.slice(m);
+      return s.slice(0,m)+(t.type==='table'?'':'[UNTRANSLATED] ')+s.slice(m);
     }
     if(f===''||f===undefined) return f;
     if(t.type==='heading'&&!SEG_H.test(f)) return '#'.repeat(t.level)+' '+f;
     if(t.type==='footnote'&&!SEG_F.test(f)) return '[^'+t.label+']: '+f;
+    if(t.type==='caption'&&!SEG_CAP.test(f)) return CAP_OPEN+f+CAP_CLOSE;
     return f;
   }).join('\n\n');
 }
@@ -1097,12 +1108,25 @@ function foldCase(s){ return (s||'').replace(/[İIı]/g,'i').toLowerCase(); }
 // segtypes.py - the two sets of regexes must stay identical. ----
 const SEG_H=/^(#{1,6})[ \t]+/, SEG_F=/^\[\^([^\]\r\n\t ]+)\]:[ \t]*/;
 const SEG_REF=/\[\^([^\]\r\n\t ]+)\](?!:)/g;
+// whole-segment forms; JS $ without the m flag = Python \Z (end of the text)
+const SEG_IMG=/^!\[[^\]\r\n]*\]\([^)\s]+\)$/;
+const SEG_CAP=/^::: \{custom-style="Caption"\}\n([\s\S]*)\n:::$/;
+const SEG_TAB=/^\|[^\n]*\|[ \t]*\n\|(?:[ \t]*:?-{3,}:?[ \t]*\|)+[ \t]*(?:\n\|[^\n]*\|[ \t]*)*$/;
+const CAP_OPEN='::: {custom-style="Caption"}\n', CAP_CLOSE='\n:::';
 function segType(s){
+  if(SEG_IMG.test(s)) return {type:'image'};
+  if(SEG_CAP.test(s)) return {type:'caption'};
+  if(SEG_TAB.test(s)) return {type:'table'};
   let m=SEG_H.exec(s); if(m) return {type:'heading',level:m[1].length};
   m=SEG_F.exec(s); if(m) return {type:'footnote',label:m[1]};
   return {type:'para'};
 }
-function segMarkerLen(s){ const m=SEG_H.exec(s)||SEG_F.exec(s); return m?m[0].length:0; }
+function segMarkerLen(s){
+  if(SEG_CAP.test(s)) return CAP_OPEN.length;
+  const m=SEG_H.exec(s)||SEG_F.exec(s); return m?m[0].length:0;
+}
+// a caption's closing fence line is not shown and never matched
+function segTailLen(s){ return SEG_CAP.test(s)?CAP_CLOSE.length:0; }
 function fnNumber(label){ const m=/(\d+)$/.exec(label); return m?m[1]:label; }
 function typeOf(i){ return segType(P.segments[i]||''); }
 function refLabels(s){ return Array.from((s||'').matchAll(SEG_REF),m=>m[1]); }
@@ -1119,10 +1143,10 @@ function maskRefs(s){ return (s||'').replace(SEG_REF,m=>MASK.repeat(m.length)); 
 const PARSE_CACHE=new Map();
 function inlineParse(raw){
   let c=PARSE_CACHE.get(raw); if(c) return c;
-  const n=raw.length, off=segMarkerLen(raw);
+  const n=raw.length, off=segMarkerLen(raw), tail=segTailLen(raw);
   const ref=new Uint8Array(n), delim=new Uint8Array(n), bold=new Uint8Array(n), ital=new Uint8Array(n);
   for(const m of raw.slice(off).matchAll(SEG_REF)) for(let k=0;k<m[0].length;k++) ref[off+m.index+k]=1;
-  let w=''; for(let k=0;k<n;k++) w+=(k<off||ref[k])?'\u0003':raw[k];
+  let w=''; for(let k=0;k<n;k++) w+=(k<off||k>=n-tail||ref[k])?'\u0003':raw[k];
   const pair=(re,len,flag)=>{
     for(const m of w.matchAll(re)){
       const a=m.index,b=m.index+m[0].length;
@@ -1134,6 +1158,7 @@ function inlineParse(raw){
   pair(/\*\*([^\s*](?:[\s\S]*?[^\s*])?)\*\*/g,2,bold);
   w=w.split('').map((ch,k)=>delim[k]?'\u0003':ch).join('');
   pair(/\*([^\s*](?:[^*]*?[^\s*])?)\*/g,1,ital);
+  for(let k=n-tail;k<n;k++) delim[k]=1;
   const chars=[],map=[];
   for(let k=off;k<n;k++){ if(delim[k]) continue; chars.push(ref[k]?MASK:raw[k]); map.push(k); }
   c={off,ref,delim,bold,ital,vis:chars.join(''),map};
@@ -1624,8 +1649,11 @@ function enterWorkspace(){
 // ================================================================
 // RAIL + WINDOW
 // ================================================================
+// A figure/table/index placeholder needs no translation: it counts as done everywhere progress is shown. Derived
+// from the segment text on the fly - never written into the project's finals/approved.
+function isDone(segs,approved,i){ return !!approved[i]||SEG_IMG.test(segs[i]||''); }
 function segState(i){
-  if(P.approved[i]) return 's-a';
+  if(isDone(P.segments,P.approved,i)) return 's-a';
   const f=P.finals[i];
   return (f!==null&&f!==undefined&&f!=='')?'s-t':'s-p';
 }
@@ -1652,12 +1680,13 @@ function computeSections(segs,fallbackName){
   return {secs,secOf,types};
 }
 // Counts for the progress strip (headings and footnotes included).
-function sectionStats(secs,finals,approved){
+function sectionStats(secs,finals,approved,segs){
   return secs.map(sec=>{
     let a=0,t=0;
     for(let i=sec.start;i<sec.end;i++){
-      if(approved[i]) a++;
-      if(finals[i]!==null&&finals[i]!==undefined&&finals[i]!=='') t++;
+      const ph=!!segs&&SEG_IMG.test(segs[i]||'');
+      if(approved[i]||ph) a++;
+      if(ph||(finals[i]!==null&&finals[i]!==undefined&&finals[i]!=='')) t++;
     }
     return {appr:a,trans:t,total:sec.end-sec.start};
   });
@@ -1698,7 +1727,7 @@ function railModel(segs,finals,approved){
   const types=segs.map(segType), depth=headingDepths(segs,types);
   const heads=[]; types.forEach((t,i)=>{ if(t.type==='heading') heads.push({idx:i,depth:depth[i],title:headingTitle(segs[i])}); });
   const state=new Uint8Array(segs.length);
-  for(let i=0;i<segs.length;i++) state[i]=approved[i]?2:(finals[i]!==null&&finals[i]!==undefined&&finals[i]!=='')?1:0;
+  for(let i=0;i<segs.length;i++) state[i]=isDone(segs,approved,i)?2:(finals[i]!==null&&finals[i]!==undefined&&finals[i]!=='')?1:0;
   // square shape follows the '#' count (1..4)
   const lvl=new Int8Array(segs.length);
   types.forEach((t,i)=>{ if(t.type==='heading') lvl[i]=Math.min(t.level,4); });
@@ -1707,7 +1736,7 @@ function railModel(segs,finals,approved){
 const STATE_CLS=['s-p','s-t','s-a'];
 // one descriptor per segment: kind p / fn / hd (+ the level number a heading carries)
 function flowCells(m){
-  return m.types.map((t,i)=>({idx:i,kind:t.type==='heading'?'hd':t.type==='footnote'?'fn':'p',num:m.lvl[i],st:m.state[i]}));
+  return m.types.map((t,i)=>({idx:i,kind:t.type==='heading'?'hd':t.type==='footnote'?'fn':t.type==='image'?'img':'p',num:m.lvl[i],st:m.state[i]}));
 }
 // "where am I" for segment f: nearest part, chapter, and sub-heading before it (a sub-heading only counts
 // inside the current chapter)
@@ -1723,7 +1752,7 @@ function railWhere(m,f,bookName){
   return {part,chap,sub};
 }
 function railCellClass(c,here,sel){
-  return 'mx '+(c.kind==='fn'?'fn ':'')+STATE_CLS[c.st]+(c.num?' h'+c.num:'')+(here?' here':'')+(sel?' msel':'');
+  return 'mx '+(c.kind==='fn'?'fn ':c.kind==='img'?'img ':'')+STATE_CLS[c.st]+(c.num?' h'+c.num:'')+(here?' here':'')+(sel?' msel':'');
 }
 const RAIL={sig:null,model:null,cells:[],els:[],here:-1};
 function railFocus(){
@@ -1748,7 +1777,7 @@ function buildRail(){
 // Only what changed is touched: each cell's class string is compared with the one it already has.
 function updateRail(forceScroll){
   const m=RAIL.model, root=$('rail-items'); if(!m) return;
-  for(let i=0;i<m.state.length;i++) m.state[i]=P.approved[i]?2:(P.finals[i]!==null&&P.finals[i]!==undefined&&P.finals[i]!=='')?1:0;
+  for(let i=0;i<m.state.length;i++) m.state[i]=isDone(P.segments,P.approved,i)?2:(P.finals[i]!==null&&P.finals[i]!==undefined&&P.finals[i]!=='')?1:0;
   const f=railFocus(), sel=new Set(MERGE_SEL);
   RAIL.cells.forEach((c,k)=>{
     c.st=m.state[c.idx];
@@ -2130,10 +2159,20 @@ function renderWindow(){
     const div=document.createElement('div');
     const ty=typeOf(i);
     div.className='seg'+(P.approved[i]?' done':'')+
-      (ty.type==='heading'?' heading h'+ty.level:ty.type==='footnote'?' fn':'');div.id='seg-'+i;
+      (ty.type==='heading'?' heading h'+ty.level:ty.type==='footnote'?' fn':ty.type==='image'?' img'
+        :ty.type==='caption'?' cap':ty.type==='table'?' tab':'');div.id='seg-'+i;
     const gutter=ty.type==='heading'?'H'+ty.level
       :ty.type==='footnote'?'NOT '+esc(fnNumber(ty.label))
+      :ty.type==='image'?'GÖRSEL':ty.type==='caption'?'ALTYAZI':ty.type==='table'?'TABLO'
       :'¶ '+String(i+1).padStart(padWidth(),'0');
+    if(ty.type==='image'){
+      // a placeholder: one quiet line, nothing to translate or approve (no "done" tint either)
+      const label=(/^!\[([^\]]*)\]/.exec(P.segments[i])||[])[1]||'Görsel';
+      div.className='seg img';
+      div.innerHTML=`<div class="img-line">${esc(label)}</div>`;
+      c.appendChild(div);
+      continue;
+    }
     let right;
     if(P.finals[i]!==null){
       const costTag=(P.segCost&&P.segCost[i]!=null)?`<span class="seg-cost">$${P.segCost[i].toFixed(4)}</span>`:'';
@@ -2160,7 +2199,7 @@ function renderWindow(){
       mergeCtl=`<div class="merge-join">${inner}</div>`;
     }
     div.innerHTML=`<div class="seg-num">${gutter}</div>
-      <div class="src">${renderSource(i)}</div><div class="tgt-area">${right}</div><div class="seg-warn" id="warn-${i}"></div>${mergeCtl}`;
+      <div class="src">${ty.type==='table'?esc(P.segments[i]):renderSource(i)}</div><div class="tgt-area">${right}</div><div class="seg-warn" id="warn-${i}"></div>${mergeCtl}`;
     c.appendChild(div);
     if(P.finals[i]!==null){
       const ed=$('edit-'+i);ed.oninput=()=>{P.finals[i]=ed.value;autoGrow(ed);updateSegWarn(i);queueSave();};
@@ -2233,7 +2272,8 @@ $('jump-last2').onclick=jumpToLastTranslated;
 // that is not a footnote.
 function neighborText(i,dir){
   for(let j=i+dir;j>=0&&j<P.segments.length;j+=dir){
-    if(typeOf(j).type!=='footnote') return P.segments[j];
+    const ty=typeOf(j).type;
+    if(ty!=='footnote'&&ty!=='image') return P.segments[j];
   }
   return '';
 }
@@ -2245,7 +2285,7 @@ function memoryPairs(uptoIndex){
   // not a translation memory dump.
   const pairs=[];
   for(let j=uptoIndex-1;j>=0&&pairs.length<4;j--){
-    if(P.approved[j]&&P.finals[j]){
+    if(P.approved[j]&&P.finals[j]&&typeOf(j).type!=='image'){
       pairs.push([P.segments[j],P.finals[j]]);
     }
   }
@@ -2324,7 +2364,7 @@ function updateProgress(){
   const total=P.segments.length;
   const finals=Array.isArray(P.finals)?P.finals:[];
   const approved=Array.isArray(P.approved)?P.approved:[];
-  const appr=approved.filter(Boolean).length;
+  const appr=P.segments.filter((s,i)=>isDone(P.segments,approved,i)).length;
   if($('running-cost'))$('running-cost').textContent=`$${(P.cost||0).toFixed(4)}`;
   const pa=total?Math.round(appr/total*100):0;
   const tkLabel=$('tk-label');
@@ -2336,7 +2376,7 @@ function updateProgress(){
 function drawStrip(){
   const strip=$('tk-strip'); if(!strip||!P||!P.segments) return;
   const {secs}=computeSections(P.segments,P.name);
-  const stats=sectionStats(secs,P.finals,P.approved);
+  const stats=sectionStats(secs,P.finals,P.approved,P.segments);
   const k=secs.length, w=strip.clientWidth;
   // with hundreds of sections the 4px gaps alone would overflow the strip
   strip.style.gap=(k>1&&w)?Math.max(0,Math.min(4,(w-2*k)/(k-1)))+'px':'';
@@ -2370,6 +2410,6 @@ $('export').onclick=()=>{
   const blob=new Blob([out],{type:'text/plain;charset=utf-8'});
   const a=document.createElement('a');a.href=URL.createObjectURL(blob);
   a.download=P.name.replace(/[^a-z0-9]+/gi,'_')+'.'+P.target_lang.toLowerCase()+'.txt';a.click();
-  $('export-meta').textContent=`· ${P.segments.length} paragraftan ${P.approved.filter(Boolean).length} tanesi dışa aktarıldı`;
+  $('export-meta').textContent=`· ${P.segments.length} paragraftan ${P.segments.filter((s,i)=>isDone(P.segments,P.approved,i)).length} tanesi dışa aktarıldı`;
 };
 </script>

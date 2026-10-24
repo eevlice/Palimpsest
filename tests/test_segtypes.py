@@ -80,5 +80,21 @@ check("no footnotes: identical order, no warnings", out == ["A.", "B.", "# H"] a
 out, w = reorder_footnotes(["A[^x-1] b[^x-1]", "[^x-1]: n"])
 check("repeat ref in one paragraph: one placement", out == ["A[^x-1] b[^x-1]", "[^x-1]: n"])
 
+# ---- captions and tables (import round 2) ----
+from segtypes import table_shape
+cap = '::: {custom-style="Caption"}\n*Fig. 5:* A cat\n:::'
+check("caption: the model sees the text without its fences", to_prompt(cap) == ("*Fig. 5:* A cat", []))
+out, w = from_model('::: {custom-style="Caption"}\n*Şek. 5:* Bir kedi\n:::', "*Fig. 5:* A cat", [], {"type": "caption"})
+check("caption: an echoed fence comes off the answer", out == "*Şek. 5:* Bir kedi" and w == [])
+tab = "| a | b |\n|---|---|\n| 1 | 2 |"
+out, w = from_model("| x | y |\n|---|---|\n| 1 | 2 |", tab, [], {"type": "table"})
+check("table: same rows and columns, no warning", w == [])
+out, w = from_model("| x | y |\n|---|---|", tab, [], {"type": "table"})
+check("table: a lost row is a warning", len(w) == 1 and "3 satır" in w[0] and "2 satır" in w[0])
+out, w = from_model("| x | y | z |\n|---|---|---|\n| 1 | 2 | 3 |", tab, [], {"type": "table"})
+check("table: an extra column is a warning", len(w) == 1 and "sütun" in w[0])
+check("table shape ignores an escaped pipe inside a cell", table_shape("| a \\| b | c |\n|---|---|") == (2, [2, 2]))
+check("context text of a caption has no fences", strip_for_context(cap) == "*Fig. 5:* A cat")
+
 print("FAILED %d" % failed if failed else "ALL PASS")
 sys.exit(1 if failed else 0)

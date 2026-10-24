@@ -14,5 +14,18 @@
   {"text": "# ", "type": {"type": "heading", "level": 1}},
   {"text": "", "type": {"type": "para"}},
   {"text": "﻿# bom", "type": {"type": "para"}},
-  {"text": "İstanbul", "type": {"type": "para"}}
+  {"text": "İstanbul", "type": {"type": "para"}},
+  {"text": "![Görsel · s.94](gorsel-94-1)", "type": {"type": "image"}},
+  {"text": "![Dizin · s.393–401](dizin-393-401)", "type": {"type": "image"}},
+  {"text": "![Görsel](a b)", "type": {"type": "para"}},
+  {"text": "![Görsel · s.9](gorsel-9-1) ve metin", "type": {"type": "para"}},
+  {"text": "![Görsel · s.9](gorsel-9-1)\n", "type": {"type": "para"}},
+  {"text": "::: {custom-style=\"Caption\"}\n*Fig. 5:* Bir kedi\n:::", "type": {"type": "caption"}},
+  {"text": "::: {custom-style=\"Caption\"}\niki\nsatır\n:::", "type": {"type": "caption"}},
+  {"text": "::: {custom-style=\"Caption\"}\nkapanmamış", "type": {"type": "para"}},
+  {"text": "| a | b |\n|---|---|\n| 1 | 2 |", "type": {"type": "table"}},
+  {"text": "| a | b |\n| :---: | ---: |", "type": {"type": "table"}},
+  {"text": "| a | b |", "type": {"type": "para"}},
+  {"text": "| a | b |\n|--|--|", "type": {"type": "para"}},
+  {"text": "| a | b |\n|---|---|\nson satır çubuksuz", "type": {"type": "para"}}
 ]

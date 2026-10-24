@@ -1,6 +1,9 @@
 """
 Segment types, derived from the source markdown every time - never stored.
 
+    "![Görsel · s.94](gorsel-94-1)" -> image (a placeholder; never translated)
+    '::: {custom-style="Caption"}' / text / ':::' -> caption (translated; Pandoc gives it the Word style "Caption")
+    "| a | b |" / "|---|---|" ...    -> table (a markdown table; translated cell by cell)
     "# Title", "## Sub" ...        -> heading (with level)
     "[^label]: text"              -> footnote (with label)
     anything else                 -> paragraph
@@ -20,9 +23,20 @@ HEADING = re.compile(r"^(#{1,6})[ \t]+")
 FOOTNOTE = re.compile(r"^\[\^([^\]\r\n\t ]+)\]:[ \t]*")
 REF = re.compile(r"\[\^([^\]\r\n\t ]+)\](?!:)")
 PLACEHOLDER = re.compile(r"⟦(\d+)⟧")
+# whole-segment forms. Python's \Z and JS's $ (no m flag) both mean "end of the text".
+IMAGE = re.compile(r"^!\[[^\]\r\n]*\]\([^)\s]+\)\Z")
+CAPTION_OPEN, CAPTION_CLOSE = '::: {custom-style="Caption"}\n', "\n:::"
+CAPTION = re.compile(r'^::: \{custom-style="Caption"\}\n([\s\S]*)\n:::\Z')
+TABLE = re.compile(r"^\|[^\n]*\|[ \t]*\n\|(?:[ \t]*:?-{3,}:?[ \t]*\|)+[ \t]*(?:\n\|[^\n]*\|[ \t]*)*\Z")
 
 
 def seg_type(s):
+    if IMAGE.match(s):
+        return {"type": "image"}
+    if CAPTION.match(s):
+        return {"type": "caption"}
+    if TABLE.match(s):
+        return {"type": "table"}
     m = HEADING.match(s)
     if m:
         return {"type": "heading", "level": len(m.group(1))}
@@ -33,9 +47,18 @@ def seg_type(s):
 
 
 def strip_marker(s):
-    """Drop the leading '## ' or '[^label]: ' - nothing else."""
+    """Drop the leading '## ' or '[^label]: ', or a caption's fence lines - nothing else."""
+    m = CAPTION.match(s)
+    if m:
+        return m.group(1)
     m = HEADING.match(s) or FOOTNOTE.match(s)
     return s[m.end():] if m else s
+
+
+def table_shape(s):
+    """(rows, columns per row) of a markdown table text; an escaped \\| is not a column border"""
+    rows = [r for r in s.strip().split("\n") if r.strip()]
+    return len(rows), [len(re.findall(r"(?<!\\)\|", r)) - 1 for r in rows]
 
 
 def to_prompt(s):
@@ -62,6 +85,15 @@ def from_model(out, prompt_text, labels, src_type):
         out = HEADING.sub("", out, count=1)
     elif src_type["type"] == "footnote":
         out = FOOTNOTE.sub("", out, count=1)
+    elif src_type["type"] == "caption":
+        m = CAPTION.match(out.strip())
+        out = m.group(1) if m else out
+    elif src_type["type"] == "table":
+        out = out.strip()
+        (rs, cs), (ro, co) = table_shape(prompt_text), table_shape(out)
+        if rs != ro or cs != co:
+            warnings.append("Tablo yapısı uyuşmuyor: kaynakta %d satır × %s sütun, çeviride %d satır × %s sütun" % (
+                rs, "/".join(map(str, sorted(set(cs)))), ro, "/".join(map(str, sorted(set(co))))))
     want = Counter(int(k) for k in PLACEHOLDER.findall(prompt_text))
     got = Counter(int(k) for k in PLACEHOLDER.findall(out))
     if want != got:

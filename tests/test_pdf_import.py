@@ -413,5 +413,116 @@ md, warns = P.convert(rotated_pdf())
 check("convert(): a diagonal watermark is not in the text, and the warning says so", "SALE" not in md and "Plain sentence 3 on page 2" in md
       and any("Eğik ya da dikey" in w for w in warns), (md[:120], warns))
 
+# ================================================================ import round 2: figures, captions, tables, columns, index
+def page_of(p, rows, images=(), hl=(), vl=()):
+    chars, i = [], 0
+    for text, x, bs, font, sz in rows:
+        chars += line(text, x, bs, font, sz, idx0=i, italic="Italic" in font, bold="Bold" in font, weight=700 if "Bold" in font else 400)
+        i += len(text)
+    return P.build_blocks(p, W, H, chars, [], frozenset(), list(images), list(hl), list(vl))
+
+
+def book(special, n=8):
+    """n pages of body text; special: {page: (extra rows, images, hl, vl)}"""
+    pages = []
+    for p in range(1, n + 1):
+        rows, ims, hl, vl = special.get(p, ([], (), (), ()))
+        pages.append(page_of(p, body_rows(p, top=120, n=6) + rows, ims, hl, vl))
+    return P.Doc(pages)
+
+
+# -- figures: a placeholder in the flow; labels inside the figure stay out; the caption follows it
+fig = ([("Brain stem", 150, 330, "Label-Regular", 8), ("Cortex", 220, 380, "Label-Regular", 8),
+        ("Figure 2. A synthetic diagram of nothing", 100, 445, "Caption-Italic", 9)], [(100, 300, 320, 430)], (), ())
+d = book({4: fig})
+md, st = P.build_markdown(d, 0, 7)
+segs = [s for s in md.split("\n\n") if s.strip()]
+k = segs.index("![Görsel · s.4](gorsel-4-1)") if "![Görsel · s.4](gorsel-4-1)" in segs else -1
+check("a figure becomes a placeholder segment at its place", k > 0 and "page 4" in segs[k - 1], segs[k - 1:k + 2] if k > 0 else md[-300:])
+check("labels inside the figure do not reach the text", "Brain stem" not in md and "Cortex" not in md and d.pages[3]["fig_words"] == 3)
+check("the caption follows the figure as a caption segment", k > 0 and segs[k + 1] == '::: {custom-style="Caption"}\n*Figure 2. A synthetic diagram of nothing*\n:::', segs[k + 1] if k > 0 else None)
+from segtypes import seg_type
+check("placeholder and caption are typed by segtypes", seg_type(segs[k])["type"] == "image" and seg_type(segs[k + 1])["type"] == "caption")
+opn = ([("the paragraph runs on past the figure and", 100, 290, "Body-Regular", 11),
+        ("comes back under it to finish its sentence here.", 100, 450, "Body-Regular", 11)], [(100, 300, 320, 430)], (), ())
+md, st = P.build_markdown(book({5: opn}), 0, 7)
+check("a figure inside an open paragraph is written after the paragraph", "past the figure and comes back under it" in md
+      and md.index("![Görsel · s.5]") > md.index("finish its sentence"), md[md.find("past the") - 40: md.find("past the") + 200])
+
+# -- ruled tables: one markdown table segment; merged cells -> placeholder; a frame with a tab is not a table
+xs, ys = [100, 200, 300, 400], [300, 320, 340]
+grid_h = [(y, xs[0], xs[-1]) for y in ys]
+grid_v = [(x, ys[0], ys[-1]) for x in xs]
+cells = [("Name", 110, 314), ("Size", 210, 314), ("Kind", 310, 314), ("alpha", 110, 334), ("one", 210, 334), ("first", 310, 334)]
+tab = ([(s, x, b, "Table-Regular", 9) for s, x, b in cells], (), grid_h, grid_v)
+md, st = P.build_markdown(book({3: tab}), 0, 7)
+check("a ruled grid is one markdown table segment", "| Name | Size | Kind |\n|---|---|---|\n| alpha | one | first |" in md and st["tables"] == 1, md[:400])
+check("the table text is not also in the paragraphs", md.count("alpha") == 1)
+merged_v = [(x, ys[0], ys[-1]) for x in (100, 400)] + [(200, 300, 320), (300, 300, 340)]     # x=200 missing in row 2
+md, st = P.build_markdown(book({3: (tab[0], (), grid_h, merged_v)}), 0, 7)
+check("merged cells: placeholder instead of a table, counted", "![Tablo · s.3](tablo-3-1)" in md and st["tables_complex"] == 1 and "alpha" not in md)
+badge_h = [(73, 172, 198), (86, 52, 319), (95, 172, 198), (128, 52, 319)]
+badge_v = [(52, 86, 128), (172, 73, 95), (198, 73, 95), (319, 86, 128)]
+md, st = P.build_markdown(book({3: ([("Optimize Your Stress Levels", 80, 110, "Head-Bold", 14)], (), badge_h, badge_v)}), 0, 7)
+check("a frame with a number tab on top is not a table", st["tables"] == 0 and st["tables_complex"] == 0 and "Optimize Your Stress Levels" in md)
+
+# -- two columns: left column first, then right; a line across both stays in place
+cols = [("A HEADING OVER BOTH COLUMNS OF THIS PAGE TEXT", 60, 100, "Body-Regular", 11)]
+cols += [("left column line number %d goes" % k, 60, 130 + 14 * k, "Body-Regular", 11) for k in range(6)]
+cols += [("right column line number %d goes" % k, 300, 130 + 14 * k, "Body-Regular", 11) for k in range(6)]
+pg = page_of(1, cols)
+order = [l["plain"] for b in pg["blocks"] for l in b["lines"]]
+check("two columns are read left then right", order.index("left column line number 5 goes") < order.index("right column line number 0 goes")
+      and order[0].startswith("A HEADING"), order[:3])
+
+# -- back-of-book index: out of the flow as one placeholder
+def index_page(p):
+    names = ["Abbot", "Baker", "Carter", "Dalton", "Ellis", "Fisher", "Gray", "Hardy", "Irwin", "Jones", "Keller", "Lewis",
+             "Moore", "Nash", "Owens", "Price", "Quinn", "Reed"]
+    return [("%s, %s, %d" % (n, "x" * (p % 3 + 1), 10 * k + p), 60, 100 + 14 * k, "Index-Regular", 9) for k, n in enumerate(names)]
+pages = [page_of(p, body_rows(p, top=120, n=10)) for p in range(1, 17)] + [page_of(p, index_page(p)) for p in range(17, 21)]
+d = P.Doc(pages)
+md, st = P.build_markdown(d, 0, 19)
+check("index pages are found in the last quarter", d.index_pages == [17, 18, 19, 20], d.index_pages)
+check("the index leaves the flow as one placeholder", "![Dizin · s.17–20](dizin-17-20)" in md and "Abbot" not in md and st["index_words"] > 0)
+
+# -- ambiguous-join counter: line-end pieces are not words (across blocks and pages too)
+rows = body_rows(1, top=200, n=2) + [("we keep stress and some free time and an ele\x02", 100, 260, "Body-Regular", 11),
+                                     ("mentary list of plain words here", 100, 274, "Body-Regular", 11)]
+d = doc_from([rows] + [body_rows(p) for p in range(2, 5)])
+check("pieces of a split word are not counted as words", "ele" not in d.words and "mentary" not in d.words and "stress" in d.words and "list" in d.words)
+check("the counter never changes the decision", not d.hyphen_real("stress", "free") and d.hyphen_ambiguous("stress", "free"))
+
+
+# -- end to end: a synthetic PDF with an image and its labels
+def figure_pdf(n=6, size=(522, 738)):
+    pdf = pdfium.PdfDocument.new()
+    for p in range(n):
+        page = pdf.new_page(*size)
+        rows = [(f"Plain sentence {k} on page {p} keeps going for a while here.", 72, 650 - 14 * k, 11) for k in range(8)]
+        if p == 3:
+            bm = raw.FPDFBitmap_Create(8, 8, 0)
+            raw.FPDFBitmap_FillRect(bm, 0, 0, 8, 8, 0xFF888888)
+            img = raw.FPDFPageObj_NewImageObj(pdf.raw)
+            raw.FPDFImageObj_SetBitmap(None, 0, img, bm)
+            raw.FPDFPageObj_Transform(img, 200, 0, 0, 120, 100, 380)
+            raw.FPDFPage_InsertObject(page.raw, img)
+            rows += [("LABEL INSIDE", 140, 440, 8)]
+        for text, x, y, sz in rows:
+            obj = raw.FPDFPageObj_NewTextObj(pdf.raw, b"Helvetica", sz)
+            buf = (ctypes.c_ushort * (len(text) + 1))(*([ord(c) for c in text] + [0]))
+            raw.FPDFText_SetText(obj, buf)
+            raw.FPDFPageObj_Transform(obj, 1, 0, 0, 1, x, y)
+            raw.FPDFPage_InsertObject(page.raw, obj)
+        raw.FPDFPage_GenerateContent(page.raw)
+    out = io.BytesIO()
+    pdf.save(out)
+    return out.getvalue()
+
+
+md, warns = P.convert(figure_pdf())
+check("convert(): image placeholder in, label out, warning given", "![Görsel · s.4](gorsel-4-1)" in md and "LABEL INSIDE" not in md
+      and any("1 görsel yer tutucuyla" in w and "2 sözcük" in w for w in warns), (md[-300:], warns))
+
 print("FAILED %d" % failed if failed else "ALL PASS")
 sys.exit(1 if failed else 0)

@@ -544,6 +544,11 @@ def translate_simple():
             f"Markers like \u27e61\u27e7 stand for footnote references: keep each one exactly as "
             f"written, right after the word it belongs to."
         )
+        if src_type["type"] == "table":
+            # a markdown table: the structure must come back unchanged (from_model compares rows and columns)
+            system_text += (" The text to translate is a markdown table: translate only the text inside the cells. "
+                            "Keep every | character, every row, the |---| separator row and the empty cells exactly "
+                            "as they are; do not add or remove rows or columns.")
         standing = build_standing_context(
             d.get("synopsis", ""), d.get("terms", ""),
             d.get("rules", ""), segtypes.strip_block(d.get("style_sample", "") or ""))

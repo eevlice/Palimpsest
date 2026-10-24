@@ -39,6 +39,7 @@ ORNAMENT_FONT = re.compile(r"dingbat|symbol|ornament|wingding|fleuron|picto", re
 PAGE_NO = re.compile(r"^[\s—–\-·•|]*(\d{1,4}|[ivxlcdm]{1,7})[\s—–\-·•|]*$", re.I)
 OCR_PRODUCER = re.compile(r"abbyy|finereader|tesseract|omnipage|readiris|paper capture|clearscan|\bocr\b", re.I)
 SCANNED_WARNING = "Bu PDF taranmış görünüyor, metin güvenilir olmayabilir."
+CAPTION = re.compile(r"^\s*(figure|fig\.|şekil|resim|görsel|plate|illustration|photo)\s*[\dIVX]", re.I)
 
 # ---------------------------------------------------------------------------- characters
 class Ch:
@@ -115,6 +116,166 @@ def _tint_boxes(page):
                 and max(R.value, G.value, B.value) - min(R.value, G.value, B.value) < 30):
             res.append((l, H - t, r, H - b))
     return res
+
+
+def _page_graphics(page):
+    """images (top-left boxes), horizontal and vertical rule segments, and the scanned-page signals, in one pass.
+    Rules are the straight pieces of path objects (cell borders, table rules): (y, x0, x1) and (x, y0, y1)."""
+    W, H = page.get_width(), page.get_height()
+    images, hl, vl = [], [], []
+    big, inv, vis = False, 0, 0
+    m, x, y = raw.FS_MATRIX(), ctypes.c_float(), ctypes.c_float()
+    for o in page.get_objects(filter=[raw.FPDF_PAGEOBJ_IMAGE, raw.FPDF_PAGEOBJ_TEXT, raw.FPDF_PAGEOBJ_PATH]):
+        if o.type == raw.FPDF_PAGEOBJ_TEXT:
+            if raw.FPDFTextObj_GetTextRenderMode(o.raw) == raw.FPDF_TEXTRENDERMODE_INVISIBLE:
+                inv += 1
+            else:
+                vis += 1
+            continue
+        if o.type == raw.FPDF_PAGEOBJ_IMAGE:
+            l, b, r, t = o.get_bounds()
+            if (r - l) * (t - b) >= 0.8 * W * H:
+                big = True                  # a scanned page or a full-page background: not a figure
+            elif r - l >= 25 and t - b >= 25:
+                images.append((l, H - t, r, H - b))
+            continue
+        raw.FPDFPageObj_GetMatrix(o.raw, m)
+        prev = None
+        for i in range(raw.FPDFPath_CountSegments(o.raw)):
+            s = raw.FPDFPath_GetPathSegment(o.raw, i)
+            raw.FPDFPathSegment_GetPoint(s, x, y)
+            pt = (m.a * x.value + m.c * y.value + m.e, H - (m.b * x.value + m.d * y.value + m.f))
+            kind = raw.FPDFPathSegment_GetType(s)
+            if kind == raw.FPDF_SEGMENT_LINETO and prev:
+                (x0, y0), (x1, y1) = prev, pt
+                if abs(y1 - y0) < 0.6 and abs(x1 - x0) >= 10:
+                    hl.append((y0, min(x0, x1), max(x0, x1)))
+                elif abs(x1 - x0) < 0.6 and abs(y1 - y0) >= 6:
+                    vl.append((x0, min(y0, y1), max(y0, y1)))
+            prev = pt if kind != raw.FPDF_SEGMENT_BEZIERTO else None
+    return dict(images=images, hl=hl, vl=vl, signals=(big, inv, vis))
+
+
+def _merge_rules(segs, tol=1.2, gap=2.5):
+    """collinear rule pieces -> {position: [(a, b), ...]} with touching pieces joined"""
+    out = {}
+    for pos, a, b in sorted(segs):
+        key = next((k for k in out if abs(k - pos) <= tol), None)
+        if key is None:
+            out[pos] = [(a, b)]
+            continue
+        iv = out[key]
+        if a <= iv[-1][1] + gap:
+            iv[-1] = (iv[-1][0], max(iv[-1][1], b))
+        else:
+            iv.append((a, b))
+        iv.sort()
+    return out
+
+
+def find_grids(hl, vl):
+    """Ruled tables: horizontal and vertical rules that cross each other. A grid needs at least 3 horizontal and 3
+    vertical rule positions (2 x 2 cells; a framed figure is 1 x 1). A cell border that is missing inside the grid means
+    merged cells: the grid is marked complex."""
+    H_ = _merge_rules(hl)
+    V_ = _merge_rules(vl)
+    covers = lambda ivs, a, b: any(s - 2 <= a and b <= e + 2 for s, e in ivs)
+    hs = [(y, s, e) for y, ivs in H_.items() for s, e in ivs]
+    vs = [(x, s, e) for x, ivs in V_.items() for s, e in ivs]
+    parent = list(range(len(hs) + len(vs)))
+
+    def find(i):
+        while parent[i] != i:
+            parent[i] = parent[parent[i]]
+            i = parent[i]
+        return i
+    for i, (y, x0, x1) in enumerate(hs):
+        for j, (x, y0, y1) in enumerate(vs):
+            if x0 - 2 <= x <= x1 + 2 and y0 - 2 <= y <= y1 + 2:
+                parent[find(i)] = find(len(hs) + j)
+    groups = collections.defaultdict(lambda: ([], []))
+    for i in range(len(hs)):
+        groups[find(i)][0].append(hs[i])
+    for j in range(len(vs)):
+        groups[find(len(hs) + j)][1].append(vs[j])
+    grids = []
+    for gh, gv in groups.values():
+        ys = sorted({round(y, 1) for y, _, _ in gh})
+        xs = sorted({round(x, 1) for x, _, _ in gv})
+        ys = [y for k, y in enumerate(ys) if k == 0 or y - ys[k - 1] > 3]
+        xs = [x for k, x in enumerate(xs) if k == 0 or x - xs[k - 1] > 3]
+        if len(ys) < 3 or len(xs) < 3:
+            continue
+        # a table has a full outer frame; a decorative frame with a tab on top (a chapter-number badge) does not
+        span = lambda ivs, a, b: sum(max(0, min(e, b) - max(s, a)) for s, e in ivs) >= 0.9 * (b - a)
+        edge_h = lambda y: [(s, e) for yy, s, e in gh if abs(yy - y) <= 3]
+        edge_v = lambda x: [(s, e) for xx, s, e in gv if abs(xx - x) <= 3]
+        if not (span(edge_h(ys[0]), xs[0], xs[-1]) and span(edge_h(ys[-1]), xs[0], xs[-1])
+                and span(edge_v(xs[0]), ys[0], ys[-1]) and span(edge_v(xs[-1]), ys[0], ys[-1])):
+            continue
+        complex_ = False
+        for x in xs[1:-1]:
+            ivs = [(s, e) for xx, s, e in gv if abs(xx - x) <= 3]
+            complex_ |= any(not covers(ivs, ys[k] + 1, ys[k + 1] - 1) for k in range(len(ys) - 1))
+        for y in ys[1:-1]:
+            ivs = [(s, e) for yy, s, e in gh if abs(yy - y) <= 3]
+            complex_ |= any(not covers(ivs, xs[k] + 1, xs[k + 1] - 1) for k in range(len(xs) - 1))
+        grids.append(dict(xs=xs, ys=ys, complex=complex_))
+    return grids
+
+
+def _word_count(chars, page_no):
+    ls = build_lines(chars, page_no)
+    for l in ls:
+        _prepare_line(l)
+    return sum(len(l["plain"].split()) for l in ls)
+
+
+def _cell_text(chars, page_no):
+    ls = build_lines(chars, page_no)
+    for l in ls:
+        _prepare_line(l)
+    return join_lines([l["md"].strip() for l in ls], set(), collections.Counter()).replace("|", "\\|") if ls else ""
+
+
+def grid_markdown(grid, chars, page_no):
+    """the grid's text as a markdown table (first row = header), or None when it holds no text"""
+    xs, ys = grid["xs"], grid["ys"]
+    cells = [[[] for _ in range(len(xs) - 1)] for _ in range(len(ys) - 1)]
+    for c in chars:
+        cx, cy = (c.x0 + c.x1) / 2, (c.top + c.bot) / 2
+        r = next((k for k in range(len(ys) - 1) if ys[k] <= cy <= ys[k + 1]), None)
+        q = next((k for k in range(len(xs) - 1) if xs[k] <= cx <= xs[k + 1]), None)
+        if r is not None and q is not None:
+            cells[r][q].append(c)
+    rows = [[_cell_text(cell, page_no) for cell in row] for row in cells]
+    if not any(any(x.strip() for x in row) for row in rows):
+        return None
+    out = ["| " + " | ".join(rows[0]) + " |", "|" + "---|" * len(rows[0])]
+    out += ["| " + " | ".join(r) + " |" for r in rows[1:]]
+    return "\n".join(out)
+
+
+def _two_column_order(lines, W):
+    """Two columns on a page: read the left column, then the right, between lines that span the gutter (a heading
+    over both columns). The gutter is the x in the middle band of the page crossed by the fewest lines."""
+    cands = [W * (0.3 + 0.01 * k) for k in range(41)]
+    cross = lambda g: sum(1 for l in lines if l["x0"] < g - 1 and l["x1"] > g + 1)
+    g = min(cands, key=lambda g: (cross(g), abs(g - W / 2)))
+    out, run = [], []
+
+    def flush():
+        out.extend(sorted((l for l in run if l["x1"] <= g + 1), key=lambda l: (round(l["base"]), l["x0"])))
+        out.extend(sorted((l for l in run if l["x1"] > g + 1), key=lambda l: (round(l["base"]), l["x0"])))
+        run.clear()
+    for l in sorted(lines, key=lambda l: (round(l["base"]), l["x0"])):
+        if l["x0"] < g - 1 and l["x1"] > g + 1:
+            flush()
+            out.append(l)
+        else:
+            run.append(l)
+    flush()
+    return out
 
 
 # ---------------------------------------------------------------------------- rows, lines
@@ -318,16 +479,47 @@ def _finish_block(b):
     b["text"] = " ".join(l["plain"] for l in ls)
 
 
-def build_blocks(page_no, W, H, chars, boxes, orn_fonts=frozenset()):
+def build_blocks(page_no, W, H, chars, boxes, orn_fonts=frozenset(), images=(), hl=(), vl=()):
     # text outside the page box (facing-page copies in spreads) is not part of this page
     chars = [c for c in chars if -2 <= (c.x0 + c.x1) / 2 <= W + 2 and -2 <= (c.top + c.bot) / 2 <= H + 2]
     # text set at an angle is a watermark or an edge tab, never part of the reading flow
     rotated = sum(1 for c in chars if c.rot and c.ch.strip())
     chars = [c for c in chars if not c.rot]
+    inside = lambda c, b: b[0] - 1 <= (c.x0 + c.x1) / 2 <= b[2] + 1 and b[1] - 1 <= (c.top + c.bot) / 2 <= b[3] + 1
+    items, fig_words, fig_text = [], 0, []
+    # a figure: its place in the flow, and the lettering inside it (diagram labels) belongs to the figure. Judged line
+    # by line: only a line wholly inside the picture goes, and never one that reads like a caption ("Fig. 2: ...",
+    # often printed inside the picture's box). A lot of text over an image is real text set on a background: it stays.
+    page_lines = build_lines(chars, page_no, orn_fonts) if images else []
+    for k, im in enumerate(sorted(images, key=lambda b: (round(b[1]), b[0])), 1):
+        own_lines = [l for l in page_lines if l["chars"] and all(inside(c, im) for c in l["chars"])
+                     and not CAPTION.match("".join(c.ch for c in l["chars"]).replace("*", ""))]
+        own = [c for l in own_lines for c in l["chars"]]
+        words = sum(len("".join(c.ch for c in l["chars"]).split()) for l in own_lines)
+        if own and words <= 40:
+            ids = {id(c) for c in own}
+            chars = [c for c in chars if id(c) not in ids]
+            fig_words += words
+            fig_text.append(" ".join("".join(c.ch for c in l["chars"]) for l in own_lines))
+        items.append(dict(kind="image", page=page_no, n=k, x0=im[0], top=im[1], x1=im[2], bot=im[3]))
+    # ruled tables: one segment each; a table with merged cells is marked like a figure
+    for k, gr in enumerate(find_grids(hl, vl) if hl and vl else [], 1):
+        box = (gr["xs"][0], gr["ys"][0], gr["xs"][-1], gr["ys"][-1])
+        own = [c for c in chars if inside(c, box)]
+        md = None if gr["complex"] else grid_markdown(gr, own, page_no)
+        if not own or (md is None and not gr["complex"]):
+            continue
+        ids = {id(c) for c in own}
+        chars = [c for c in chars if id(c) not in ids]
+        items.append(dict(kind="table", page=page_no, n=k, x0=box[0], top=box[1], x1=box[2], bot=box[3], md=md,
+                          complex=gr["complex"], words=_word_count(own, page_no),
+                          text="".join(c.ch for c in sorted(own, key=lambda c: c.idx))))
     lines = build_lines(chars, page_no, orn_fonts)
     for l in lines:
         _prepare_line(l)
         l["box"] = _in_box(l, boxes)
+    if two_column_suspect([l for l in lines if l["size"] < 20], W)[0]:
+        lines = _two_column_order(lines, W)
     margin_c = collections.defaultdict(collections.Counter)
     for l in lines:
         margin_c[(l["style"], l["box"] is not None)][round(l["x0"])] += 1
@@ -368,7 +560,8 @@ def build_blocks(page_no, W, H, chars, boxes, orn_fonts=frozenset()):
         blocks.append(cur)
     for b in blocks:
         _finish_block(b)
-    return dict(p=page_no, W=W, H=H, blocks=blocks, boxes=boxes, rotated=rotated)
+    return dict(p=page_no, W=W, H=H, blocks=blocks, boxes=boxes, rotated=rotated, items=items, fig_words=fig_words,
+                fig_text=fig_text)
 
 
 # ---------------------------------------------------------------------------- document level analysis
@@ -384,6 +577,8 @@ class Doc:
         self.S = self._style_stats()
         self.sugg, self.why, self.body_style, self.body_styles = self._suggest()
         self._block_roles()
+        self._captions()
+        self._index_pages()
         self.lex = self._hyphen_lexicon()
 
     # -- margin text: running heads/feet, page numbers, slug, watermark ------------------------------
@@ -640,17 +835,92 @@ class Doc:
                 if bl[0]["style"] != maj and len(bl[0]["lines"]) <= 2:
                     bl[0]["role"] = "kutu-başlık"
 
+    def _captions(self):
+        """A figure's caption: the nearest short block (60 words, 4 lines at most) right under it (or else right over
+        it), overlapping it sideways, that reads like a caption ("Figure 3", "Fig. 3", "Şekil 3") or is set apart from
+        body text in italics or a smaller size. Headings never become captions."""
+        front = min(8, max(2, int(0.03 * self.NP)))
+        for p in self.pages:
+            if p["p"] <= front or p["cover"]:
+                continue                        # logos and ornaments of the front pages have no captions
+            for it in p.get("items", []):
+                if it["kind"] != "image":
+                    continue
+                best = None
+                for b in p["blocks"]:
+                    if b["role"] in ("sil", "ön sayfa", "altyazı") or b["nwords"] > 60 or len(b["lines"]) > 4:
+                        continue
+                    if b["x1"] < it["x0"] or b["x0"] > it["x1"]:
+                        continue
+                    below, above = b["top"] - it["bot"], it["top"] - b["bot"]
+                    cap_like = bool(CAPTION.match(b["text"].replace("*", "")))
+                    within = cap_like and it["top"] - 1 <= b["top"] and b["bot"] <= it["bot"] + 1   # printed inside the box
+                    if not (within or 0 <= below <= 2.5 * self.bsize or 0 <= above <= 2.5 * self.bsize):
+                        continue
+                    if not cap_like and (b["role"] in HEAD or b["role"] == "kutu-başlık" or b["style"] in self.body_styles
+                                         or not (b["italic_share"] >= 0.5 or b["size"] <= 0.95 * self.bsize)):
+                        continue                # a heading under a picture stays a heading
+                    rank = (0, 0) if within else (0, below) if 0 <= below <= 2.5 * self.bsize else (1, above)
+                    if best is None or rank < best[0]:
+                        best = (rank, b)
+                if best:
+                    best[1]["role"] = "altyazı"
+                    it["caption"] = best[1]
+
+    def _index_pages(self):
+        """A back-of-book index: pages in the last quarter of the book whose lines are mostly short entries ending in
+        page numbers, in alphabetical order. Its blocks (not its heading) leave the flow."""
+        self.index_pages = []
+        for p in self.pages:
+            if p["p"] < 0.75 * self.NP:
+                continue
+            ls = [l["plain"].strip() for b in p["blocks"] if not b["sil"] for l in b["lines"]]
+            ls = [x for x in ls if x]
+            if len(ls) < 15:
+                continue
+            num = sum(1 for x in ls if re.search(r"\d+(?:[–-]\d+)?[.,;)]?$", x) or re.search(r",\s*\d", x))
+            first = [x[0].lower() for x in ls if x[:1].isalpha() and x[:1].isupper()]
+            order = sum(1 for a, b in zip(first, first[1:]) if a <= b) / max(1, len(first) - 1)
+            if num >= 0.5 * len(ls) and statistics.median(len(x) for x in ls) <= 50 and len(first) >= 5 and order >= 0.7:
+                self.index_pages.append(p["p"])
+        # the first and last index page can be short: grow the run while the neighbours still look like entries
+        def entries(p):
+            ls = [l["plain"].strip() for b in p["blocks"] if not b["sil"] for l in b["lines"]]
+            ls = [x for x in ls if x]
+            return len(ls) >= 3 and statistics.median(len(x) for x in ls) <= 50 and sum(
+                1 for x in ls if re.search(r"\d+(?:[–-]\d+)?[.,;)]?$", x) or re.search(r",\s*\d", x)) >= 0.5 * len(ls)
+        if self.index_pages:
+            lo, hi = self.index_pages[0], self.index_pages[-1]
+            while lo > 1 and entries(self.pages[lo - 2]):
+                lo -= 1
+            while hi < self.NP and entries(self.pages[hi]):
+                hi += 1
+            self.index_pages = list(range(lo, hi + 1))
+        for p in self.pages:
+            if p["p"] in self.index_pages:
+                for b in p["blocks"]:
+                    if b["role"] not in HEAD and b["role"] != "sil":
+                        b["role"] = "dizin"
+
     def _hyphen_lexicon(self):
         """compounds the book writes with a hyphen mid-line; and how often each word occurs, for counting the
         line-end joins that have no evidence either way"""
         lex, words = set(), collections.Counter()
+        cut_before = False                      # the previous line, in any block or page, ended in a split word
         for p in self.pages:
             for b in p["blocks"]:
                 for l in b["lines"]:
                     t = l["plain"].rstrip()
                     for m in re.finditer(r"[A-Za-z]+(?:-[A-Za-z]+)+", t):
                         lex.add(m.group().lower())
-                    words.update(x.lower() for x in re.findall(r"[^\W\d_]+", t))
+                    toks = re.findall(r"[^\W\d_]+", t)
+                    cut = t.endswith("\x02")
+                    if cut and toks:
+                        toks = toks[:-1]        # "ele" of "ele-/mentary": a piece, not a word
+                    if cut_before and toks:
+                        toks = toks[1:]         # "mentary"
+                    words.update(x.lower() for x in toks)
+                    cut_before = cut
         self.words = words
         return lex
 
@@ -667,6 +937,9 @@ class Doc:
 
 
 # ---------------------------------------------------------------------------- markdown writer
+CAPTION_OPEN, CAPTION_CLOSE = '::: {custom-style="Caption"}', ":::"
+
+
 def terminal(s):
     return bool(re.search(r"[.!?…:;\"”’)\]»][*_]*\s*$", s))
 
@@ -707,15 +980,58 @@ def build_markdown(doc, first_idx, last_idx):
     md, cur = [], None
     stats = collections.Counter()
     lex, amb = doc.hyphen_real, doc.hyphen_ambiguous
+    pending = []                        # figures/tables met while a paragraph is still open: written after it
+    index_done = False
+
+    def write_item(it):
+        p = it["page"]
+        if it["kind"] == "image":
+            stats["images"] += 1
+            md.append(("raw", f"![Görsel · s.{p}](gorsel-{p}-{it['n']})"))
+            cap = it.get("caption")
+            if cap:
+                stats["captions"] += 1
+                text = join_lines([l["md"].strip() for l in cap["lines"]], lex, stats, amb)
+                md.append(("raw", CAPTION_OPEN + "\n" + text + "\n" + CAPTION_CLOSE))
+        elif it["complex"]:
+            stats["tables_complex"] += 1
+            stats["table_words_out"] += it["words"]
+            doc.complex_table_pages.append(p)
+            md.append(("raw", f"![Tablo · s.{p}](tablo-{p}-{it['n']})"))
+        else:
+            stats["tables"] += 1
+            md.append(("raw", it["md"]))
+
+    def place(it):
+        if cur:
+            pending.append(it)
+        else:
+            write_item(it)
 
     def flush():
         nonlocal cur
         if cur:
             md.append(("p", cur))
             cur = None
+        while pending:
+            write_item(pending.pop(0))
+    doc.complex_table_pages = []
     for p in doc.pages[first_idx:last_idx + 1]:
+        items = [] if p["p"] in doc.index_pages else sorted(p.get("items", []), key=lambda it: (round(it["top"]), it["x0"]))
         for b in p["blocks"]:
+            while items and items[0]["top"] < b["top"] - 1:
+                place(items.pop(0))
             role, ls = b["role"], b["lines"]
+            if role == "altyazı":
+                continue                                    # written right after its figure
+            if role == "dizin":
+                stats["index_words"] += b["nwords"]
+                if not index_done:
+                    flush()
+                    pages = [n for n in doc.index_pages if first_idx < n <= last_idx + 1]
+                    md.append(("raw", f"![Dizin · s.{pages[0]}–{pages[-1]}](dizin-{pages[0]}-{pages[-1]})"))
+                    index_done = True
+                continue
             if role in ("sil", "ön sayfa"):
                 stats["dropped_words"] += b["nwords"]
                 continue
@@ -768,6 +1084,8 @@ def build_markdown(doc, first_idx, last_idx):
                 md.append(("raw", (m.group(1) + " " + m.group(2)) if m else t))
             else:
                 md.append(("raw", join_lines(texts, lex, stats, amb)))
+        for it in items:
+            place(it)
     flush()
     out = []
     for kind, v in md:
@@ -786,21 +1104,6 @@ def _page_ranges(first_page, last_page, n):
 
 def _pages_text(pages, first_idx, last_idx):
     return sum(len(b["text"].strip()) for p in pages[first_idx:last_idx + 1] for b in p["blocks"])
-
-
-def _scan_signals(page):
-    """(an image covers 80%+ of the page, text objects drawn invisible, text objects drawn visible)"""
-    W, H = page.get_width(), page.get_height()
-    big, inv, vis = False, 0, 0
-    for o in page.get_objects(filter=[raw.FPDF_PAGEOBJ_IMAGE, raw.FPDF_PAGEOBJ_TEXT]):
-        if o.type == raw.FPDF_PAGEOBJ_IMAGE:
-            l, b, r, t = o.get_bounds()
-            big = big or (r - l) * (t - b) >= 0.8 * W * H
-        elif raw.FPDFTextObj_GetTextRenderMode(o.raw) == raw.FPDF_TEXTRENDERMODE_INVISIBLE:
-            inv += 1
-        else:
-            vis += 1
-    return big, inv, vis
 
 
 def is_scanned(producer, signals):
@@ -835,17 +1138,18 @@ def _analyse(pdf_bytes, first_page=None, last_page=None):
         for c in chars:
             if c.ch.strip():
                 font_count[c.font] += 1
-        raw_pages.append((page.get_width(), page.get_height(), chars, _tint_boxes(page)))
-        signals.append(_scan_signals(page))
-    total_chars = sum(len(c) for _, _, c, _ in raw_pages[first - 1:last])
+        gfx = _page_graphics(page)
+        raw_pages.append((page.get_width(), page.get_height(), chars, _tint_boxes(page), gfx))
+        signals.append(gfx["signals"])
+    total_chars = sum(len(rp[2]) for rp in raw_pages[first - 1:last])
     if total_chars < 20 * (last - first + 1) and total_chars < 400:
         raise PdfImportError("Bu PDF'te (seçilen sayfalarda) metin katmanı yok ya da çok az. Taranmış bir PDF olabilir; "
                              "önce OCR ile metin katmanı eklenmeli.")
     orn = frozenset(f for f, c in font_count.items() if c < 30 and ORNAMENT_FONT.search(f))
     tint = {i + 1: rp[3] for i, rp in enumerate(raw_pages)}
     pages = []
-    for i, (W, H, chars, boxes) in enumerate(raw_pages):
-        pages.append(build_blocks(i + 1, W, H, chars, boxes, orn))
+    for i, (W, H, chars, boxes, gfx) in enumerate(raw_pages):
+        pages.append(build_blocks(i + 1, W, H, chars, boxes, orn, gfx["images"], gfx["hl"], gfx["vl"]))
     raw_pages = None
     d = Doc(pages)
     md, stats = build_markdown(d, first - 1, last - 1)
@@ -857,9 +1161,9 @@ def _analyse(pdf_bytes, first_page=None, last_page=None):
     scanned = is_scanned(producer, signals)
     rotated = sum(p.get("rotated", 0) for p in d.pages[first - 1:last])
     warnings = [SCANNED_WARNING] if scanned else []
-    two = [p["p"] for p in d.pages[first - 1:last] if p["two_col"]]
+    two = [p["p"] for p in d.pages[first - 1:last] if p["two_col"] and p["p"] not in d.index_pages]
     if two:
-        warnings.append("İki sütun şüphesi olan sayfalar: " + _fmt_pages(two) + " (sütun sırası düzeltilmedi, metni kontrol et).")
+        warnings.append("İki sütunlu görünen sayfalar: " + _fmt_pages(two) + " (önce sol, sonra sağ sütun yazıldı; metni kontrol et).")
     if stats["page_merges"]:
         warnings.append(f"{stats['page_merges']} paragraf sayfa geçişinde birleştirildi.")
     if stats["hyphen_real"]:
@@ -867,6 +1171,18 @@ def _analyse(pdf_bytes, first_page=None, last_page=None):
                         f"{stats['hyphen_soft']} tanesi hece bölme sayılıp birleştirildi.")
     if stats["hyphen_ambiguous"]:
         warnings.append(f"{stats['hyphen_ambiguous']} belirsiz tire birleştirildi.")
+    if stats["images"]:
+        fig_words = sum(p.get("fig_words", 0) for p in d.pages[first - 1:last])
+        warnings.append(f"{stats['images']} görsel yer tutucuyla işaretlendi ({stats['captions']} altyazılı)"
+                        + (f"; görsellerin içindeki {fig_words} sözcük metne alınmadı." if fig_words else "."))
+    if stats["tables"]:
+        warnings.append(f"{stats['tables']} tablo markdown tablosu olarak yazıldı; çeviride satır ve sütunlar korunmalı.")
+    if stats["tables_complex"]:
+        warnings.append(f"{stats['tables_complex']} karmaşık (birleşik hücreli) tablo görsel gibi işaretlendi, çevrilmeyecek: s. "
+                        + _fmt_pages(sorted(set(d.complex_table_pages))) + ".")
+    idx = [n for n in d.index_pages if first <= n <= last]
+    if idx:
+        warnings.append(f"Dizin (s. {idx[0]}–{idx[-1]}) çeviriye dahil edilmedi.")
     if rotated >= 20:
         warnings.append(f"Eğik ya da dikey yazılmış {rotated} karakter (filigran, kenar yazısı) metne alınmadı.")
     skipped = [p["p"] for p in d.pages[first - 1:last] if p["cover"]]

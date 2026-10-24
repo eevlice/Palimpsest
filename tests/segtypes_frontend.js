@@ -22,15 +22,15 @@ function line(prefix) {           // a one-line top-level statement
   return src.slice(at, src.indexOf('\n', at));
 }
 const code = [
-  line('const esc='), line('const SEG_H='), line('const SEG_REF='), line("const MASK="), line('const PARSE_CACHE='), line('const WIN='), line('const RAIL_PER_ROW='), line('const STATE_CLS='),
-  ...['foldCase', 'segType', 'segMarkerLen', 'fnNumber', 'typeOf', 'refLabels', 'maskRefs',
+  line('const esc='), line('const SEG_H='), line('const SEG_REF='), line('const SEG_IMG='), line('const SEG_CAP='), line('const SEG_TAB='), line('const CAP_OPEN='), line("const MASK="), line('const PARSE_CACHE='), line('const WIN='), line('const RAIL_PER_ROW='), line('const STATE_CLS='),
+  ...['foldCase', 'segType', 'segMarkerLen', 'segTailLen', 'fnNumber', 'typeOf', 'refLabels', 'maskRefs',
       'inlineParse', 'isWordChar', 'findSpans', 'parseTerms', 'glossHitsForText',
       'searchSpans', 'renderSource', 'refMismatch', 'neighborText', 'canMerge', 'exportText',
-      'normalizeProject', 'headingTitle', 'computeSections', 'sectionStats', 'segState', 'padWidth', 'railLabel',
+      'normalizeProject', 'isDone', 'headingTitle', 'computeSections', 'sectionStats', 'segState', 'padWidth', 'railLabel',
       'windowStartFor', 'windowLabel', 'goToWindow', 'railGoto', 'pageEarlier', 'pageLater', 'jumpToLastTranslated', 'lastTranslatedIndex',
       'roman', 'headingDepths', 'railModel', 'flowCells', 'railWhere', 'railCellClass', 'railOpen', 'applyRailOpen', 'setRailOpen'].map(fn),
   'return {segType,inlineParse,findSpans,renderSource,refMismatch,neighborText,canMerge,exportText,normalizeProject,' +
-  'headingTitle,computeSections,sectionStats,segState,railLabel,roman,headingDepths,railModel,flowCells,railWhere,railCellClass,railOpen,applyRailOpen,setRailOpen,RAIL_PER_ROW,' +
+  'headingTitle,computeSections,sectionStats,isDone,segState,railLabel,roman,headingDepths,railModel,flowCells,railWhere,railCellClass,railOpen,applyRailOpen,setRailOpen,RAIL_PER_ROW,' +
   'windowStartFor,windowLabel,goToWindow,railGoto,pageEarlier,pageLater,jumpToLastTranslated,PREFS_:()=>PREFS,LAYOUT,SAVED,' +
   'getWin:()=>winStart,setWin:v=>{winStart=v},calls:CALLS,setMerge:v=>{MERGE_MODE=v},setP:p=>{P=p},setSearch:q=>{SEARCH={query:q}}};'
 ].join('\n');
@@ -287,6 +287,30 @@ check('sections: heading with a footnote ref keeps the title clean', api.heading
   check('closing: pref saved, column hidden, toolbar button not pressed', api.railOpen() === false && api.SAVED.some(x => x[0] === 'rail_open' && x[1] === false) && api.LAYOUT.closed === true && api.LAYOUT.pressed === 'false');
   api.calls.length = 0; api.setRailOpen(true);
   check('opening: pref saved, column back, toolbar button pressed, rail redrawn', api.railOpen() === true && api.SAVED.some(x => x[0] === 'rail_open' && x[1] === true) && api.LAYOUT.closed === false && api.LAYOUT.pressed === 'true' && api.calls.includes('updateRail'));
+}
+
+// ---------- figure placeholders, captions, tables (import round 2) ----------
+{
+  const img = '![Görsel · s.94](gorsel-94-1)';
+  const cap = '::: {custom-style="Caption"}\n*Fig. 5:* A cat\n:::';
+  const tab = '| a | b |\n|---|---|\n| 1 | 2 |';
+  check('caption: the fences are not visible text', api.inlineParse(cap).vis === 'Fig. 5: A cat', api.inlineParse(cap).vis);
+  check('caption: the closing fence is not rendered', !/:::/.test(api.renderSource ? (api.setP({ segments: [cap], finals: [null], approved: [false] }), api.renderSource(0)) : ''));
+  check('export: a placeholder goes out as it is, translated or not', api.exportText([img], [null]) === img && api.exportText([img], ['x']) === img);
+  check('export: a caption translation goes back into its fence', api.exportText([cap], ['*Şek. 5:* Bir kedi']) === '::: {custom-style="Caption"}\n*Şek. 5:* Bir kedi\n:::');
+  check('export: an untranslated table stays a table', api.exportText([tab], [null]) === tab);
+  const p = api.normalizeProject({ segments: ['Text.', img], finals: [null, null], approved: [false, false] });
+  check('normalize leaves a placeholder alone (nothing written into the project)', p.finals[1] === null && p.approved[1] === false);
+  const m = api.railModel(['Text.', img], [null, null], [false, false]);
+  check('rail: a placeholder counts as done without being approved', m.state[1] === 2 && m.state[0] === 0);
+  const secs = [{ start: 0, end: 2 }];
+  const ss = api.sectionStats(secs, [null, null], [false, false], ['Text.', img]);
+  check('strip: a placeholder counts as approved and translated', ss[0].appr === 1 && ss[0].trans === 1 && ss[0].total === 2);
+  const cells = api.flowCells(m);
+  check('rail: a figure gets its own (hollow) cell', cells[1].kind === 'img' && api.railCellClass(cells[1], false, false).startsWith('mx img '));
+  api.setP({ segments: ['Before.', img, 'After.'], finals: [null, img, null], approved: [false, true, false] });
+  check('model context skips placeholders', api.neighborText(0, 1) === 'After.' && api.neighborText(2, -1) === 'Before.');
+  check('no merge across a figure or a caption', !api.canMerge(1) && !api.canMerge(0));
 }
 
 console.log(failed ? 'FAILED ' + failed : 'ALL PASS');
