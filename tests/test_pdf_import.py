@@ -430,6 +430,17 @@ mc = [c for c in mc if c.ch.strip()]
 check("pdfminer reads the same glyphs at the same spots as pdfium on a clean layer",
       "".join(c.ch for c in mc) == "".join(c.ch for c in pc) and all(abs(a.x0 - b.ox) < 0.5 and abs(a.base - b.base) < 0.5 and a.size == b.size for a, b in zip(mc, pc)),
       ("".join(c.ch for c in mc)[:60], "".join(c.ch for c in pc)[:60]))
+hidden = {k: sys.modules.pop(k) for k in list(sys.modules) if k == "pdfminer" or k.startswith("pdfminer.")}
+sys.modules["pdfminer"] = None                     # as if pdfminer.six were not installed
+try:
+    P.convert(scanned_pdf(n=4, text=lambda p, k: GARBLE))
+    err = None
+except P.PdfImportError as e:
+    err = str(e)
+del sys.modules["pdfminer"]
+sys.modules.update(hidden)
+check("without pdfminer.six: a broken OCR layer is refused, and the message says the reader is missing",
+      err is not None and "pdfminer.six kütüphanesi eksik" in err, err)
 check("unknown-word share: a broken OCR line against a clean one",
       P.unknown_share([c for c in P._page_chars(pdfium.PdfDocument(scanned_pdf(n=1, text=lambda p, k: GARBLE))[0])])[0] > 10
       and P.unknown_share(pc)[0] == 0)

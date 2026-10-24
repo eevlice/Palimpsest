@@ -1,4 +1,6 @@
 @echo off
+REM UTF-8 console, for the Turkish messages below
+chcp 65001 >NUL
 REM Palimpsest launcher (Windows). Double-click this file to start the app.
 cd /d "%~dp0"
 echo Starting Palimpsest...
@@ -39,9 +41,21 @@ set "WANT="
 set "HAVE="
 for /f "usebackq delims=" %%h in (`".venv\Scripts\python.exe" -c "import hashlib, sys; print(hashlib.sha256(open(sys.argv[1], 'rb').read()).hexdigest())" requirements.txt`) do set "WANT=%%h"
 if exist ".venv\requirements.sha256" set /p HAVE=<".venv\requirements.sha256"
+REM If installing fails: a .venv that was fully installed once opens as it was (warned); a new one does not open.
 if not "%WANT%"=="%HAVE%" (
   echo Installing the required libraries...
-  ".venv\Scripts\python.exe" -m pip install --quiet --disable-pip-version-check -r requirements.txt && (>".venv\requirements.sha256" echo %WANT%)
+  ".venv\Scripts\python.exe" -m pip install --quiet --disable-pip-version-check -r requirements.txt
+  if errorlevel 1 (
+    if exist ".venv\requirements.sha256" (
+      echo Yeni kütüphaneler kurulamadı; Palimpsest eski kurulumla açılıyor, bazı özellikler çalışmayabilir. Bir sonraki açılışta yeniden denenecek. / New libraries could not be installed; opening with the previous setup.
+    ) else (
+      echo Kütüphaneler kurulamadı, internet bağlantını kontrol edip yeniden aç. / Could not install the libraries; check your internet connection and open again.
+      pause
+      exit /b 1
+    )
+  ) else (
+    >".venv\requirements.sha256" echo %WANT%
+  )
 )
 ".venv\Scripts\python.exe" server.py
 pause

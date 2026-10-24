@@ -31,12 +31,17 @@ if [ ! -x .venv/bin/python ]; then
 fi
 # Libraries: installed again whenever requirements.txt changes (its SHA-256 is kept in .venv after a good install).
 WANT=$(.venv/bin/python -c 'import hashlib, sys; print(hashlib.sha256(open(sys.argv[1], "rb").read()).hexdigest())' requirements.txt)
+# If installing fails: a .venv that was fully installed once opens as it was (warned); a new one does not open.
 if [ "$WANT" != "$(cat .venv/requirements.sha256 2>/dev/null)" ]; then
   echo "Installing the required libraries..."
   if .venv/bin/python -m pip install --quiet --disable-pip-version-check -r requirements.txt; then
     echo "$WANT" > .venv/requirements.sha256
+  elif [ -f .venv/requirements.sha256 ]; then
+    echo "Yeni kütüphaneler kurulamadı; Palimpsest eski kurulumla açılıyor, bazı özellikler çalışmayabilir. Bir sonraki açılışta yeniden denenecek. / New libraries could not be installed; opening with the previous setup."
   else
-    echo "Installing the libraries failed; Palimpsest will try again next time."
+    echo "Kütüphaneler kurulamadı, internet bağlantını kontrol edip yeniden aç. / Could not install the libraries; check your internet connection and open again."
+    read -r -p "Kapatmak için Enter'a bas. / Press Enter to close."
+    exit 1
   fi
 fi
 exec .venv/bin/python server.py

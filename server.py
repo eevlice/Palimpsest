@@ -89,13 +89,23 @@ def parse_model_key(s):
 # File reading + segmentation
 # --------------------------------------------------------------------------
 
+def missing_library(feature, lib):
+    """the error for a feature whose library is not installed: the server starts without the optional ones (PDF,
+    OCR fallback, Word), and the launcher installs them on the next start with a connection"""
+    return (f"{feature} için {lib} kütüphanesi eksik. Palimpsest'i internete bağlıyken başlatıcıyla (start.command / "
+            "start.bat) yeniden aç; eksik kütüphaneyi kurar.")
+
+
 def extract_text(filename, raw_bytes):
     ext = filename.lower().rsplit(".", 1)[-1]
     if ext in ("txt", "md"):
         return raw_bytes.decode("utf-8", errors="replace")
     if ext == "docx":
         import io
-        from docx import Document
+        try:
+            from docx import Document
+        except ImportError:
+            raise ValueError(missing_library(".docx okuma", "python-docx"))
         doc = Document(io.BytesIO(raw_bytes))
         return "\n\n".join(p.text for p in doc.paragraphs if p.text.strip())
     raise ValueError(f"Unsupported file type: .{ext}")
@@ -464,6 +474,9 @@ def page_image():
         return jsonify({"error": "Bu projenin PDF kopyası yok."}), 404
     try:
         import pypdfium2 as pdfium
+    except ImportError:
+        return jsonify({"error": missing_library("Sayfa önizlemesi", "pypdfium2")}), 400
+    try:
         scale = min(4.0, max(0.5, float(request.args.get("scale", "1.5"))))
         doc = pdfium.PdfDocument(path)
         n = int(page)
@@ -569,12 +582,16 @@ def export_docx():
     ref = os.path.join(HERE, "reference.docx")
     name = re.sub(r"[^A-Za-z0-9_-]+", "_", d.get("name") or "ceviri")
     if d.get("mode") == "redaksiyon":
+        try:
+            import docx                                 # only to know it is installed
+        except ImportError:
+            return jsonify({"error": missing_library("Redaksiyon kopyası", "python-docx")}), 400
         data = redaction_docx(d.get("rows") or [], ref)
     else:
         try:
             import pypandoc
         except ImportError:
-            return jsonify({"error": "Word dışa aktarma için pypandoc_binary gerekli: pip3 install -r requirements.txt"}), 400
+            return jsonify({"error": missing_library("Word dışa aktarma", "pypandoc_binary")}), 400
         with tempfile.TemporaryDirectory() as tmp:
             out = os.path.join(tmp, "out.docx")
             pypandoc.convert_text(docx_markdown(d.get("markdown") or ""), "docx", format="markdown",
@@ -601,7 +618,7 @@ def setup():
             try:
                 import pdf_import
             except ImportError:
-                return jsonify({"error": "PDF içe aktarma için pypdfium2 gerekli: pip3 install -r requirements.txt"}), 400
+                return jsonify({"error": missing_library("PDF içe aktarma", "pypdfium2")}), 400
             try:
                 pdf_bytes = f.read()
                 text, pdf_warnings, pdf_meta = pdf_import.convert_with_meta(
@@ -611,6 +628,8 @@ def setup():
                 return jsonify({"error": str(e)}), 400
         else:
             text = extract_text(f.filename, f.read())
+    except ValueError as e:
+        return jsonify({"error": str(e)}), 400          # unsupported type, a missing library: said as it is
     except Exception as e:
         return jsonify({"error": f"Could not read the file: {e}"}), 400
     raw_segs = [p.strip() for p in re.split(r"\n\s*\n", text) if p.strip()]

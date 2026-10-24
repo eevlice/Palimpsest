@@ -290,6 +290,8 @@ ORNAMENT_FONT = re.compile(r"dingbat|symbol|ornament|wingding|fleuron|picto", re
 FOLIO = re.compile(r"^\s*(\d{1,4}|[ivxlcdm]{1,7})\s+\S.*|.*\S\s+(\d{1,4}|[ivxlcdm]{1,7})\s*$")   # number + short text
 PAGE_NO = re.compile(r"^[\s—–\-·•|]*(\d{1,4}|[ivxlcdm]{1,7})[\s—–\-·•|]*$", re.I)
 OCR_PRODUCER = re.compile(r"abbyy|finereader|tesseract|omnipage|readiris|paper capture|clearscan|\bocr\b", re.I)
+MINER_MISSING = (" Bu sayfaları yeniden okuyacak pdfminer.six kütüphanesi eksik: Palimpsest'i internete bağlıyken "
+                 "başlatıcıyla (start.command / start.bat) yeniden aç, kütüphaneyi kurar; sonra yeniden içe aktar.")
 SCANNED_WARNING = "Bu PDF taranmış görünüyor, metin güvenilir olmayabilir."
 CAPTION = re.compile(r"^\s*(figure|fig\.|şekil|resim|görsel|plate|illustration|photo)\s*[\dIVX]", re.I)
 
@@ -511,7 +513,7 @@ def page_kind(signals):
 
 def _miner_chars(pdf_bytes, wanted):
     """the glyphs of some pages read by pdfminer.six instead of pdfium ({page index: [Ch]}), for OCR layers pdfium
-    reads wrong (it drops the last letter of most words in Trauma's). Empty when pdfminer is not installed."""
+    reads wrong (it drops the last letter of most words in Trauma's). None when pdfminer is not installed."""
     try:
         from pdfminer.pdfparser import PDFParser
         from pdfminer.pdfdocument import PDFDocument
@@ -520,7 +522,7 @@ def _miner_chars(pdf_bytes, wanted):
         from pdfminer.converter import PDFPageAggregator
         from pdfminer.layout import LTChar, LTContainer
     except ImportError:
-        return {}
+        return None
     import io
     import logging
     logging.getLogger("pdfminer").setLevel(logging.ERROR)
@@ -2722,6 +2724,8 @@ def _analyse(pdf_bytes, first_page=None, last_page=None):
     unk = {i: unknown_share(raw_pages[i][2]) for i in ocr}
     retry = {i for i in ocr if unk[i][0] > T["ocr_retry"] * max(1, unk[i][1])}
     miner = _miner_chars(pdf_bytes, retry) if retry else {}
+    no_miner = miner is None
+    miner = miner or {}
     for i, chars in list(miner.items()):
         u = unknown_share(chars)
         if u[0] / max(1, u[1]) < unk[i][0] / max(1, unk[i][1]):
@@ -2738,7 +2742,7 @@ def _analyse(pdf_bytes, first_page=None, last_page=None):
         raise PdfImportError(f"Bu PDF taranmış ve OCR metni çok bozuk: sözcüklerin %{round(100 * bad / words)} kadarı "
                              f"sözlükte yok (sınır %{round(100 * T['ocr_reject'])}). Metin katmanını daha iyi bir OCR ile "
                              "yeniden oluştur (ör. Adobe Acrobat 'Metni Tanı', ABBYY FineReader ya da ücretsiz OCRmyPDF), "
-                             "sonra yeniden içe aktar.")
+                             "sonra yeniden içe aktar." + (MINER_MISSING if no_miner else ""))
     for rp in raw_pages:
         for c in rp[2]:
             if c.ch.strip():
@@ -2766,6 +2770,9 @@ def _analyse(pdf_bytes, first_page=None, last_page=None):
     if sel_ocr:
         suspects = _flag_suspects(md, d.seg_meta, {i + 1 for i in sel_ocr})
         warnings.append(f"Taranmış: italik/kalın bilgisi yok, {suspects} şüpheli sözcük.")
+        if no_miner:
+            warnings.append("OCR katmanı bozuk okunan " + str(len([i for i in retry if first - 1 <= i < last]))
+                            + " sayfa yeniden okunamadı." + MINER_MISSING)
         used = sorted(i + 1 for i in miner if first - 1 <= i < last)
         if used:
             warnings.append(f"OCR katmanı {len(used)} sayfada yedek okuyucuyla (pdfminer) okundu: " + _fmt_pages(used) + ".")
