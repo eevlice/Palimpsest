@@ -1,5 +1,10 @@
 # Değişiklikler
 
+## Yayınlanmamış
+
+### Değişenler
+- Homebrew ile dağıtım bırakıldı; kurulum başlatıcılarla.
+
 ## 1.1.0 — 2026-10-25
 
 ### Yeni

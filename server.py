@@ -39,9 +39,8 @@ HERE = os.path.dirname(os.path.abspath(__file__))
 
 # Books live in ~/.palimpsest/, next to keys.enc.json/prefs.json/spending.jsonl -
 # not inside the app's own folder. An install that gets updated by replacing
-# its own directory (git pull is fine, but Homebrew's Cellar swap or a fresh
-# ZIP extracted over a deleted old one are not) would otherwise take your
-# books with it.
+# its own directory (git pull is fine, but a fresh ZIP extracted over a
+# deleted old one is not) would otherwise take your books with it.
 CONFIG_DIR = os.path.join(os.path.expanduser("~"), ".palimpsest")
 PROJECTS_DIR = os.path.join(CONFIG_DIR, "projects")
 os.makedirs(PROJECTS_DIR, exist_ok=True)
