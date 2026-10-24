@@ -2,9 +2,10 @@
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>Palimpsest</title>
 <style>
-  @import url('https://fonts.googleapis.com/css2?family=Fraunces:opsz,wght@9..144,400;9..144,500;9..144,600&family=Spline+Sans+Mono:wght@400;500&family=Newsreader:ital,opsz,wght@0,6..72,400;0,6..72,500;1,6..72,400&display=swap');
+  @import url('https://fonts.googleapis.com/css2?family=Fraunces:opsz,wght@9..144,400;9..144,500;9..144,600&family=Spline+Sans+Mono:wght@400;500&family=Newsreader:ital,opsz,wght@0,6..72,400;0,6..72,500;1,6..72,400&family=Sofia+Sans+Condensed:wght@400;500;600;700&family=Instrument+Serif&display=swap');
   :root{--paper:#f3ede1;--paper-deep:#eae1d0;--ink:#211c16;--ink-soft:#5c5447;
-    --rule:#cdc1ac;--pencil:#b23a2e;--pencil-soft:#c8695e;--thread:#3f6151;}
+    --rule:#cdc1ac;--pencil:#b23a2e;--pencil-soft:#c8695e;--thread:#3f6151;
+    --hair:#ddd5c4;--trans:#b7bfb3;--halo:#d9a99b;--cell-trans:#8fb09e;}
   *{box-sizing:border-box;}
   body{margin:0;background:var(--paper);color:var(--ink);
     font-family:'Newsreader',Georgia,serif;font-size:17px;line-height:1.6;}
@@ -161,23 +162,39 @@
     cursor:pointer;padding:5px 10px;margin-left:auto;}
   .ghost-link:hover{border-color:var(--pencil);color:var(--pencil);}
   .drawer label{margin-top:12px;}.drawer label:first-child{margin-top:0;}
-  .ws-layout{display:grid;grid-template-columns:84px 1fr;gap:18px;align-items:start;}
-  /* sticky at top:18px, so leave the same 18px at the bottom - anything more
-     is dead space under the rail */
-  .rail{position:sticky;top:18px;max-height:calc(100vh - 36px);overflow-y:auto;
-    border-right:1px solid var(--rule);padding-right:8px;}
-  .rail-jump{font-family:'Spline Sans Mono',monospace;font-size:10px;letter-spacing:.06em;
-    text-transform:uppercase;border:1px solid var(--rule);background:none;color:var(--ink-soft);
-    padding:7px 8px;cursor:pointer;width:100%;margin-bottom:10px;line-height:1.3;}
-  .rail-jump:hover{border-color:var(--pencil);color:var(--pencil);}
-  .rail-item{display:flex;align-items:center;justify-content:center;gap:6px;
-    font-family:'Spline Sans Mono',monospace;font-size:11px;color:var(--ink-soft);
-    padding:3px 5px;cursor:pointer;border-left:2px solid transparent;}
-  .rail-item:hover{background:rgba(255,255,255,.5);}
-  .rail-item.active{border-left-color:var(--pencil);color:var(--ink);background:rgba(255,255,255,.6);}
-  .dot{width:7px;height:7px;border-radius:50%;flex:0 0 auto;background:var(--rule);}
-  .dot.translated{background:var(--pencil-soft);}
-  .dot.approved{background:var(--thread);}
+  .ws-layout{display:grid;grid-template-columns:180px 1fr;gap:18px;align-items:start;}
+  .ws-layout.rail-closed{grid-template-columns:1fr;}
+  .ws-layout.rail-closed .rail{display:none;}
+  /* ---- rail "4E": the whole book as one flow; headings are squares with a clipped corner. One ink in three steps + one accent. ---- */
+  .rail{--r-ink:#2B2A26;--r-mid:#A39C8E;--r-pale:#E1D9C8;--r-here:#A0412D;--r-soft:#6F695C;--r-2nd:#4F4A40;--r-bar:#E6DFD1;
+    position:sticky;top:18px;max-height:calc(100vh - 36px);display:flex;flex-direction:column;box-sizing:border-box;
+    width:180px;padding:0;font-family:'Sofia Sans Condensed','Arial Narrow',sans-serif;font-size:13px;color:var(--r-ink);}
+  /* "you are here" bar: fixed 100px whatever it holds, never moves the squares below it */
+  .rail-bar{flex:0 0 auto;box-sizing:border-box;height:100px;padding:10px;background:var(--r-bar);overflow:hidden;
+    display:flex;flex-direction:column;gap:3px;}
+  .rb-pos{height:15px;line-height:15px;font-size:13.5px;font-weight:600;letter-spacing:.05em;text-transform:uppercase;color:var(--r-soft);
+    font-variant-numeric:tabular-nums;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;}
+  .rb-sq{display:inline-block;width:9px;height:9px;background:var(--r-here);margin-right:8px;}
+  .rb-n{color:var(--r-here);}
+  .rb-part{float:right;margin-left:6px;}
+  .rb-chap{height:40px;font:400 18px/20px 'Instrument Serif',Georgia,serif;color:var(--r-ink);
+    display:-webkit-box;-webkit-line-clamp:2;-webkit-box-orient:vertical;overflow:hidden;overflow-wrap:anywhere;}
+  .rb-sub{height:15px;line-height:15px;font-size:13.5px;color:var(--r-2nd);white-space:nowrap;overflow:hidden;text-overflow:ellipsis;}
+  #rail-items{position:relative;flex:1 1 auto;min-height:0;overflow-y:auto;margin-top:12px;padding-bottom:6px;}
+  /* flow: one square per segment, no breaks between sections (squares per row: RAIL_PER_ROW in the script) */
+  .mx-flow{display:grid;column-gap:2px;row-gap:3px;}
+  .mx{display:block;aspect-ratio:1/1;box-sizing:border-box;min-width:0;padding:0;margin:0;border:0;border-radius:0;cursor:pointer;}
+  .mx:focus{outline:none;}
+  .mx:focus-visible{outline:2px solid var(--r-ink);outline-offset:1px;}
+  .mx.fn{border-radius:50%;}
+  .mx.h1{clip-path:polygon(64% 0,100% 0,100% 100%,0 100%,0 64%);}
+  .mx.h2{clip-path:polygon(46% 0,100% 0,100% 100%,0 100%,0 46%);}
+  .mx.h3{clip-path:polygon(30% 0,100% 0,100% 100%,0 100%,0 30%);}
+  .mx.h4{clip-path:polygon(16% 0,100% 0,100% 100%,0 100%,0 16%);}
+  .mx.s-a{background:var(--r-ink);}
+  .mx.s-t{background:var(--r-mid);}
+  .mx.s-p{background:var(--r-pale);}
+  .mx.here,.mx.msel{background:var(--r-here);}
   .wn-btn{font-family:'Spline Sans Mono',monospace;font-size:11px;letter-spacing:.08em;
     text-transform:uppercase;border:1px solid var(--rule);background:none;color:var(--ink-soft);
     padding:0 12px;height:30px;box-sizing:border-box;cursor:pointer;
@@ -250,7 +267,6 @@
   /* icon-only, squared off - centered under the untranslated box itself now
      says "with next" via position, no arrow needed. */
   .merge-btn:not(.undo){padding:6px 10px;}
-  .rail-item.merge-sel{background:rgba(178,58,46,.12);border-left-color:var(--pencil);color:var(--pencil);}
   .merge-confirm{display:flex;align-items:center;gap:10px;padding:10px 14px;
     background:rgba(178,58,46,.07);border:1px solid var(--pencil-soft);margin-bottom:12px;
     font-family:'Spline Sans Mono',monospace;font-size:12px;color:var(--pencil);}
@@ -345,15 +361,20 @@
   /* progress tracker */
   .tracker{display:flex;align-items:center;gap:14px;margin:0 0 16px;padding:12px 16px;
     background:rgba(255,255,255,.4);border:1px solid var(--rule);}
-  .tracker-bar{flex:1;height:8px;background:var(--paper-deep);position:relative;overflow:hidden;}
-  .tracker-fill-appr{position:absolute;left:0;top:0;bottom:0;background:var(--thread);transition:width .3s;}
-  .tracker-fill-trans{position:absolute;left:0;top:0;bottom:0;background:var(--pencil-soft);
-    opacity:.5;transition:width .3s;}
-  .tracker-label{font-family:'Spline Sans Mono',monospace;font-size:11px;color:var(--ink-soft);white-space:nowrap;}
+  /* one block per section, widths proportional to segment count (flex-grow
+     = count over a zero basis); each fills left to right: translated tone,
+     approved on top, pale ground behind */
+  .tk-strip{flex:1;display:flex;gap:4px;height:3px;}
+  .tk-sec{position:relative;min-width:1px;overflow:hidden;background:var(--hair);}
+  .tk-sec b{position:absolute;left:0;top:0;bottom:0;}
+  .tk-sec .t{background:var(--trans);}
+  .tk-sec .a{background:var(--thread);}
+  .tracker-label{font-family:'Spline Sans Mono',monospace;font-size:11px;letter-spacing:.06em;
+    text-transform:uppercase;font-variant-numeric:tabular-nums;color:var(--ink-soft);white-space:nowrap;}
   /* centered nav */
   /* relative + absolute so the resume button sits at the right edge without
      pulling the pagination off centre */
-  .window-nav{display:flex;align-items:center;gap:14px;margin:4px 0 10px;
+  .window-nav{display:flex;align-items:center;gap:14px;height:44px;margin:0 0 10px;
     justify-content:center;position:relative;}
   .wn-resume{position:absolute;right:0;top:50%;transform:translateY(-50%);
     width:30px;height:30px;box-sizing:border-box;padding:0;
@@ -377,15 +398,11 @@
     .ws-status{flex:1 1 100%;order:1;justify-content:flex-end;}
     .ws-bar{gap:8px 10px;}
     /* rail = collapsible multi-column chip grid, lives under the tracker */
-    .rail{position:static;max-height:42vh;overflow-y:auto;border-right:none;
+    .rail{position:static;max-height:42vh;width:auto;
       border:1px solid var(--rule);background:rgba(255,255,255,.5);
       padding:10px;margin-bottom:16px;display:none;}
-    .rail.open{display:block;}
-    .rail.open #rail-items{display:grid;
-      grid-template-columns:repeat(auto-fill,minmax(54px,1fr));gap:6px;}
-    .rail-item{justify-content:center;padding:7px 4px;border-left:none;
-      border:1px solid var(--rule);background:rgba(255,255,255,.5);}
-    .rail-item.active{border-color:var(--pencil);color:var(--ink);}
+    .rail.open{display:flex;}
+    #btn-rail{display:none !important;}
     #btn-rail-mobile{display:block !important;}
     /* per-paragraph actions: one cohesive responsive line */
     .seg-actions{flex-wrap:wrap;gap:6px;}
@@ -525,14 +542,12 @@
   <!-- ========== WORKSPACE ========== -->
   <section id="workspace" class="hidden">
     <div class="tracker">
-      <div class="tracker-bar">
-        <div class="tracker-fill-trans" id="tk-trans"></div>
-        <div class="tracker-fill-appr" id="tk-appr"></div>
-      </div>
+      <div class="tk-strip" id="tk-strip"></div>
       <span class="tracker-label" id="tk-label"></span>
     </div>
     <div class="ws-bar">
       <button class="tb icon-only" id="home-btn" title="Projelere dön">←</button>
+      <button type="button" class="tb icon-only" id="btn-rail" title="Bölümleri göster/gizle (⌘\)" aria-label="Bölümleri göster/gizle" aria-pressed="true"><svg viewBox="0 0 24 24" width="15" height="15" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="4" width="18" height="16"/><path d="M9 4v16"/></svg></button>
       <span class="ws-divider"></span>
       <div class="ws-tools" id="ws-tools">
         <button class="tb icon-only" id="btn-glossary" title="Sözlük"><svg viewBox="0 0 24 24" width="15" height="15" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 7v14"/><path d="M3 18a1 1 0 0 1-1-1V4a1 1 0 0 1 1-1h5a4 4 0 0 1 4 4 4 4 0 0 1 4-4h5a1 1 0 0 1 1 1v13a1 1 0 0 1-1 1h-6a3 3 0 0 0-3 3 3 3 0 0 0-3-3z"/></svg></button>
@@ -586,10 +601,11 @@
       <label>Özet</label><textarea id="d-syn" style="min-height:80px;"></textarea>
       <label>Stil örneği</label><textarea id="d-style" style="min-height:60px;"></textarea>
     </div>
-    <button class="tb run-full" id="btn-rail-mobile" style="display:none;margin-bottom:12px;">¶ Paragraflar</button>
+    <button class="tb run-full" id="btn-rail-mobile" style="display:none;margin-bottom:12px;">Bölümler</button>
     <div id="merge-confirm-bar"></div>
     <div class="ws-layout">
-      <nav class="rail">
+      <nav class="rail" id="rail">
+        <div class="rail-bar" id="rail-where"><div class="rb-pos" id="rb-pos"></div><div class="rb-chap" id="rb-chap"></div><div class="rb-sub" id="rb-sub"></div></div>
         <div id="rail-items"></div>
       </nav>
       <div>
@@ -1601,33 +1617,193 @@ function enterWorkspace(){
 // ================================================================
 // RAIL + WINDOW
 // ================================================================
-function statusOf(i){
-  if(P.approved[i])return 'approved';
-  if(P.finals[i]!==null)return 'translated';
-  return '';
+function segState(i){
+  if(P.approved[i]) return 's-a';
+  const f=P.finals[i];
+  return (f!==null&&f!==undefined&&f!=='')?'s-t':'s-p';
 }
 function padWidth(){ return String(P.segments.length).length; }
-function renderRail(){
-  const r=$('rail-items');r.innerHTML='';
-  const w=padWidth();
-  const inFilter=i=>GLOSS_FILTER&&GLOSS_FILTER.indices.includes(i);
-  P.segments.forEach((_,i)=>{
-    const it=document.createElement('div');
-    const isMergeSel=MERGE_SEL.includes(i);
-    const isActive=GLOSS_FILTER?inFilter(i):(i>=winStart&&i<winStart+WIN);
-    it.className='rail-item'+(isActive?' active':'')+(isMergeSel?' merge-sel':'');
-    it.dataset.index=i;
-    it.innerHTML=`<span class="dot ${statusOf(i)}"></span>${String(i+1).padStart(w,'0')}`;
-    it.onclick=()=>{
-      if(MERGE_MODE){ mergeSelClick(i); }
-      else{ if(GLOSS_FILTER) clearGlossaryFilter(); goToWindow(i); if(window.innerWidth<=760) closeRailMobile(); }
-    };
-    r.appendChild(it);
+// ---- sections: the unit of the rail and the strip. A section is everything
+// from one top-level heading (the shallowest level the project uses) to the
+// next; segments before the first one form a "—" lead-in section; a project
+// without headings is a single section. ----
+function headingTitle(raw){ return inlineParse(raw).vis.replace(/\u0001+/g,'').replace(/\s*\{\.[a-zA-Z-]+\}\s*$/,'').trim(); }
+function computeSections(segs,fallbackName){
+  const n=segs.length, types=segs.map(segType);
+  let top=7; types.forEach(t=>{ if(t.type==='heading'&&t.level<top) top=t.level; });
+  const starts=[]; types.forEach((t,i)=>{ if(t.type==='heading'&&t.level===top) starts.push(i); });
+  const secs=[];
+  if(!starts.length){
+    secs.push({start:0,end:n,lead:true,head:-1,level:0,title:fallbackName||'—',num:'—'});
+  }else{
+    if(starts[0]>0) secs.push({start:0,end:starts[0],lead:true,head:-1,level:0,title:'—',num:'—'});
+    starts.forEach((st,k)=>secs.push({start:st,end:k+1<starts.length?starts[k+1]:n,lead:false,head:st,
+      level:top,title:headingTitle(segs[st]),num:String(k+1)}));
+  }
+  const secOf=new Int32Array(n);
+  secs.forEach((sec,k)=>{ for(let i=sec.start;i<sec.end;i++) secOf[i]=k; });
+  return {secs,secOf,types};
+}
+// Counts for the progress strip (headings and footnotes included).
+function sectionStats(secs,finals,approved){
+  return secs.map(sec=>{
+    let a=0,t=0;
+    for(let i=sec.start;i<sec.end;i++){
+      if(approved[i]) a++;
+      if(finals[i]!==null&&finals[i]!==undefined&&finals[i]!=='') t++;
+    }
+    return {appr:a,trans:t,total:sec.end-sec.start};
   });
 }
+function railLabel(i,t){
+  return t.type==='heading'?'H'+t.level
+    :t.type==='footnote'?'NOT '+fnNumber(t.label)
+    :'¶ '+String(i+1).padStart(padWidth(),'0');
+}
+function focusedIndex(){
+  const ae=document.activeElement;
+  return (ae&&/^edit-\d+$/.test(ae.id))?+ae.id.slice(5):null;
+}
+function railOpen(){ return PREFS.rail_open!==false; }
+
+// ================================================================
+// RAIL: the whole book as one flow of squares under a "you are here" bar
+// ================================================================
+const RAIL_PER_ROW=10;   // squares per row
+function roman(n){ const m=[[10,'X'],[9,'IX'],[5,'V'],[4,'IV'],[1,'I']]; let r=''; for(const [v,c] of m) while(n>=v){ r+=c; n-=v; } return r; }
+// '#' count -> depth. The files carry one '#' for both part and chapter, so a part is recognised by an explicit
+// "{.bolum}" on the chapters (then a plain '#' is a part) or, failing that, by a title that starts "Part"/"Kısım".
+function headingDepths(segs,types){
+  const raw=i=>segs[i], hasAttr=types.some((t,i)=>t.type==='heading'&&/\{\.bolum\}\s*$/.test(raw(i)));
+  const d=new Int8Array(segs.length);
+  types.forEach((t,i)=>{
+    if(t.type!=='heading') return;
+    if(t.level===1){
+      if(/\{\.bolum\}\s*$/.test(raw(i))) d[i]=2;
+      else if(hasAttr) d[i]=1;
+      else d[i]=/^[*_]*(part|kısım|book)\b/i.test(headingTitle(raw(i)))?1:2;
+    }else d[i]=t.level===2?3:4;
+  });
+  return d;
+}
+// DOM-free model of the book for the rail: types, heading depths, the heading list, per-segment state
+function railModel(segs,finals,approved){
+  const types=segs.map(segType), depth=headingDepths(segs,types);
+  const heads=[]; types.forEach((t,i)=>{ if(t.type==='heading') heads.push({idx:i,depth:depth[i],title:headingTitle(segs[i])}); });
+  const state=new Uint8Array(segs.length);
+  for(let i=0;i<segs.length;i++) state[i]=approved[i]?2:(finals[i]!==null&&finals[i]!==undefined&&finals[i]!=='')?1:0;
+  // square shape follows the '#' count (1..4)
+  const lvl=new Int8Array(segs.length);
+  types.forEach((t,i)=>{ if(t.type==='heading') lvl[i]=Math.min(t.level,4); });
+  return {types,depth,heads,state,lvl};
+}
+const STATE_CLS=['s-p','s-t','s-a'];
+// one descriptor per segment: kind p / fn / hd (+ the level number a heading carries)
+function flowCells(m){
+  return m.types.map((t,i)=>({idx:i,kind:t.type==='heading'?'hd':t.type==='footnote'?'fn':'p',num:m.lvl[i],st:m.state[i]}));
+}
+// "where am I" for segment f: nearest part, chapter, and sub-heading before it (a sub-heading only counts
+// inside the current chapter)
+function railWhere(m,f,bookName){
+  let part=null,chap=null,sub=null,partN=0,chapN=0;
+  for(const h of m.heads){
+    if(h.idx>f) break;
+    if(h.depth===1){ partN++; part={n:partN,title:h.title,idx:h.idx}; chap=null; sub=null; }
+    else if(h.depth===2){ chapN++; chap={...h,n:chapN}; sub=null; }
+    else sub=h;
+  }
+  if(!chap&&!part&&sub){ chap=null; }
+  return {part,chap,sub};
+}
+function railCellClass(c,here,sel){
+  return 'mx '+(c.kind==='fn'?'fn ':'')+STATE_CLS[c.st]+(c.num?' h'+c.num:'')+(here?' here':'')+(sel?' msel':'');
+}
+const RAIL={sig:null,model:null,cells:[],els:[],here:-1};
+function railFocus(){
+  const f=focusedIndex();
+  if(f!==null) return f;
+  if(GLOSS_FILTER&&GLOSS_FILTER.indices.length) return GLOSS_FILTER.indices[0];
+  return Math.min(winStart,Math.max(0,P.segments.length-1));
+}
+function buildRail(){
+  const root=$('rail-items'), m=railModel(P.segments,P.finals,P.approved);
+  RAIL.model=m; RAIL.els=[]; RAIL.cells=flowCells(m);
+  root.innerHTML='<div class="mx-flow">'+RAIL.cells.map(c=>{
+    const ttl=c.kind==='hd'?'Bölüm · '+m.heads.find(h=>h.idx===c.idx).title:railLabel(c.idx,m.types[c.idx]);
+    return `<button type="button" class="mx s-p${c.kind==='fn'?' fn':''}" data-idx="${c.idx}" title="${esc(ttl)}" aria-label="${esc(ttl)}"></button>`;
+  }).join('')+'</div>';
+  root.firstChild.style.gridTemplateColumns=`repeat(${RAIL_PER_ROW},minmax(0,1fr))`;
+  const kids=root.firstChild.children;
+  for(let k=0;k<kids.length;k++) RAIL.els.push(kids[k]);
+  RAIL.cls=new Array(RAIL.els.length).fill(null);
+  RAIL.here=-1;
+}
+// Only what changed is touched: each cell's class string is compared with the one it already has.
+function updateRail(forceScroll){
+  const m=RAIL.model, root=$('rail-items'); if(!m) return;
+  for(let i=0;i<m.state.length;i++) m.state[i]=P.approved[i]?2:(P.finals[i]!==null&&P.finals[i]!==undefined&&P.finals[i]!=='')?1:0;
+  const f=railFocus(), sel=new Set(MERGE_SEL);
+  RAIL.cells.forEach((c,k)=>{
+    c.st=m.state[c.idx];
+    const cls=railCellClass(c,c.idx===f,sel.has(c.idx));
+    if(RAIL.cls[k]!==cls){ RAIL.cls[k]=cls; RAIL.els[k].className=cls; }
+  });
+  const w=railWhere(m,f,P.name);
+  $('rb-pos').innerHTML=(w.part?'<span class="rb-part">'+roman(w.part.n)+'</span>':'')+
+    '<i class="rb-sq"></i><span class="rb-n">'+esc('¶ '+String(f+1).padStart(padWidth(),'0'))+'</span>';
+  $('rb-chap').textContent=w.chap?w.chap.title:(w.part?w.part.title:'');
+  $('rb-sub').textContent=w.sub?w.sub.title:'';
+  if(f!==RAIL.here||forceScroll){ RAIL.here=f; scrollRailToHere(f); }
+}
+// keep the "you are here" square in view, near the middle, without jumping when it is already comfortably visible
+function scrollRailToHere(f){
+  const root=$('rail-items'); if(!root||!root.clientHeight) return;
+  const el=RAIL.els[f];
+  if(!el) return;
+  const top=el.offsetTop, h=el.offsetHeight, vis0=root.scrollTop, vis1=vis0+root.clientHeight;
+  if(top<vis0+root.clientHeight*0.15||top+h>vis1-root.clientHeight*0.15)
+    root.scrollTop=Math.max(0,top-root.clientHeight/2+h/2);
+}
+function renderRail(){
+  const root=$('rail-items'); if(!root||!P||!P.segments) return;
+  const sig=P.id+'|'+P.segments.length+'|'+P.name;
+  const rebuilt=RAIL.sig!==sig||!root.firstChild;
+  if(rebuilt){ RAIL.sig=sig; buildRail(); }
+  applyRailOpen();
+  updateRail(rebuilt);
+}
+// A click on a square in the rail.
+function railGoto(i){
+  if(MERGE_MODE){ mergeSelClick(i); return; }
+  if(GLOSS_FILTER) clearGlossaryFilter();
+  goToWindow(i);
+  const el=$('seg-'+i); if(el) el.scrollIntoView({block:'start',behavior:'smooth'});
+  if(window.innerWidth<=760) closeRailMobile();
+}
+$('rail-items').addEventListener('click',e=>{
+  const c=e.target.closest('[data-idx]'); if(c) railGoto(+c.dataset.idx);
+});
+// open / closed: hides the column; the toolbar button stays where it is
+function applyRailOpen(){
+  const open=railOpen(), lay=document.querySelector('.ws-layout');
+  if(lay) lay.classList.toggle('rail-closed',!open);
+  const b=$('btn-rail'); if(b) b.setAttribute('aria-pressed',String(open));
+}
+function setRailOpen(v){ PREFS.rail_open=!!v; savePref('rail_open',!!v); applyRailOpen(); if(v) updateRail(true); }
+$('btn-rail').onclick=()=>setRailOpen(!railOpen());
+document.addEventListener('keydown',e=>{
+  if(!(e.metaKey||e.ctrlKey)||!(e.key==='\\'||e.code==='Backslash')) return;
+  const ws=$('workspace'); if(!ws||ws.classList.contains('hidden')||window.innerWidth<=760) return;
+  e.preventDefault(); setRailOpen(!railOpen());
+});
+// the "you are here" square follows the textarea that has focus
+document.addEventListener('focusin',()=>setTimeout(()=>{ if(RAIL.model&&P) updateRail(); },0));
+document.addEventListener('focusout',()=>setTimeout(()=>{ if(RAIL.model&&P) updateRail(); },0));
+// The window starts AT the target segment (it is the first row), not on a fixed 10-block boundary.
+function windowStartFor(i,n){ return Math.max(0,Math.min(i,n-1)); }
+function windowLabel(ws,n){ return `¶ ${ws+1}–${Math.min(ws+WIN,n)} of ${n}`; }
 function goToWindow(i){
-  winStart=Math.max(0,Math.min(i-Math.floor(WIN/2),P.segments.length-WIN));
-  if(winStart<0)winStart=0;
+  winStart=windowStartFor(i,P.segments.length);
   renderWindow();renderRail();
 }
 
@@ -1994,8 +2170,7 @@ function renderWindow(){
     $('prev-win').disabled=true;$('next-win').disabled=true;
     if($('prev-win2')){$('prev-win2').disabled=true;$('next-win2').disabled=true;}
   }else{
-    const last=Math.min(winStart+WIN,P.segments.length);
-    const lbl=`¶ ${winStart+1}–${last} of ${P.segments.length}`;
+    const lbl=windowLabel(winStart,P.segments.length);
     $('win-label').textContent=lbl;
     if($('win-label2'))$('win-label2').textContent=lbl;
     const atStart=winStart<=0, atEnd=winStart+WIN>=P.segments.length;
@@ -2009,8 +2184,7 @@ function renderWindow(){
 
 function pageEarlier(){winStart=Math.max(0,winStart-WIN);renderWindow();renderRail();window.scrollTo({top:0,behavior:'smooth'});}
 function pageLater(){
-  winStart=Math.min(P.segments.length-1,winStart+WIN);
-  if(winStart>P.segments.length-WIN)winStart=Math.max(0,P.segments.length-WIN);
+  winStart=Math.min(P.segments.length-1,winStart+WIN);        // always exactly +WIN from where the window starts
   renderWindow();renderRail();window.scrollTo({top:0,behavior:'smooth'});
 }
 $('prev-win').onclick=pageEarlier;$('next-win').onclick=pageLater;
@@ -2040,12 +2214,6 @@ function jumpToLastTranslated(){
   if(i<0) return;
   goToWindow(i);
   window.scrollTo({top:0,behavior:'smooth'});
-  // the rail is its own scroll region (thousands of paragraphs, only a
-  // sliver of which is visible) - jumping the main window doesn't carry
-  // the rail's scroll position along, so without this the dot marking
-  // where you actually landed can sit well outside view.
-  const railItem=document.querySelector(`.rail-item[data-index="${i}"]`);
-  if(railItem) railItem.scrollIntoView({block:'start',behavior:'smooth'});
 }
 $('jump-last').onclick=jumpToLastTranslated;
 $('jump-last2').onclick=jumpToLastTranslated;
@@ -2149,16 +2317,28 @@ function updateProgress(){
   const total=P.segments.length;
   const finals=Array.isArray(P.finals)?P.finals:[];
   const approved=Array.isArray(P.approved)?P.approved:[];
-  const done=finals.filter(x=>x!==null&&x!==undefined&&x!=='').length;
   const appr=approved.filter(Boolean).length;
   if($('running-cost'))$('running-cost').textContent=`$${(P.cost||0).toFixed(4)}`;
   const pa=total?Math.round(appr/total*100):0;
-  const pt=total?Math.round(done/total*100):0;
-  const tkAppr=$('tk-appr'), tkTrans=$('tk-trans'), tkLabel=$('tk-label');
-  if(tkAppr) tkAppr.style.width=pa+'%';
-  if(tkTrans) tkTrans.style.width=pt+'%';
-  if(tkLabel) tkLabel.textContent=`${appr} onaylı · ${done} çevrildi · ${total} toplam (${pa}%)`;
+  const tkLabel=$('tk-label');
+  if(tkLabel) tkLabel.textContent=`%${pa} · ${appr} / ${total}`;
+  drawStrip();
 }
+// DOM rather than canvas: blocks get their proportional widths and gaps from
+// flex, stay crisp at any devicePixelRatio and resize without a redraw.
+function drawStrip(){
+  const strip=$('tk-strip'); if(!strip||!P||!P.segments) return;
+  const {secs}=computeSections(P.segments,P.name);
+  const stats=sectionStats(secs,P.finals,P.approved);
+  const k=secs.length, w=strip.clientWidth;
+  // with hundreds of sections the 4px gaps alone would overflow the strip
+  strip.style.gap=(k>1&&w)?Math.max(0,Math.min(4,(w-2*k)/(k-1)))+'px':'';
+  strip.innerHTML=secs.map((sec,j)=>{
+    const st=stats[j], t=st.total?st.trans/st.total*100:0, a=st.total?st.appr/st.total*100:0;
+    return `<i class="tk-sec" style="flex:${Math.max(1,st.total)} 1 0" title="${esc((sec.lead?'':sec.num+' · ')+sec.title)} — ${st.appr}/${st.total} onaylı"><b class="t" style="width:${t}%"></b><b class="a" style="width:${a}%"></b></i>`;
+  }).join('');
+}
+window.addEventListener('resize',()=>{ try{ drawStrip(); }catch(e){} });
 function queueSave(){clearTimeout(saveTimer);saveTimer=setTimeout(save,800);}
 function save(){
   if(!P)return;
