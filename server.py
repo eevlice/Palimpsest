@@ -111,9 +111,15 @@ def condense_brief(provider, model, synopsis):
             "Output ONLY the condensed brief.\n\n" + synopsis)
     try:
         text, cost, tokens = providers.call_simple(provider, model, system, user, max_tokens=1024)
-        return text, (cost, tokens)
     except Exception:
-        return synopsis, None
+        return synopsis, None, None
+    # The call is paid for either way, so its cost is always returned. The rewrite replaces the
+    # (already validated) brief only if it is complete and actually shorter.
+    if tokens.get("truncated"):
+        return synopsis, (cost, tokens), "Özet sıkıştırması yarıda kesildi; sıkıştırılmamış özet kullanıldı."
+    if not text.strip() or len(text) >= len(synopsis):
+        return synopsis, (cost, tokens), "Özet sıkıştırılamadı (sonuç kısalmadı); sıkıştırılmamış özet kullanıldı."
+    return text, (cost, tokens), None
 
 
 def build_context(provider, model, src, tgt, full_text):
@@ -149,6 +155,52 @@ def build_context(provider, model, src, tgt, full_text):
         f"BOOK:\n{sample}"
     )
     return providers.call_simple(provider, model, system, user, max_tokens=4096)
+
+
+SYNOPSIS_MAX_CHARS = 4000   # the prompt asks for 150-250 words (~1700 chars); this is the "absurd" line
+
+
+def validate_context(blob, tokens):
+    """Returns None if the model's context-pass answer is usable, else a short Turkish reason.
+    A cut-off answer, a missing SYNOPSIS/TERM SHEET marker or an oversized synopsis is never
+    allowed to reach the review screen."""
+    if tokens.get("truncated"):
+        return "model çıktısı uzunluk sınırında kesildi"
+    if not re.search(r"===\s*SYNOPSIS\s*===", blob, re.I) or not re.search(r"===\s*TERM SHEET\s*===", blob, re.I):
+        return "model beklenen biçimde yanıt vermedi"
+    syn, _terms = split_context(blob)
+    if not syn.strip():
+        return "model boş bir özet döndürdü"
+    if len(syn) > SYNOPSIS_MAX_CHARS:
+        return "özet beklenenden çok uzun geldi"
+    return None
+
+
+def _fmt_tokens(n):
+    return f"{int(n):,}".replace(",", ".")
+
+
+def _fmt_cost(c):
+    return ("$%.2f" % c if c >= 0.005 else "$%.4f" % c).replace(".", ",")
+
+
+def _spent(tokens, cost):
+    n = sum(tokens.get(k, 0) or 0 for k in ("input", "output", "cache_read", "cache_write"))
+    return f"{_fmt_tokens(n)} token, {_fmt_cost(cost)} harcandı"
+
+
+DEBUG_DIR = os.path.join(CONFIG_DIR, "debug")
+
+
+def dump_debug(kind, raw, meta):
+    """Local only, only on failure: keep the model's raw answer so the failure can be inspected."""
+    os.makedirs(DEBUG_DIR, mode=0o700, exist_ok=True)
+    path = os.path.join(DEBUG_DIR, datetime.datetime.now().strftime(f"{kind}-%Y%m%d-%H%M%S-%f.txt"))
+    with open(path, "w", encoding="utf-8") as f:
+        f.write("\n".join(f"{k}: {v}" for k, v in meta.items()) + "\n--- raw model output ---\n" + raw)
+    os.chmod(path, 0o600)
+    print(f"  ! setup validation failed ({meta.get('reason')}); raw model output saved to {path}", flush=True)
+    return path
 
 
 def split_context(blob):
@@ -385,23 +437,33 @@ def setup():
     text = "\n\n".join(segtypes.strip_for_context(s) for s in segs)
     if not keys.get_key(provider):
         return jsonify({"error": f"No API key for {provider}. Add one from Settings."}), 500
+    spent_tokens, spent_cost = {}, 0.0
     try:
         blob, cost1, tokens1 = build_context(provider, model, src, tgt, text)
-        synopsis, terms = split_context(blob)
+        # paid for already: log it before anything can reject the answer
         spending.log_call("", project_name, provider, model, "off", tokens1, cost1)
+        spent_tokens, spent_cost = tokens1, cost1
+        problem = validate_context(blob, tokens1)
+        if problem:
+            dump_debug("setup", blob, {"reason": problem, "provider": provider, "model": model,
+                                       "stop_reason": tokens1.get("stop_reason"), "output_tokens": tokens1.get("output"),
+                                       "cost": cost1, "book_chars": len(text)})
+            return jsonify({"error": f"Özet üretilemedi: {problem} ({_spent(tokens1, cost1)}). Tekrar deneyebilirsin."}), 502
+        synopsis, terms = split_context(blob)
         # Condense the brief once now, to cut tokens on every later call.
-        condensed, condense_info = condense_brief(provider, model, synopsis)
+        condensed, condense_info, condense_note = condense_brief(provider, model, synopsis)
         total_cost = cost1
         if condense_info:
             cost2, tokens2 = condense_info
             spending.log_call("", project_name, provider, model, "off", tokens2, cost2)
             total_cost += cost2
-        warnings = [w["message"] for w in import_warnings]
+        warnings = [w["message"] for w in import_warnings] + ([condense_note] if condense_note else [])
         return jsonify({"segments": segs, "synopsis": condensed, "terms": terms,
                         "setup_cost": round(total_cost, 4), "count": len(segs),
                         "warnings": warnings})
     except Exception as e:
-        return jsonify({"error": f"Context pass failed: {e}"}), 500
+        spent = f" ({_spent(spent_tokens, spent_cost)})" if spent_tokens else ""
+        return jsonify({"error": f"Bağlam okuması başarısız: {e}{spent}"}), 500
 
 
 @app.route("/clean_glossary", methods=["POST"])

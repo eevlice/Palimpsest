@@ -129,6 +129,15 @@ def _client_for(provider):
     raise ValueError(f"unknown provider: {provider}")
 
 
+def _stop_info(stop_reason, output_tokens, cap):
+    """The two fields every provider adds to its token dict. `truncated` is True when the model
+    stopped because it ran out of output budget - either the provider said so, or it spent
+    the whole cap. Existing callers only read input/output/cache_*, so extra keys are harmless."""
+    stop = str(stop_reason).lower() if stop_reason is not None else None
+    hit = bool(stop and ("max_tokens" in stop or "max_output_tokens" in stop or "length" in stop))
+    return {"stop_reason": stop, "truncated": hit or (cap is not None and output_tokens >= cap)}
+
+
 # --------------------------------------------------------------------------
 # Anthropic
 # --------------------------------------------------------------------------
@@ -173,6 +182,7 @@ def _call_anthropic(client, model, system_text, standing_context, per_call_text,
     return text, {
         "input": non_cached, "output": output_tokens,
         "cache_read": cache_read, "cache_write": cache_write,
+        **_stop_info(getattr(resp, "stop_reason", None), output_tokens, max_tokens),
     }
 
 
@@ -197,9 +207,11 @@ def _call_openai(client, model, system_text, standing_context, per_call_text, ef
     input_tokens = getattr(u, "input_tokens", 0) or 0
     cached = getattr(getattr(u, "input_tokens_details", None), "cached_tokens", 0) or 0
     output_tokens = getattr(u, "output_tokens", 0) or 0
+    status_reason = getattr(getattr(resp, "incomplete_details", None), "reason", None)
     return text, {
         "input": max(0, input_tokens - cached), "output": output_tokens,
         "cache_read": cached, "cache_write": 0,
+        **_stop_info(status_reason, output_tokens, kwargs["max_output_tokens"]),
     }
 
 
@@ -232,9 +244,13 @@ def _call_google(client, model, system_text, standing_context, per_call_text, ef
     cached = getattr(u, "cached_content_token_count", 0) or 0
     output_tokens = getattr(u, "candidates_token_count", 0) or 0
     thoughts = getattr(u, "thoughts_token_count", 0) or 0
+    cands = getattr(resp, "candidates", None) or []
+    finish = getattr(cands[0], "finish_reason", None) if cands else None
+    finish = getattr(finish, "name", finish)
     return text, {
         "input": max(0, prompt_tokens - cached), "output": output_tokens + thoughts,
         "cache_read": cached, "cache_write": 0,
+        **_stop_info(finish, output_tokens + thoughts, config.max_output_tokens),
     }
 
 
