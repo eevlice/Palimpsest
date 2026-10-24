@@ -1,6 +1,6 @@
 # Değişiklikler
 
-## Yayınlanmamış
+## 1.1.0 — 2026-10-25
 
 ### Yeni
 - **PDF içe aktarma.** Kitabı PDF olarak yükleyebilirsiniz: başlıklar, paragraflar, listeler, epigraf, alıntı,
