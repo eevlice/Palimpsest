@@ -28,7 +28,6 @@ import spending
 import providers
 import prefs
 import segtypes
-import pdf_import
 
 app = Flask(__name__, static_folder=".")
 
@@ -429,11 +428,18 @@ def setup():
     pdf_warnings = []
     try:
         if f.filename.lower().endswith(".pdf"):
-            text, pdf_warnings = pdf_import.convert(f.read(), request.form.get("first_page"), request.form.get("last_page"))
+            # imported here, not at the top: a missing pypdfium2 must only switch PDF import off,
+            # never stop the server from starting
+            try:
+                import pdf_import
+            except ImportError:
+                return jsonify({"error": "PDF içe aktarma için pypdfium2 gerekli: pip3 install -r requirements.txt"}), 400
+            try:
+                text, pdf_warnings = pdf_import.convert(f.read(), request.form.get("first_page"), request.form.get("last_page"))
+            except pdf_import.PdfImportError as e:
+                return jsonify({"error": str(e)}), 400
         else:
             text = extract_text(f.filename, f.read())
-    except pdf_import.PdfImportError as e:
-        return jsonify({"error": str(e)}), 400
     except Exception as e:
         return jsonify({"error": f"Could not read the file: {e}"}), 400
     segs, import_warnings = segment(text)
