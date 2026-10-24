@@ -189,6 +189,21 @@
     grid-template-columns:1fr 1fr;gap:22px;}
   .seg.done{background:rgba(63,97,81,.06);}
   .seg .src{font-size:17px;line-height:1.65;color:var(--ink-soft);white-space:pre-wrap;}
+  .seg.heading{padding-top:30px;}
+  .seg.heading .src{color:var(--ink);font-weight:600;line-height:1.3;}
+  .seg.h1 .src{font-size:30px;} .seg.h2 .src{font-size:25px;} .seg.h3 .src{font-size:21px;}
+  .seg.h4 .src,.seg.h5 .src,.seg.h6 .src{font-size:18px;}
+  .seg.heading .tgt-edit,.seg.fn .tgt-edit{min-height:44px;}
+  .seg.fn{padding:10px 12px;}
+  .seg.fn .src{font-size:14px;line-height:1.5;}
+  .fn-ref{font-family:'Spline Sans Mono',monospace;font-size:.62em;color:var(--pencil);
+    vertical-align:super;line-height:0;margin:0 1px;}
+  .seg-warn{grid-column:1 / -1;font-family:'Spline Sans Mono',monospace;font-size:11px;
+    color:var(--pencil);margin-top:-8px;}
+  .seg-warn:empty{display:none;}
+  .review-warn{margin-top:14px;font-family:'Spline Sans Mono',monospace;font-size:11px;
+    color:var(--pencil);white-space:pre-line;}
+  .review-warn:empty{display:none;}
   .seg-num{font-family:'Spline Sans Mono',monospace;font-size:11px;color:var(--pencil);
     grid-column:1 / -1;margin-bottom:-6px;}
   .tgt-area{display:flex;flex-direction:column;gap:8px;}
@@ -495,6 +510,7 @@
       <button class="run" id="start">Onayla ve çeviriye başla</button>
       <span class="meta" id="review-meta"></span>
     </div>
+    <div class="review-warn" id="review-warn"></div>
   </section>
 
   <!-- ========== WORKSPACE ========== -->
@@ -885,9 +901,26 @@ function deleteProject(p){
   fetch('/delete',{method:'POST',headers:{'Content-Type':'application/json'},
     body:JSON.stringify({id:p.id})}).then(()=>refreshProjects());
 }
+// Markers come off on the way to the model and out of the translation box;
+// they go back on here, taken from the source. A final that already starts
+// with its marker (projects translated before segment types) is left alone.
+function exportText(segments,finals){
+  return segments.map((s,i)=>{
+    const f=finals[i];
+    const t=segType(s);
+    if(f===null){
+      const m=segMarkerLen(s);
+      return s.slice(0,m)+'[UNTRANSLATED] '+s.slice(m);
+    }
+    if(f===''||f===undefined) return f;
+    if(t.type==='heading'&&!SEG_H.test(f)) return '#'.repeat(t.level)+' '+f;
+    if(t.type==='footnote'&&!SEG_F.test(f)) return '[^'+t.label+']: '+f;
+    return f;
+  }).join('\n\n');
+}
 function exportProject(pid){
   fetch('/project/'+encodeURIComponent(pid)).then(r=>r.json()).then(d=>{
-    const out=d.segments.map((s,i)=>d.finals[i]!==null?d.finals[i]:'[UNTRANSLATED] '+s).join('\n\n');
+    const out=exportText(d.segments,d.finals);
     const blob=new Blob([out],{type:'text/plain;charset=utf-8'});
     const a=document.createElement('a');a.href=URL.createObjectURL(blob);
     a.download=d.name.replace(/[^a-z0-9]+/gi,'_')+'.'+d.target_lang.toLowerCase()+'.txt';a.click();
@@ -932,6 +965,7 @@ $('analyze').onclick=async()=>{
     $('synopsis').value=data.synopsis;$('terms').value=data.terms;$('rules').value='';$('style').value='';
     $('setup-status').textContent='';
     $('review-meta').textContent=`${data.count} paragraphs · context read $${data.setup_cost.toFixed(4)}`;
+    $('review-warn').textContent=(data.warnings||[]).join('\n');
     showScreen('review');
   }catch(e){$('setup-err').innerHTML=`<div class="err">Server unreachable.</div>`;
     $('analyze').disabled=false;$('setup-status').textContent='';}
@@ -1020,6 +1054,54 @@ function clearSearch(){
 // two characters, which would shift the highlight indices that depend on
 // the folded text keeping the original length.
 function foldCase(s){ return (s||'').replace(/[İIı]/g,'i').toLowerCase(); }
+// ---- segment types: derived from the source markdown, never stored. Mirrors
+// segtypes.py - the two sets of regexes must stay identical. ----
+const SEG_H=/^(#{1,6})[ \t]+/, SEG_F=/^\[\^([^\]\r\n\t ]+)\]:[ \t]*/;
+const SEG_REF=/\[\^([^\]\r\n\t ]+)\](?!:)/g;
+function segType(s){
+  let m=SEG_H.exec(s); if(m) return {type:'heading',level:m[1].length};
+  m=SEG_F.exec(s); if(m) return {type:'footnote',label:m[1]};
+  return {type:'para'};
+}
+function segMarkerLen(s){ const m=SEG_H.exec(s)||SEG_F.exec(s); return m?m[0].length:0; }
+function fnNumber(label){ const m=/(\d+)$/.exec(label); return m?m[1]:label; }
+function typeOf(i){ return segType(P.segments[i]||''); }
+function refLabels(s){ return Array.from((s||'').matchAll(SEG_REF),m=>m[1]); }
+// Matching runs on text where the marker and every [^ref] are replaced by
+// same-length filler, so none of it can match a term or a query and every
+// span index still points into the raw segment.
+const MASK='\u0001';
+function maskRefs(s){ return (s||'').replace(SEG_REF,m=>MASK.repeat(m.length)); }
+// What the source column shows, as flags per raw character: marker (before
+// `off`), [^ref] chars, **bold** / *italic* delimiters (delim) and the
+// bold/italic content. Matching works on the visible text - marker and
+// delimiters left out, each ref a barrier - and maps hits back to raw
+// indices, so a term still matches across "the **Internet** policy".
+const PARSE_CACHE=new Map();
+function inlineParse(raw){
+  let c=PARSE_CACHE.get(raw); if(c) return c;
+  const n=raw.length, off=segMarkerLen(raw);
+  const ref=new Uint8Array(n), delim=new Uint8Array(n), bold=new Uint8Array(n), ital=new Uint8Array(n);
+  for(const m of raw.slice(off).matchAll(SEG_REF)) for(let k=0;k<m[0].length;k++) ref[off+m.index+k]=1;
+  let w=''; for(let k=0;k<n;k++) w+=(k<off||ref[k])?'\u0003':raw[k];
+  const pair=(re,len,flag)=>{
+    for(const m of w.matchAll(re)){
+      const a=m.index,b=m.index+m[0].length;
+      for(let k=a;k<a+len;k++) delim[k]=1;
+      for(let k=b-len;k<b;k++) delim[k]=1;
+      for(let k=a+len;k<b-len;k++) flag[k]=1;
+    }
+  };
+  pair(/\*\*([^\s*](?:[\s\S]*?[^\s*])?)\*\*/g,2,bold);
+  w=w.split('').map((ch,k)=>delim[k]?'\u0003':ch).join('');
+  pair(/\*([^\s*](?:[^*]*?[^\s*])?)\*/g,1,ital);
+  const chars=[],map=[];
+  for(let k=off;k<n;k++){ if(delim[k]) continue; chars.push(ref[k]?MASK:raw[k]); map.push(k); }
+  c={off,ref,delim,bold,ital,vis:chars.join(''),map};
+  if(PARSE_CACHE.size>6000) PARSE_CACHE.clear();
+  PARSE_CACHE.set(raw,c);
+  return c;
+}
 function runSearch(){
   const q=$('search-input').value.trim();
   SEARCH.query=q;
@@ -1027,8 +1109,8 @@ function runSearch(){
   const ql=foldCase(q);
   SEARCH.matches=[];
   P.segments.forEach((s,i)=>{
-    const srcHit=foldCase(s).includes(ql);
-    const tgtHit=foldCase(P.finals[i]).includes(ql);
+    const srcHit=foldCase(inlineParse(s||'').vis).includes(ql);
+    const tgtHit=foldCase(maskRefs(P.finals[i])).includes(ql);
     if(srcHit||tgtHit) SEARCH.matches.push(i);
   });
   if(!SEARCH.matches.length){ SEARCH.idx=-1; $('search-count').textContent='Sonuç yok'; renderWindow(); return; }
@@ -1049,13 +1131,6 @@ function jumpToMatch(){
 }
 function searchNext(){ if(!SEARCH.matches.length)return; SEARCH.idx=(SEARCH.idx+1)%SEARCH.matches.length; jumpToMatch(); }
 function searchPrev(){ if(!SEARCH.matches.length)return; SEARCH.idx=(SEARCH.idx-1+SEARCH.matches.length)%SEARCH.matches.length; jumpToMatch(); }
-function highlightText(text,query){
-  const escaped=esc(text);
-  if(!query) return escaped;
-  const qEsc=query.replace(/[.*+?^${}()|[\]\\]/g,'\\$&');
-  try{ return escaped.replace(new RegExp('('+qEsc+')','gi'),'<mark class="search-mark">$1</mark>'); }
-  catch(e){ return escaped; }
-}
 $('btn-search').onclick=toggleSearch;
 $('search-close').onclick=toggleSearch;
 $('search-next').onclick=searchNext;
@@ -1115,7 +1190,7 @@ function glossHitsForText(text){
   const hits=[];
   arr.forEach((t,idx)=>{
     if(!t.src) return;
-    if(foldCase(text).includes(foldCase(t.src))) hits.push({idx,src:t.src,tgt:t.tgt});
+    if(foldCase(inlineParse(text).vis).includes(foldCase(t.src))) hits.push({idx,src:t.src,tgt:t.tgt});
   });
   return hits;
 }
@@ -1126,32 +1201,87 @@ function findSpans(text,needle){
   // boundary from a coincidence. Only counts as a hit if neither the
   // character right before nor right after is itself a word character.
   const spans=[]; if(!needle) return spans;
-  const hay=foldCase(text), n=foldCase(needle);
+  const c=inlineParse(text), hay=foldCase(c.vis), n=foldCase(needle);
   let i=0;
   while(true){
     const at=hay.indexOf(n,i);
     if(at<0) break;
     const before=at>0?hay[at-1]:'', after=at+n.length<hay.length?hay[at+n.length]:'';
-    if(!isWordChar(before)&&!isWordChar(after)){ spans.push({start:at,end:at+n.length}); i=at+n.length; }
+    if(!isWordChar(before)&&!isWordChar(after)){
+      spans.push({start:c.map[at],end:c.map[at+n.length-1]+1}); i=at+n.length;
+    }
     else i=at+1;
   }
   return spans;
 }
-function glossaryHighlight(text,hits,segIndex){
-  if(!hits.length) return esc(text);
+function searchSpans(text,query){
+  const spans=[]; const n=foldCase(query); if(!n) return spans;
+  const c=inlineParse(text), hay=foldCase(c.vis);
+  let i=0;
+  while(true){
+    const at=hay.indexOf(n,i); if(at<0) break;
+    spans.push({start:c.map[at],end:c.map[at+n.length-1]+1}); i=at+n.length;
+  }
+  return spans;
+}
+// The source column: marker not shown, [^ref] as a small superscript number,
+// **bold** / *italic* rendered without their asterisks. Highlights are laid
+// over raw indices; a highlight that crosses a bold/italic edge is emitted
+// as one <mark> per run so the tags never overlap.
+function renderSource(i){
+  const raw=P.segments[i], c=inlineParse(raw), n=raw.length;
   let spans=[];
-  hits.forEach(h=>{ findSpans(text,h.src).forEach(s=>spans.push({...s,idx:h.idx})); });
-  spans.sort((a,b)=>a.start-b.start);
-  let out='',pos=0;
-  spans.forEach(s=>{
-    if(s.start<pos) return;
-    out+=esc(text.slice(pos,s.start));
-    out+=`<mark class="gloss-hit" onclick="showGlossPopup(event,${s.idx},${segIndex})">${esc(text.slice(s.start,s.end))}</mark>`;
-    pos=s.end;
-  });
-  out+=esc(text.slice(pos));
+  if(SEARCH.query){
+    spans=searchSpans(raw,SEARCH.query).map(sp=>({...sp,open:'<mark class="search-mark">'}));
+  }else{
+    glossHitsForText(raw).forEach(h=>findSpans(raw,h.src).forEach(sp=>
+      spans.push({...sp,open:`<mark class="gloss-hit" onclick="showGlossPopup(event,${h.idx},${i})">`})));
+  }
+  spans=spans.filter(sp=>sp.start>=c.off).sort((a,b)=>a.start-b.start);
+  const markAt=new Int32Array(n).fill(-1);
+  let pos=c.off;
+  spans.forEach((sp,si)=>{ if(sp.start<pos) return; for(let k=sp.start;k<sp.end;k++) markAt[k]=si; pos=sp.end; });
+  let out='',runKey=-1,runMark=-1,runHtml='',buf='';
+  const flushBuf=()=>{ if(buf){ runHtml+=esc(buf); buf=''; } };
+  const flushRun=()=>{
+    flushBuf();
+    if(runHtml){
+      let h=runHtml;
+      if(runKey&2) h='<em>'+h+'</em>';
+      if(runKey&1) h='<strong>'+h+'</strong>';
+      if(runMark>=0) h=spans[runMark].open+h+'</mark>';
+      out+=h;
+    }
+    runHtml='';
+  };
+  for(let k=c.off;k<n;k++){
+    if(c.delim[k]) continue;
+    const key=(c.bold[k]?1:0)|(c.ital[k]?2:0), mk=markAt[k];
+    if(key!==runKey||mk!==runMark){ flushRun(); runKey=key; runMark=mk; }
+    if(c.ref[k]){
+      const rm=/\[\^([^\]\r\n\t ]+)\]/y; rm.lastIndex=k;
+      const m=rm.exec(raw);
+      flushBuf();
+      runHtml+=`<sup class="fn-ref">${esc(fnNumber(m[1]))}</sup>`;
+      k+=m[0].length-1;
+    }else buf+=raw[k];
+  }
+  flushRun();
   return out;
 }
+// Source and translation should cite the same footnotes. Computed here, not
+// in the backend, so a hand-edited translation is caught too.
+function refMismatch(i){
+  const f=P.finals[i];
+  if(f===null||f===undefined||!f.trim()) return '';
+  const a=refLabels(P.segments[i]).sort(), b=refLabels(f).sort();
+  const fmt=l=>l.length?l.map(fnNumber).join(', '):'yok';
+  if(a.join('\u0001')!==b.join('\u0001'))
+    return `Referanslar uyuşmuyor — kaynak: ${fmt(a)} · çeviri: ${fmt(b)}`;
+  if(f.includes('\u27e6')) return 'Çeviride çözülmemiş ⟦n⟧ işareti kaldı';
+  return '';
+}
+function updateSegWarn(i){ const el=$('warn-'+i); if(el) el.textContent=refMismatch(i); }
 function glossFlagBtn(i){
   const hits=glossHitsForText(P.segments[i]);
   if(!hits.length) return '';
@@ -1243,7 +1373,7 @@ document.addEventListener('mouseup',e=>{
 function openGlossModal(segIndex,targetText){
   GLOSS_ADD_CTX={segIndex};
   const srcBox=$('gloss-modal-src');
-  srcBox.textContent=P.segments[segIndex]||'';
+  srcBox.textContent=inlineParse(P.segments[segIndex]||'').vis.replace(/\u0001+/g,'');
   $('gloss-modal-src-term').value='';
   $('gloss-modal-tgt').value=targetText;
   $('gloss-modal-overlay').classList.remove('hidden');
@@ -1631,6 +1761,11 @@ function mergeSelClick(i){
       ' is already translated — only untranslated paragraphs can be merged.</div>';
     return;
   }
+  if(typeOf(i).type!=='para'){
+    $('merge-confirm-bar').innerHTML=
+      '<div class="merge-confirm">Başlıklar ve dipnotlar birleştirilemez — yalnızca paragraflar.</div>';
+    return;
+  }
   const pos=MERGE_SEL.indexOf(i);
   if(pos>=0){
     MERGE_SEL.splice(pos,1);  // deselect
@@ -1680,6 +1815,7 @@ function cancelMerge(){
 function executeMerge(){
   if(MERGE_SEL.length!==2) return;
   const [a,b]=[Math.min(...MERGE_SEL),Math.max(...MERGE_SEL)];
+  if(typeOf(a).type!=='para'||typeOf(b).type!=='para') return;
   // guard: both must still be untranslated
   if(P.finals[a]!==null||P.finals[b]!==null){
     $('merge-confirm-bar').innerHTML+='<div class="merge-confirm">One of the selected paragraphs was already translated.</div>';
@@ -1718,8 +1854,9 @@ function executeMerge(){
 }
 
 function canMerge(i){
-  // both this and next must exist, both untranslated
+  // both this and next must exist, both untranslated, both plain paragraphs
   if(i>=P.segments.length-1) return false;
+  if(typeOf(i).type!=='para'||typeOf(i+1).type!=='para') return false;
   return P.finals[i]===null && P.finals[i+1]===null;
 }
 
@@ -1785,7 +1922,12 @@ function renderWindow(){
   try{
   for(const i of indices){
     const div=document.createElement('div');
-    div.className='seg'+(P.approved[i]?' done':'');div.id='seg-'+i;
+    const ty=typeOf(i);
+    div.className='seg'+(P.approved[i]?' done':'')+
+      (ty.type==='heading'?' heading h'+ty.level:ty.type==='footnote'?' fn':'');div.id='seg-'+i;
+    const gutter=ty.type==='heading'?'H'+ty.level
+      :ty.type==='footnote'?'NOT '+esc(fnNumber(ty.label))
+      :'¶ '+String(i+1).padStart(padWidth(),'0');
     let right;
     if(P.finals[i]!==null){
       const costTag=(P.segCost&&P.segCost[i]!=null)?`<span class="seg-cost">$${P.segCost[i].toFixed(4)}</span>`:'';
@@ -1811,12 +1953,12 @@ function renderWindow(){
       }
       mergeCtl=`<div class="merge-join">${inner}</div>`;
     }
-    const srcHtml=SEARCH.query?highlightText(P.segments[i],SEARCH.query):glossaryHighlight(P.segments[i],glossHitsForText(P.segments[i]),i);
-    div.innerHTML=`<div class="seg-num">¶ ${String(i+1).padStart(padWidth(),'0')}</div>
-      <div class="src">${srcHtml}</div><div class="tgt-area">${right}</div>${mergeCtl}`;
+    div.innerHTML=`<div class="seg-num">${gutter}</div>
+      <div class="src">${renderSource(i)}</div><div class="tgt-area">${right}</div><div class="seg-warn" id="warn-${i}"></div>${mergeCtl}`;
     c.appendChild(div);
     if(P.finals[i]!==null){
-      const ed=$('edit-'+i);ed.oninput=()=>{P.finals[i]=ed.value;autoGrow(ed);queueSave();};
+      const ed=$('edit-'+i);ed.oninput=()=>{P.finals[i]=ed.value;autoGrow(ed);updateSegWarn(i);queueSave();};
+      updateSegWarn(i);
     }
     if(P.segEffort && P.segEffort[i]) setSegEffort(i,P.segEffort[i]);
     onModelChange(i);
@@ -1889,7 +2031,15 @@ $('jump-last2').onclick=jumpToLastTranslated;
 // ================================================================
 // TRANSLATE + WRITE + APPROVE
 // ================================================================
-function memoryString(uptoIndex){
+// Neighbour for the "preceding/following text" context: the nearest segment
+// that is not a footnote.
+function neighborText(i,dir){
+  for(let j=i+dir;j>=0&&j<P.segments.length;j+=dir){
+    if(typeOf(j).type!=='footnote') return P.segments[j];
+  }
+  return '';
+}
+function memoryPairs(uptoIndex){
   // Walk backward from the current paragraph so "earlier" means the nearest
   // approved neighbors, not whichever 6 paragraphs happened to be approved
   // first in the book - those go stale the moment you're 200 paragraphs past
@@ -1898,10 +2048,10 @@ function memoryString(uptoIndex){
   const pairs=[];
   for(let j=uptoIndex-1;j>=0&&pairs.length<4;j--){
     if(P.approved[j]&&P.finals[j]){
-      pairs.push(P.segments[j].slice(0,80)+' => '+P.finals[j].slice(0,80));
+      pairs.push([P.segments[j],P.finals[j]]);
     }
   }
-  return pairs.reverse().join('\n');
+  return pairs.reverse();
 }
 
 window.writeSeg=(i)=>{
@@ -1914,7 +2064,7 @@ window.writeSeg=(i)=>{
       <button class="seg-btn icon" onclick="runSeg(${i})" title="Bunun yerine makine ile çevir">${ICON.translate}</button>
     </div>`;
   P.finals[i]='';P.approved[i]=false;
-  const wed=$('edit-'+i);wed.oninput=()=>{P.finals[i]=wed.value;autoGrow(wed);queueSave();};
+  const wed=$('edit-'+i);wed.oninput=()=>{P.finals[i]=wed.value;autoGrow(wed);updateSegWarn(i);queueSave();};
   onModelChange(i);
   $('edit-'+i).focus();
   renderRail();queueSave();
@@ -1929,8 +2079,8 @@ window.runSeg=async(i)=>{
   const payload={model:segModel,effort:segEffort,id:P.id,name:P.name,
     source_lang:P.source_lang,target_lang:P.target_lang,
     synopsis:P.synopsis,terms:P.terms,rules:P.rules||'',style_sample:P.style,
-    text:P.segments[i],before:i>0?P.segments[i-1]:'',
-    after:i<P.segments.length-1?P.segments[i+1]:'',memory:memoryString(i)};
+    text:P.segments[i],before:neighborText(i,-1),
+    after:neighborText(i,1),memory:memoryPairs(i)};
   try{
     const res=await fetch('/translate_simple',{method:'POST',
       headers:{'Content-Type':'application/json'},body:JSON.stringify(payload)});
@@ -1952,7 +2102,7 @@ window.runSeg=async(i)=>{
     setSegEffort(i,segEffort);
     onModelChange(i);
     revealSegExtraThenCollapse(i);
-    const ned=$('edit-'+i);ned.oninput=()=>{P.finals[i]=ned.value;autoGrow(ned);queueSave();};autoGrow(ned);
+    const ned=$('edit-'+i);ned.oninput=()=>{P.finals[i]=ned.value;autoGrow(ned);updateSegWarn(i);queueSave();};autoGrow(ned);updateSegWarn(i);
     $('seg-'+i).classList.remove('done');
     updateProgress();renderRail();queueSave();
   }catch(e){btn.disabled=false;btn.textContent='Retry';
@@ -2006,7 +2156,7 @@ function save(){
     .catch(()=>{$('save-pill').textContent='kaydetme başarısız';});
 }
 $('export').onclick=()=>{
-  const out=P.segments.map((s,i)=>P.finals[i]!==null?P.finals[i]:'[UNTRANSLATED] '+s).join('\n\n');
+  const out=exportText(P.segments,P.finals);
   const blob=new Blob([out],{type:'text/plain;charset=utf-8'});
   const a=document.createElement('a');a.href=URL.createObjectURL(blob);
   a.download=P.name.replace(/[^a-z0-9]+/gi,'_')+'.'+P.target_lang.toLowerCase()+'.txt';a.click();

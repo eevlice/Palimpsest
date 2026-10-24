@@ -4,6 +4,7 @@ Local, single-user book translation tool. Flask backend + one vanilla-JS file fr
 
 ## Layout
 - server.py: Flask routes (port 5001 is hardcoded), segmentation, setup pass, /translate_simple
+- segtypes.py: segment type (heading/footnote/paragraph) derived from the source markdown, marker/ref stripping for the model, footnote ⟦n⟧ placeholders, footnote reorder at import. index.html's segType() mirrors it; tests/ checks both against one fixture.
 - providers.py: Anthropic/OpenAI/Google calls, model catalog + prices, cost_level (1-5, log scale across ALL models)
 - keys.py (Fernet-encrypted keys), prefs.py, spending.py (JSONL log): all store under ~/.palimpsest/
 - index.html: entire UI (CSS + JS inline). Served from disk on every request, so UI edits need no restart.

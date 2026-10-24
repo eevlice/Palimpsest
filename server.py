@@ -27,6 +27,7 @@ import keys
 import spending
 import providers
 import prefs
+import segtypes
 
 app = Flask(__name__, static_folder=".")
 
@@ -79,7 +80,10 @@ def extract_text(filename, raw_bytes):
 
 
 def segment(text):
-    return [p.strip() for p in re.split(r"\n\s*\n", text) if p.strip()]
+    """Split on blank lines, then move each footnote right behind the first
+    paragraph that cites it. Returns (segments, warnings)."""
+    segs = [p.strip() for p in re.split(r"\n\s*\n", text) if p.strip()]
+    return segtypes.reorder_footnotes(segs)
 
 
 # --------------------------------------------------------------------------
@@ -187,8 +191,27 @@ def _edge_snippet(text, chars, from_end):
     return (cut[:sp] + "…") if sp != -1 else (cut + "…")
 
 
+def _memory_text(memory):
+    """memory arrives either as the old pre-joined string or as a list of
+    [source, final] pairs. For pairs, both sides lose their markers and refs
+    before being cut to 80 characters (cutting first could split a [^ref])."""
+    if isinstance(memory, str):
+        return memory
+    lines = []
+    for pair in memory or []:
+        try:
+            s, f = pair
+        except (TypeError, ValueError):
+            continue
+        s, f = segtypes.strip_for_context(s or ""), segtypes.strip_for_context(f or "")
+        if s and f:
+            lines.append(s[:80] + " => " + f[:80])
+    return "\n".join(lines)
+
+
 def build_per_call(src, tgt, text, before, after, memory):
     """The part that changes per paragraph — NOT cached."""
+    memory = _memory_text(memory)
     parts = []
     if memory: parts.append(f"EARLIER APPROVED TRANSLATIONS (match these):\n{memory}")
     if before: parts.append(f"PRECEDING TEXT (context only, do NOT translate):\n{_edge_snippet(before, 220, from_end=True)}")
@@ -354,9 +377,12 @@ def setup():
         text = extract_text(f.filename, f.read())
     except Exception as e:
         return jsonify({"error": f"Could not read the file: {e}"}), 400
-    segs = segment(text)
+    segs, import_warnings = segment(text)
     if not segs:
         return jsonify({"error": "No text found in the file."}), 400
+    # The model reads the book without markdown markers or footnote refs; the
+    # stored segments keep them.
+    text = "\n\n".join(segtypes.strip_for_context(s) for s in segs)
     if not keys.get_key(provider):
         return jsonify({"error": f"No API key for {provider}. Add one from Settings."}), 500
     try:
@@ -370,8 +396,10 @@ def setup():
             cost2, tokens2 = condense_info
             spending.log_call("", project_name, provider, model, "off", tokens2, cost2)
             total_cost += cost2
+        warnings = [w["message"] for w in import_warnings]
         return jsonify({"segments": segs, "synopsis": condensed, "terms": terms,
-                        "setup_cost": round(total_cost, 4), "count": len(segs)})
+                        "setup_cost": round(total_cost, 4), "count": len(segs),
+                        "warnings": warnings})
     except Exception as e:
         return jsonify({"error": f"Context pass failed: {e}"}), 500
 
@@ -423,7 +451,10 @@ def translate_simple():
     d = request.get_json()
     provider, model = parse_model_key(d.get("model"))
     src, tgt = d.get("source_lang", "English"), d.get("target_lang", "Turkish")
-    text = d.get("text", "").strip()
+    raw_text = d.get("text", "").strip()
+    src_type = segtypes.seg_type(raw_text)
+    text, ref_labels = segtypes.to_prompt(raw_text)
+    text = text.strip()
     effort = d.get("effort", "off")
     project_id, project_name = d.get("id", ""), d.get("name", "")
     if not text:
@@ -433,23 +464,27 @@ def translate_simple():
     try:
         system_text = (
             f"You are a professional literary translator from {src} into {tgt}. "
-            f"Translate within the book's context. Follow all rules and the term sheet exactly."
+            f"Translate within the book's context. Follow all rules and the term sheet exactly. "
+            f"Markers like \u27e61\u27e7 stand for footnote references: keep each one exactly as "
+            f"written, right after the word it belongs to."
         )
         standing = build_standing_context(
             d.get("synopsis", ""), d.get("terms", ""),
-            d.get("rules", ""), d.get("style_sample", ""))
+            d.get("rules", ""), segtypes.strip_block(d.get("style_sample", "") or ""))
         per_call = build_per_call(
             src, tgt, text,
-            d.get("before", ""), d.get("after", ""),
+            segtypes.strip_for_context(d.get("before", "") or ""),
+            segtypes.strip_for_context(d.get("after", "") or ""),
             d.get("memory", ""))
 
         result, cost, tokens = providers.call(
             provider, model, system_text, standing, per_call, effort=effort)
         spending.log_call(project_id, project_name, provider, model, effort, tokens, cost)
 
+        final, warnings = segtypes.from_model(result, text, ref_labels, src_type)
         return jsonify({
-            "final": result, "cost": cost,
-            "tokens": tokens
+            "final": final, "cost": cost,
+            "tokens": tokens, "warnings": warnings
         })
     except Exception as e:
         return jsonify({"error": f"Translation failed: {e}"}), 500
