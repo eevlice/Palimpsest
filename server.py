@@ -51,6 +51,24 @@ if os.path.isdir(_OLD_PROJECTS_DIR) and not os.listdir(PROJECTS_DIR):
         if _fname.endswith(".json"):
             shutil.move(os.path.join(_OLD_PROJECTS_DIR, _fname), os.path.join(PROJECTS_DIR, _fname))
 
+
+
+def clean_pending(max_age_hours=24):
+    """PDFs of imports whose review screen was abandoned: projects/_pending/*.pdf older than a day. Returns the count."""
+    d = os.path.join(PROJECTS_DIR, "_pending")
+    if not os.path.isdir(d):
+        return 0
+    cutoff, n = datetime.datetime.now().timestamp() - max_age_hours * 3600, 0
+    for name in os.listdir(d):
+        path = os.path.join(d, name)
+        if name.endswith(".pdf") and os.path.isfile(path) and os.path.getmtime(path) < cutoff:
+            os.remove(path)
+            n += 1
+    return n
+
+
+clean_pending()
+
 DEFAULT_PROVIDER, DEFAULT_MODEL = "anthropic", "claude-opus-5-5"
 
 
@@ -365,6 +383,8 @@ def save_project():
     d["updated"] = datetime.datetime.now().isoformat(timespec="seconds")
     with open(project_path(d["id"]), "w", encoding="utf-8") as f:
         json.dump(d, f, ensure_ascii=False, indent=2)
+    if os.path.exists(pdf_path(d["id"], True)) and not os.path.exists(pdf_path(d["id"])):
+        os.replace(pdf_path(d["id"], True), pdf_path(d["id"]))
     return jsonify({"ok": True, "updated": d["updated"]})
 
 
@@ -400,6 +420,8 @@ def duplicate_project():
     proj["updated"] = datetime.datetime.now().isoformat(timespec="seconds")
     with open(project_path(proj["id"]), "w", encoding="utf-8") as f:
         json.dump(proj, f, ensure_ascii=False, indent=2)
+    if os.path.exists(pdf_path(pid)):                    # the copy keeps its page preview
+        shutil.copyfile(pdf_path(pid), pdf_path(proj["id"]))
     return jsonify({"ok": True, "id": proj["id"]})
 
 
@@ -413,6 +435,8 @@ def delete_project():
     trash = os.path.join(PROJECTS_DIR, "_trash")
     os.makedirs(trash, exist_ok=True)
     os.replace(p, os.path.join(trash, os.path.basename(p)))
+    if os.path.exists(pdf_path(pid)):                    # the PDF goes with its project
+        os.replace(pdf_path(pid), os.path.join(trash, os.path.basename(pdf_path(pid))))
     return jsonify({"ok": True})
 
 
@@ -425,7 +449,7 @@ def setup():
     provider, model = parse_model_key(request.form.get("model"))
     if not f:
         return jsonify({"error": "No file received."}), 400
-    pdf_warnings, pdf_scanned = [], False
+    pdf_warnings, pdf_scanned, pdf_meta, pdf_bytes = [], False, None, None
     try:
         if f.filename.lower().endswith(".pdf"):
             # imported here, not at the top: a missing pypdfium2 must only switch PDF import off,
@@ -435,7 +459,9 @@ def setup():
             except ImportError:
                 return jsonify({"error": "PDF içe aktarma için pypdfium2 gerekli: pip3 install -r requirements.txt"}), 400
             try:
-                text, pdf_warnings = pdf_import.convert(f.read(), request.form.get("first_page"), request.form.get("last_page"))
+                pdf_bytes = f.read()
+                text, pdf_warnings, pdf_meta = pdf_import.convert_with_meta(
+                    pdf_bytes, request.form.get("first_page"), request.form.get("last_page"))
                 pdf_scanned = pdf_import.SCANNED_WARNING in pdf_warnings
             except pdf_import.PdfImportError as e:
                 return jsonify({"error": str(e)}), 400
@@ -443,7 +469,9 @@ def setup():
             text = extract_text(f.filename, f.read())
     except Exception as e:
         return jsonify({"error": f"Could not read the file: {e}"}), 400
+    raw_segs = [p.strip() for p in re.split(r"\n\s*\n", text) if p.strip()]
     segs, import_warnings = segment(text)
+    seg_meta = carry_meta(raw_segs, segs, pdf_meta) if pdf_meta is not None else None
     if not segs:
         return jsonify({"error": "No text found in the file."}), 400
     # The model reads the book without markdown markers or footnote refs; the
@@ -474,7 +502,8 @@ def setup():
         warnings = pdf_warnings + [w["message"] for w in import_warnings] + ([condense_note] if condense_note else [])
         return jsonify({"segments": segs, "synopsis": condensed, "terms": terms,
                         "setup_cost": round(total_cost, 4), "count": len(segs),
-                        "warnings": warnings, "scanned": pdf_scanned})
+                        "warnings": warnings, "scanned": pdf_scanned, "segMeta": seg_meta,
+                        "pdfKept": keep_pending_pdf(request.form.get("project_id"), pdf_bytes)})
     except Exception as e:
         spent = f" ({_spent(spent_tokens, spent_cost)})" if spent_tokens else ""
         return jsonify({"error": f"Bağlam okuması başarısız: {e}{spent}"}), 500
@@ -569,6 +598,33 @@ def translate_simple():
         })
     except Exception as e:
         return jsonify({"error": f"Translation failed: {e}"}), 500
+
+
+def carry_meta(raw_segs, segs, meta):
+    """segMeta follows its segment through segment()'s footnote reordering (matched by text, in order); a count
+    mismatch means the two splits disagree, and then there is no meta at all rather than misplaced meta."""
+    if len(meta) != len(raw_segs):
+        return None
+    queue = {}
+    for s, m in zip(raw_segs, meta):
+        queue.setdefault(s, []).append(m)
+    return [queue[s].pop(0) if queue.get(s) else None for s in segs]
+
+
+def pdf_path(pid, pending=False):
+    safe = re.sub(r"[^a-zA-Z0-9_-]", "_", pid)[:80]
+    return os.path.join(PROJECTS_DIR, "_pending" if pending else "", safe + ".pdf")
+
+
+def keep_pending_pdf(pid, data):
+    """The imported PDF waits under projects/_pending/ until the project is first saved (the review screen can still
+    be abandoned); /save moves it next to the project as <id>.pdf, for the page preview."""
+    if not pid or not data:
+        return False
+    os.makedirs(os.path.dirname(pdf_path(pid, True)), exist_ok=True)
+    with open(pdf_path(pid, True), "wb") as f:
+        f.write(data)
+    return True
 
 
 def project_path(pid):

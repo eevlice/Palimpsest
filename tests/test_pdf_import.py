@@ -524,5 +524,91 @@ md, warns = P.convert(figure_pdf())
 check("convert(): image placeholder in, label out, warning given", "![Görsel · s.4](gorsel-4-1)" in md and "LABEL INSIDE" not in md
       and any("1 görsel yer tutucuyla" in w and "2 sözcük" in w for w in warns), (md[-300:], warns))
 
+# ================================================================ round 3: body style, object groups, split paragraphs, flags, seg_meta
+def tbl(p, top=300):
+    xs, ys = [100, 250, 400], [top, top + 20, top + 40]
+    rows = [("Name", 110, top + 14, "Table-Regular", 9), ("Kind", 260, top + 14, "Table-Regular", 9),
+            ("alpha", 110, top + 34, "Table-Regular", 9), ("first", 260, top + 34, "Table-Regular", 9)]
+    return rows, [(y, xs[0], xs[-1]) for y in ys], [(x, ys[0], ys[-1]) for x in xs]
+
+
+rows, hl, vl = tbl(5)
+grp = rows + [("THE SAMPLE TABLE", 160, 290, "Label-Bold", 10),                        # title right above
+              ("Reproduced by permission of nobody.", 200, 352, "Credit-Italic", 7),   # credit line right below
+              ("The rows above list a kind for each name and say nothing more at all.", 100, 366, "Note-Regular", 9),
+              ("Body text resumes here after the table and its notes, as ordinary prose.", 100, 400, "Body-Regular", 11)]
+d = book({5: (grp, (), hl, vl)})
+md, st = P.build_markdown(d, 0, 7)
+segs = [s for s in md.split("\n\n") if s.strip()]
+k = next(i for i, s in enumerate(segs) if s.startswith("| Name"))
+cap = lambda s: s.startswith('::: {custom-style="Caption"}')
+check("object group: the title above is a caption written before the table", cap(segs[k - 1]) and "THE SAMPLE TABLE" in segs[k - 1], segs[k - 1])
+check("object group: credit line and explanation below are captions written after it, in order",
+      cap(segs[k + 1]) and "permission" in segs[k + 1] and cap(segs[k + 2]) and "kind for each name" in segs[k + 2], segs[k + 1:k + 3])
+check("object group: body text after the group stays a paragraph", segs[k + 3].startswith("Body text resumes"), segs[k + 3])
+check("body style: italic/bold variants are body, another size is not",
+      not d.deviates(dict(style="Body-Italic|11")) and not d.deviates(dict(style="Body-Bold|11")) and d.deviates(dict(style="Body-Regular|9")))
+
+# a heading right under a figure is the next section, not the figure's caption
+fig_head = ([("Next Section Heading", 100, 445, "Sub-Bold", 12)], [(100, 300, 320, 430)], (), ())
+heads = {p: ([("Next Section Heading %s" % "ABCDEFGH"[p - 1], 100, 300, "Sub-Bold", 12)], (), (), ()) for p in (2, 3, 6, 7, 8)}
+heads[4] = fig_head
+d = book(heads)
+md, st = P.build_markdown(d, 0, 7)
+check("a heading under a figure stays a heading", "## Next Section Heading" in md or "# Next Section Heading" in md, [s for s in md.split("\n\n") if "Next Section" in s][:3])
+
+# a chapter heading over a figure is never the figure's title (contents entries stay headings)
+chap = {p: ([("CHAPTER NAME %s" % "ABCDEFGH"[p - 1], 100, 95, "Head-Bold", 20)], (), (), ()) for p in range(3, 9)}
+chap[5] = ([("CHAPTER NAME E", 100, 95, "Head-Bold", 20)], [(100, 100, 320, 115)], (), ())
+d = book(chap)
+md, st = P.build_markdown(d, 0, 7)
+check("a chapter heading right over a figure stays a heading", any(s.startswith("#") and "CHAPTER NAME E" in s for s in md.split("\n\n")))
+
+# a paragraph cut by a figure: joined even when it goes on with a capital, the figure goes after it
+cut = ([("the leaders who score highest. Even among", 100, 290, "Body-Regular", 11),
+        ("CEOs, the best performers were the ones with the highest scores.", 100, 445, "Body-Regular", 11)], [(100, 300, 320, 430)], (), ())
+d = book({4: cut})
+md, st = P.build_markdown(d, 0, 7)
+check("figure inside a paragraph: the two parts join (capital continuation) and the figure follows",
+      "Even among CEOs, the best performers" in md and md.index("![Görsel · s.4]") > md.index("highest scores.") and st["object_merges"] == 1, st)
+nofig = ([("the leaders who score highest. Even among", 100, 290, "Body-Regular", 11),
+          ("CEOs, the best performers were the ones with the highest scores.", 100, 320, "Body-Regular", 11)], (), (), ())
+md, st = P.build_markdown(book({4: nofig}), 0, 7)
+check("without a figure in between a capital start is not joined", "Even among CEOs" not in md and st["object_merges"] == 0)
+
+# flags and seg_meta
+odd = ([("A stray line in an unusual face that belongs to nothing.", 100, 300, "Odd-Regular", 8)], (), (), ())
+d = book({3: odd, 4: cut})
+md, st = P.build_markdown(d, 0, 7)
+segs = [s for s in md.split("\n\n") if s.strip()]
+meta = d.seg_meta
+check("seg_meta: one entry per segment", len(meta) == len(segs), (len(meta), len(segs)))
+i_odd = next(i for i, s in enumerate(segs) if "stray line" in s)
+check("a block set apart from body text that joins nothing is flagged", meta[i_odd]["flags"] == ["stil-farkli"] and st["style_flags"] == 1, meta[i_odd])
+i_cut = next(i for i, s in enumerate(segs) if "Even among CEOs" in s)
+check("seg_meta of a joined paragraph: its page, both boxes, the body style", meta[i_cut]["pages"] == [4] and len(meta[i_cut]["boxes"]) == 2
+      and meta[i_cut]["style"] == "Body-Regular 11" and meta[i_cut]["boxes"][0][0] == 4, meta[i_cut])
+i_fig = next(i for i, s in enumerate(segs) if s.startswith("![Görsel · s.4]"))
+check("seg_meta of a figure: its box", meta[i_fig]["boxes"] == [[4, 100, 300, 320, 430]], meta[i_fig])
+md2, w2, m2 = P.convert_with_meta(figure_pdf())
+check("convert_with_meta(): as many meta entries as segments", len(m2) == len([s for s in md2.split("\n\n") if s.strip()]))
+
+# -- a title printed inside the picture's box is kept (becomes a caption); a diagram label inside it goes
+im = (100, 300, 400, 500)                                         # 300 wide, 200 high: top 15% band ends at y=330
+inside_rows = [("A WIDE TITLE ALONG THE TOP OF THE PICTURE", 110, 318, "Label-Bold", 10),     # wide, top edge band
+               ("A WIDE DIAGRAM LABEL ACROSS THE MIDDLE PART", 110, 400, "Label-Regular", 10),  # wide, middle
+               ("small", 200, 450, "Label-Regular", 8)]                                       # narrow label
+pg = page_of(4, body_rows(4, top=120, n=6) + inside_rows, [im])
+kept = [l["plain"] for b in pg["blocks"] for l in b["lines"]]
+check("inside the picture: a wide line along its top edge is a title and stays", any("WIDE TITLE" in x for x in kept), kept)
+check("inside the picture: a wide diagram label across the middle goes", not any("DIAGRAM LABEL" in x for x in kept) and not any(x == "small" for x in kept))
+check("only the labels are counted as figure text (8 + 1 words)", pg["fig_words"] == 9, pg["fig_words"])
+d = book({4: (inside_rows, [im], (), ())})
+md, st = P.build_markdown(d, 0, 7)
+segs = [s for s in md.split("\n\n") if s.strip()]
+k = segs.index("![Görsel · s.4](gorsel-4-1)")
+check("the title printed inside the top of the picture is written before it, as a caption", "WIDE TITLE" in segs[k - 1] and segs[k - 1].startswith(":::"), segs[k - 1])
+check("object merge log: one entry per joined paragraph", d.object_merge_log == [], d.object_merge_log)
+
 print("FAILED %d" % failed if failed else "ALL PASS")
 sys.exit(1 if failed else 0)

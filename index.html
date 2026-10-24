@@ -994,8 +994,9 @@ $('analyze').onclick=async()=>{
   const name=$('pname').value.trim()||fileObj.name.replace(/\.[^.]+$/,'');
   $('analyze').disabled=true;$('setup-err').innerHTML='';
   $('setup-status').innerHTML='<span class="loading">Reading the whole book</span>';
+  const pid='p_'+Date.now();            // known before /setup: the server keeps the PDF under this id
   const fd=new FormData();
-  fd.append('file',fileObj);fd.append('source_lang',$('src').value);
+  fd.append('file',fileObj);fd.append('source_lang',$('src').value);fd.append('project_id',pid);
   fd.append('target_lang',$('tgt').value);fd.append('model',$('model').value);
   fd.append('name',name);
   if(/\.pdf$/i.test(fileObj.name)){fd.append('first_page',$('pdf-first').value.trim());fd.append('last_page',$('pdf-last').value.trim());}
@@ -1004,11 +1005,12 @@ $('analyze').onclick=async()=>{
     const data=await res.json();
     if(!res.ok){$('setup-err').innerHTML=`<div class="err">${esc(data.error)}</div>`;
       $('analyze').disabled=false;$('setup-status').textContent='';return;}
-    P={id:'p_'+Date.now(),name,source_lang:$('src').value,target_lang:$('tgt').value,
+    P={id:pid,name,source_lang:$('src').value,target_lang:$('tgt').value,
       model:($('model').value||defaultModel()),segments:data.segments,
       finals:new Array(data.segments.length).fill(null),
       approved:new Array(data.segments.length).fill(false),
       synopsis:data.synopsis,terms:data.terms,rules:'',style:'',cost:0,segEffort:{}};
+    if(Array.isArray(data.segMeta)&&data.segMeta.length===data.segments.length) P.segMeta=data.segMeta;   // PDF only
     $('synopsis').value=data.synopsis;$('terms').value=data.terms;$('rules').value='';$('style').value='';
     $('setup-status').textContent='';
     $('review-meta').textContent=`${data.count} paragraphs · context read $${data.setup_cost.toFixed(4)}`;
@@ -1602,6 +1604,9 @@ function normalizeProject(p){
   p.finals = p.finals.map(f => (f===''||f===undefined) ? null : f);
   // Ensure approved is boolean array
   p.approved = p.approved.map(a => a===true);
+  // where each segment came from in the PDF (pages, boxes, style, flags); null where unknown (non-PDF, older projects)
+  if(!Array.isArray(p.segMeta) || p.segMeta.length!==n)
+    p.segMeta = new Array(n).fill(null);
   if(!p.segCost) p.segCost={};
   if(!p.segEffort) p.segEffort={};
   if(p.cost===undefined||p.cost===null) p.cost=0;
@@ -2060,13 +2065,15 @@ function executeMerge(){
   P._undo={
     type:'merge', index:a,
     segments:P.segments.slice(), finals:P.finals.slice(),
-    approved:P.approved.slice(), segCost:Object.assign({},P.segCost||{})
+    approved:P.approved.slice(), segMeta:P.segMeta.slice(), segCost:Object.assign({},P.segCost||{})
   };
   // join b's text into a with a space, then remove b
   P.segments[a]=P.segments[a]+' '+P.segments[b];
+  P.segMeta[a]=mergeMeta(P.segMeta[a],P.segMeta[b]);
   P.segments.splice(b,1);
   P.finals.splice(b,1);
   P.approved.splice(b,1);
+  P.segMeta.splice(b,1);
   // reindex segCost: keys > b shift down by 1
   if(P.segCost){
     const nc={};
@@ -2095,6 +2102,14 @@ function canMerge(i){
   return P.finals[i]===null && P.finals[i+1]===null;
 }
 
+// Two segments become one: their sources become one too (pages and boxes together, first style, all flags).
+function mergeMeta(a,b){
+  if(!a&&!b) return null;
+  a=a||{pages:[],boxes:[],style:null,flags:[]}; b=b||{pages:[],boxes:[],style:null,flags:[]};
+  const uniq=xs=>[...new Set(xs)];
+  return {pages:uniq([...(a.pages||[]),...(b.pages||[])]).sort((x,y)=>x-y), boxes:[...(a.boxes||[]),...(b.boxes||[])],
+          style:a.style||b.style||null, flags:uniq([...(a.flags||[]),...(b.flags||[])]).sort()};
+}
 window.mergeDown=(i)=>{
   if(!canMerge(i)) return;
   // snapshot for single-level undo
@@ -2104,13 +2119,16 @@ window.mergeDown=(i)=>{
     segments:P.segments.slice(),
     finals:P.finals.slice(),
     approved:P.approved.slice(),
+    segMeta:P.segMeta.slice(),
     segCost:Object.assign({},P.segCost||{})
   };
   // join source with a space
   P.segments[i]=P.segments[i]+' '+P.segments[i+1];
+  P.segMeta[i]=mergeMeta(P.segMeta[i],P.segMeta[i+1]);
   P.segments.splice(i+1,1);
   P.finals.splice(i+1,1);
   P.approved.splice(i+1,1);
+  P.segMeta.splice(i+1,1);
   // shift segCost keys above i+1 down by one
   if(P.segCost){
     const nc={};
@@ -2129,6 +2147,7 @@ window.undoMerge=()=>{
   P.segments=P._undo.segments;
   P.finals=P._undo.finals;
   P.approved=P._undo.approved;
+  P.segMeta=P._undo.segMeta||new Array(P._undo.segments.length).fill(null);
   P.segCost=P._undo.segCost;
   P._undo=null;
   renderWindow();renderRail();updateProgress();updateUndoBar();queueSave();
@@ -2387,10 +2406,19 @@ function drawStrip(){
 }
 window.addEventListener('resize',()=>{ try{ drawStrip(); }catch(e){} });
 function queueSave(){clearTimeout(saveTimer);saveTimer=setTimeout(save,800);}
+// What goes into the project file: segMeta only when it holds something (a PDF import). normalizeProject fills it
+// with nulls in memory; those never reach the file, so non-PDF and older projects keep their shape.
+function projectForSave(p){
+  const empty=m=>!Array.isArray(m)||m.every(x=>x==null);
+  const o={...p};
+  if(empty(o.segMeta)) delete o.segMeta;
+  if(o._undo&&'segMeta' in o._undo&&empty(o._undo.segMeta)){ o._undo={...o._undo}; delete o._undo.segMeta; }
+  return o;
+}
 function save(){
   if(!P)return;
   $('save-pill').textContent='kaydediliyor…';
-  fetch('/save',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(P)})
+  fetch('/save',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(projectForSave(P))})
     .then(r=>r.json()).then(d=>{
       if(d.ok){
         const t=new Date();

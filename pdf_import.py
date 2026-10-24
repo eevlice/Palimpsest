@@ -488,12 +488,22 @@ def build_blocks(page_no, W, H, chars, boxes, orn_fonts=frozenset(), images=(), 
     inside = lambda c, b: b[0] - 1 <= (c.x0 + c.x1) / 2 <= b[2] + 1 and b[1] - 1 <= (c.top + c.bot) / 2 <= b[3] + 1
     items, fig_words, fig_text = [], 0, []
     # a figure: its place in the flow, and the lettering inside it (diagram labels) belongs to the figure. Judged line
-    # by line: only a line wholly inside the picture goes, and never one that reads like a caption ("Fig. 2: ...",
-    # often printed inside the picture's box). A lot of text over an image is real text set on a background: it stays.
+    # by line: only a line wholly inside the picture goes, and never a title or caption printed inside the picture's
+    # box ("Fig. 2: ...", a wide line along its top or bottom edge): those become the figure's captions. A lot of text
+    # over an image is real text set on a background: it stays.
     page_lines = build_lines(chars, page_no, orn_fonts) if images else []
     for k, im in enumerate(sorted(images, key=lambda b: (round(b[1]), b[0])), 1):
-        own_lines = [l for l in page_lines if l["chars"] and all(inside(c, im) for c in l["chars"])
-                     and not CAPTION.match("".join(c.ch for c in l["chars"]).replace("*", ""))]
+        h, w = im[3] - im[1], im[2] - im[0]
+
+        def label(l):
+            """a diagram label, as opposed to a title or caption printed inside the picture's box: one that reads like a
+            caption, or a wide line (35%+ of the picture) in the top or bottom 15% of it, stays in the text"""
+            if CAPTION.match("".join(c.ch for c in l["chars"]).replace("*", "")):
+                return False
+            wide = l["x1"] - l["x0"] >= 0.35 * w
+            edge = l["bot"] <= im[1] + 0.15 * h or l["top"] >= im[3] - 0.15 * h
+            return not (wide and edge)
+        own_lines = [l for l in page_lines if l["chars"] and all(inside(c, im) for c in l["chars"]) and label(l)]
         own = [c for l in own_lines for c in l["chars"]]
         words = sum(len("".join(c.ch for c in l["chars"]).split()) for l in own_lines)
         if own and words <= 40:
@@ -577,8 +587,8 @@ class Doc:
         self.S = self._style_stats()
         self.sugg, self.why, self.body_style, self.body_styles = self._suggest()
         self._block_roles()
-        self._captions()
         self._index_pages()
+        self._object_groups()
         self.lex = self._hyphen_lexicon()
 
     # -- margin text: running heads/feet, page numbers, slug, watermark ------------------------------
@@ -835,37 +845,70 @@ class Doc:
                 if bl[0]["style"] != maj and len(bl[0]["lines"]) <= 2:
                     bl[0]["role"] = "kutu-başlık"
 
-    def _captions(self):
-        """A figure's caption: the nearest short block (60 words, 4 lines at most) right under it (or else right over
-        it), overlapping it sideways, that reads like a caption ("Figure 3", "Fig. 3", "Şekil 3") or is set apart from
-        body text in italics or a smaller size. Headings never become captions."""
+    def deviates(self, b):
+        """set apart from body text: a family/size the book's body styles do not use (italic and bold variants of a
+        body style are body text)"""
+        return fam_of(b["style"]) not in self.body_fams
+
+    def _object_groups(self):
+        """A figure or table owns the short blocks set apart from body text that sit inside its frame or right above or
+        below it, block after block within 2.5 body sizes: title, caption, explanation, credit line. They are written
+        as captions around the object, never as headings or paragraphs. A heading can be an object's title (above or
+        inside it), never the line under it (that is the next section starting); part and chapter headings - the ones a
+        table of contents lists - never belong to an object. Body-styled blocks only join when they read like a
+        caption ("Figure 3", "Fig. 3", "Şekil 3"). Blocks set apart from body text that join nothing are flagged."""
+        self.body_fams = {fam_of(k) for k in self.body_styles}
+        # the book's own secondary text styles (notes, references: 5%+ of all words) are set apart from body text but
+        # are not anomalies; they are never flagged
+        total = sum(s["words"] for s in self.S.values()) or 1
+        fam_words = collections.Counter()
+        for k, s in self.S.items():
+            fam_words[fam_of(k)] += s["words"]
+        self.text_fams = self.body_fams | {f for f, w in fam_words.items() if w >= 0.05 * total}
+        gap = 2.5 * self.bsize
         front = min(8, max(2, int(0.03 * self.NP)))
+
+        def fits(b, where):
+            cap = bool(CAPTION.match(b["text"].replace("*", "")))
+            if b["role"] in ("kısım", "bölüm", "liste", "şiir", "epigraf", "atıf", "dizin") or b.get("obj"):
+                return False
+            if b["role"] in HEAD and where == "below" and not cap:
+                return False
+            if b["nwords"] > 80 or len(b["lines"]) > 6:
+                return False
+            return cap or b["deviates"]
         for p in self.pages:
-            if p["p"] <= front or p["cover"]:
-                continue                        # logos and ornaments of the front pages have no captions
-            for it in p.get("items", []):
-                if it["kind"] != "image":
-                    continue
-                best = None
-                for b in p["blocks"]:
-                    if b["role"] in ("sil", "ön sayfa", "altyazı") or b["nwords"] > 60 or len(b["lines"]) > 4:
-                        continue
-                    if b["x1"] < it["x0"] or b["x0"] > it["x1"]:
-                        continue
-                    below, above = b["top"] - it["bot"], it["top"] - b["bot"]
-                    cap_like = bool(CAPTION.match(b["text"].replace("*", "")))
-                    within = cap_like and it["top"] - 1 <= b["top"] and b["bot"] <= it["bot"] + 1   # printed inside the box
-                    if not (within or 0 <= below <= 2.5 * self.bsize or 0 <= above <= 2.5 * self.bsize):
-                        continue
-                    if not cap_like and (b["role"] in HEAD or b["role"] == "kutu-başlık" or b["style"] in self.body_styles
-                                         or not (b["italic_share"] >= 0.5 or b["size"] <= 0.95 * self.bsize)):
-                        continue                # a heading under a picture stays a heading
-                    rank = (0, 0) if within else (0, below) if 0 <= below <= 2.5 * self.bsize else (1, above)
-                    if best is None or rank < best[0]:
-                        best = (rank, b)
-                if best:
-                    best[1]["role"] = "altyazı"
-                    it["caption"] = best[1]
+            for b in p["blocks"]:
+                b["deviates"] = self.deviates(b)
+            if p["p"] <= front or p["cover"] or p["p"] in self.index_pages:
+                continue                        # logos and ornaments of the front pages own nothing
+            blocks = [b for b in p["blocks"] if b["role"] not in ("sil", "ön sayfa", "dizin")]
+            cy = lambda b: (b["top"] + b["bot"]) / 2      # a title may overlap the frame's edge by a few points
+            for it in sorted(p.get("items", []), key=lambda it: (round(it["top"]), it["x0"])):
+                side = [b for b in blocks if b["x1"] > it["x0"] + 1 and b["x0"] < it["x1"] - 1]
+                inside = [b for b in side if it["top"] <= cy(b) <= it["bot"] and fits(b, "inside")]
+                mid = (it["top"] + it["bot"]) / 2
+                before = [b for b in inside if cy(b) < mid]           # printed in the top half: written before it
+                after = [b for b in inside if cy(b) >= mid]
+                edge = it["bot"]
+                for b in sorted((b for b in side if cy(b) > it["bot"]), key=lambda b: b["top"]):
+                    if b["top"] - edge > gap or not fits(b, "below"):
+                        break
+                    after.append(b)
+                    edge = b["bot"]
+                edge, above = it["top"], []
+                for b in sorted((b for b in side if cy(b) < it["top"]), key=lambda b: -b["bot"]):
+                    if edge - b["bot"] > gap or not fits(b, "above"):
+                        break
+                    above.insert(0, b)
+                    edge = b["top"]
+                before = above + sorted(before, key=lambda b: (b["top"], b["x0"]))
+                for b in before + after:
+                    b["role"], b["obj"] = "altyazı", True
+                it["before"], it["after"] = before, sorted(after, key=lambda b: (b["top"], b["x0"]))
+            for b in p["blocks"]:
+                if b["role"] in ("gövde", "kutu") and fam_of(b["style"]) not in self.text_fams and not b.get("obj"):
+                    b["flags"] = ["stil-farkli"]
 
     def _index_pages(self):
         """A back-of-book index: pages in the last quarter of the book whose lines are mostly short entries ending in
@@ -975,32 +1018,66 @@ def join_lines(texts, hy, stats, amb=None):
     return out.replace("\x02", "-")
 
 
+def _style_name(style):
+    f, s = style.split("|")
+    return f"{f} {s}"
+
+
+def _meta_of(b=None, page=None, box=None):
+    """where a segment comes from: pages, boxes [page, x0, y0, x1, y1] (PDF points, top-left origin), style, flags"""
+    if b is not None:
+        return dict(pages={b["page_no"]}, boxes=[[b["page_no"]] + [round(v, 1) for v in (b["x0"], b["top"], b["x1"], b["bot"])]],
+                    style=_style_name(b["style"]), flags=set(b.get("flags", ())))
+    return dict(pages={page}, boxes=[[page] + [round(v, 1) for v in box]], style=None, flags=set())
+
+
+def _meta_add(m, other):
+    m["pages"] |= other["pages"]
+    m["boxes"] += other["boxes"]
+    m["flags"] |= other["flags"]
+    m["style"] = m["style"] or other["style"]
+
+
 def build_markdown(doc, first_idx, last_idx):
-    """pages[first_idx..last_idx] (0-based, inclusive) -> markdown, stats"""
-    md, cur = [], None
+    """pages[first_idx..last_idx] (0-based, inclusive) -> markdown, stats. The source of every segment (pages, boxes,
+    style, flags) is left in doc.seg_meta, one entry per blank-line-separated segment of the markdown."""
+    md, cur = [], None                  # md: (kind, value, meta)
     stats = collections.Counter()
     lex, amb = doc.hyphen_real, doc.hyphen_ambiguous
     pending = []                        # figures/tables met while a paragraph is still open: written after it
     index_done = False
 
+    def captions(blocks):
+        """one caption per run of blocks that reads on (no closing punctuation, lowercase start)"""
+        runs = []
+        for b in blocks:
+            text = join_lines([l["md"].strip() for l in b["lines"]], lex, stats, amb)
+            if runs and not terminal(runs[-1][0]) and re.match(r"[*_]*[a-z]", text):
+                j = join_hyphen(runs[-1][0], text, doc.hyphen_real, stats, mark="-", amb=amb)
+                runs[-1][0] = j if j is not None else runs[-1][0] + " " + text
+                _meta_add(runs[-1][1], _meta_of(b))
+            else:
+                runs.append([text, _meta_of(b)])
+        for text, m in runs:
+            stats["captions"] += 1
+            md.append(("raw", CAPTION_OPEN + "\n" + text + "\n" + CAPTION_CLOSE, m))
+
     def write_item(it):
         p = it["page"]
+        captions(it.get("before", []))
+        m = _meta_of(page=p, box=(it["x0"], it["top"], it["x1"], it["bot"]))
         if it["kind"] == "image":
             stats["images"] += 1
-            md.append(("raw", f"![Görsel · s.{p}](gorsel-{p}-{it['n']})"))
-            cap = it.get("caption")
-            if cap:
-                stats["captions"] += 1
-                text = join_lines([l["md"].strip() for l in cap["lines"]], lex, stats, amb)
-                md.append(("raw", CAPTION_OPEN + "\n" + text + "\n" + CAPTION_CLOSE))
+            md.append(("raw", f"![Görsel · s.{p}](gorsel-{p}-{it['n']})", m))
         elif it["complex"]:
             stats["tables_complex"] += 1
             stats["table_words_out"] += it["words"]
             doc.complex_table_pages.append(p)
-            md.append(("raw", f"![Tablo · s.{p}](tablo-{p}-{it['n']})"))
+            md.append(("raw", f"![Tablo · s.{p}](tablo-{p}-{it['n']})", m))
         else:
             stats["tables"] += 1
-            md.append(("raw", it["md"]))
+            md.append(("raw", it["md"], m))
+        captions(it.get("after", []))
 
     def place(it):
         if cur:
@@ -1011,11 +1088,15 @@ def build_markdown(doc, first_idx, last_idx):
     def flush():
         nonlocal cur
         if cur:
-            md.append(("p", cur))
+            md.append(("p", cur, cur["meta"]))
             cur = None
         while pending:
             write_item(pending.pop(0))
     doc.complex_table_pages = []
+    doc.object_merge_log = []
+    for p in doc.pages:
+        for b in p["blocks"]:
+            b["page_no"] = p["p"]           # a caption above a figure is written before the loop reaches it
     for p in doc.pages[first_idx:last_idx + 1]:
         items = [] if p["p"] in doc.index_pages else sorted(p.get("items", []), key=lambda it: (round(it["top"]), it["x0"]))
         for b in p["blocks"]:
@@ -1023,13 +1104,14 @@ def build_markdown(doc, first_idx, last_idx):
                 place(items.pop(0))
             role, ls = b["role"], b["lines"]
             if role == "altyazı":
-                continue                                    # written right after its figure
+                continue                                    # written with its figure or table
             if role == "dizin":
                 stats["index_words"] += b["nwords"]
                 if not index_done:
                     flush()
                     pages = [n for n in doc.index_pages if first_idx < n <= last_idx + 1]
-                    md.append(("raw", f"![Dizin · s.{pages[0]}–{pages[-1]}](dizin-{pages[0]}-{pages[-1]})"))
+                    md.append(("raw", f"![Dizin · s.{pages[0]}–{pages[-1]}](dizin-{pages[0]}-{pages[-1]})",
+                               dict(pages=set(pages), boxes=[], style=None, flags=set())))
                     index_done = True
                 continue
             if role in ("sil", "ön sayfa"):
@@ -1039,22 +1121,31 @@ def build_markdown(doc, first_idx, last_idx):
             if role in ("gövde", "kutu") and (len(re.sub(r"[\s*]", "", b["text"])) <= 2 or (len(toks_) <= 6 and all(len(t) == 1 for t in toks_))):
                 stats["dropped_words"] += b["nwords"]       # single stray letters: ornate lettering, not text
                 continue
+            if b.get("flags"):
+                stats["style_flags"] += 1
             texts = [(l["md_nobold"] if role in HEAD else l["md"]).strip() for l in ls]
             box_here = b["box"] is not None
             if role in ("gövde", "kutu"):
                 text = join_lines(texts, lex, stats, amb)
                 # a paragraph cut by a page break, or split into two blocks on the same page (around a drop cap, a
-                # removed running head, a figure, a line set mostly in italics): same family and size (italic/bold
-                # variants included), same box, no closing punctuation, lowercase start
+                # removed running head, a line set mostly in italics): same family and size (italic/bold variants
+                # included), same box, no closing punctuation, lowercase start. With a figure or table in between
+                # (pending), the continuation may start with a capital ("... Even among" / "CEOs, the top ...").
                 if (cur and cur["page"] <= p["p"] and fam_of(cur["style"]) == fam_of(b["style"]) and cur["box"] == box_here
-                        and not terminal(cur["text"]) and re.match(r"[*_]*[a-z]", text)):
+                        and not terminal(cur["text"]) and (re.match(r"[*_]*[a-z]", text) or pending)):
+                    prev_text = cur["text"]
                     j = join_hyphen(cur["text"], text, doc.hyphen_real, stats, mark="-", amb=amb)
                     cur["text"] = j if j is not None else cur["text"] + " " + text
                     stats["page_merges" if cur["page"] < p["p"] else "inpage_merges"] += 1
+                    if pending and not cur.get("joined_over_object"):
+                        stats["object_merges"] += 1
+                        cur["joined_over_object"] = True
+                        doc.object_merge_log.append(dict(page=p["p"], before=prev_text, after=text))   # for review
                     cur["page"] = p["p"]
+                    _meta_add(cur["meta"], _meta_of(b))
                     continue
                 flush()
-                cur = dict(page=p["p"], style=b["style"], text=text, box=box_here)
+                cur = dict(page=p["p"], style=b["style"], text=text, box=box_here, meta=_meta_of(b))
                 continue
             flush()
             if role in HEAD:
@@ -1068,28 +1159,35 @@ def build_markdown(doc, first_idx, last_idx):
                 if near and prev["lvl"] == lvl:                       # a heading that wrapped
                     prev["text"] += " " + t
                     prev["base"] = b["lines"][-1]["base"]
+                    _meta_add(md[-1][2], _meta_of(b))
                 elif near and prev["lvl"] > lvl:                      # "Part One" above "Preparing ...": one heading
                     prev.update(lvl=lvl, text=prev["text"] + " " + t, base=b["lines"][-1]["base"], size=max(prev["size"], b["size"]))
+                    _meta_add(md[-1][2], _meta_of(b))
                 else:
-                    md.append(("head", dict(lvl=lvl, page=p["p"], base=b["lines"][-1]["base"], size=b["size"], text=t)))
+                    md.append(("head", dict(lvl=lvl, page=p["p"], base=b["lines"][-1]["base"], size=b["size"], text=t), _meta_of(b)))
             elif role == "kutu-başlık":
-                md.append(("raw", "**" + re.sub(r"\*+", "", join_lines(texts, lex, stats, amb)) + "**"))
+                md.append(("raw", "**" + re.sub(r"\*+", "", join_lines(texts, lex, stats, amb)) + "**", _meta_of(b)))
             elif role in ("şiir", "epigraf"):
-                md.append(("raw", "\n".join(t.replace("\x02", "-") + ("  " if i < len(texts) - 1 else "") for i, t in enumerate(texts))))
+                md.append(("raw", "\n".join(t.replace("\x02", "-") + ("  " if i < len(texts) - 1 else "") for i, t in enumerate(texts)), _meta_of(b)))
             elif role == "atıf":
-                md.append(("raw", "**" + re.sub(r"\*+", "", join_lines(texts, lex, stats, amb)) + "**"))
+                md.append(("raw", "**" + re.sub(r"\*+", "", join_lines(texts, lex, stats, amb)) + "**", _meta_of(b)))
             elif role == "liste":
                 t = join_lines(texts, lex, stats, amb)
                 m = re.match(r"\s*\**(\d+\.)\**\s*(.*)", t, re.S)
-                md.append(("raw", (m.group(1) + " " + m.group(2)) if m else t))
+                md.append(("raw", (m.group(1) + " " + m.group(2)) if m else t, _meta_of(b)))
             else:
-                md.append(("raw", join_lines(texts, lex, stats, amb)))
+                md.append(("raw", join_lines(texts, lex, stats, amb), _meta_of(b)))
         for it in items:
             place(it)
     flush()
-    out = []
-    for kind, v in md:
-        out.append(v["text"] if kind == "p" else ("#" * MD_LEVEL[v["lvl"]] + " " + v["text"] if kind == "head" else v))
+    out, meta = [], []
+    for kind, v, m in md:
+        text = v["text"] if kind == "p" else ("#" * MD_LEVEL[v["lvl"]] + " " + v["text"] if kind == "head" else v)
+        if not text.strip():
+            continue
+        out.append(text)
+        meta.append(dict(pages=sorted(m["pages"]), boxes=m["boxes"], style=m["style"], flags=sorted(m["flags"])))
+    doc.seg_meta = meta
     return "\n\n".join(out) + "\n", stats
 
 
@@ -1173,8 +1271,13 @@ def _analyse(pdf_bytes, first_page=None, last_page=None):
         warnings.append(f"{stats['hyphen_ambiguous']} belirsiz tire birleştirildi.")
     if stats["images"]:
         fig_words = sum(p.get("fig_words", 0) for p in d.pages[first - 1:last])
-        warnings.append(f"{stats['images']} görsel yer tutucuyla işaretlendi ({stats['captions']} altyazılı)"
+        warnings.append(f"{stats['images']} görsel yer tutucuyla işaretlendi"
                         + (f"; görsellerin içindeki {fig_words} sözcük metne alınmadı." if fig_words else "."))
+    if stats["captions"]:
+        warnings.append(f"Görsel ve tablolara {stats['captions']} başlık/altyazı/açıklama satırı bağlandı (altyazı olarak yazıldı).")
+    if stats["object_merges"]:
+        warnings.append(f"{stats['object_merges']} paragraf araya giren görsel/tablo yüzünden bölünmüştü; birleştirildi, "
+                        "görsel/tablo paragrafın ardına alındı.")
     if stats["tables"]:
         warnings.append(f"{stats['tables']} tablo markdown tablosu olarak yazıldı; çeviride satır ve sütunlar korunmalı.")
     if stats["tables_complex"]:
@@ -1183,12 +1286,15 @@ def _analyse(pdf_bytes, first_page=None, last_page=None):
     idx = [n for n in d.index_pages if first <= n <= last]
     if idx:
         warnings.append(f"Dizin (s. {idx[0]}–{idx[-1]}) çeviriye dahil edilmedi.")
+    if stats["style_flags"]:
+        warnings.append(f"{stats['style_flags']} blok gövdeden farklı stilde ama hiçbir başlığa ya da görsel/tabloya "
+                        "bağlanamadı; \"stil-farkli\" olarak işaretlendi.")
     if rotated >= 20:
         warnings.append(f"Eğik ya da dikey yazılmış {rotated} karakter (filigran, kenar yazısı) metne alınmadı.")
     skipped = [p["p"] for p in d.pages[first - 1:last] if p["cover"]]
     if skipped:
         warnings.append("Kapak/açık yayılım sayfası atlandı: " + _fmt_pages(skipped) + ".")
-    return dict(md=md, warnings=warnings, doc=d, stats=stats, tint=tint, orn=orn,
+    return dict(md=md, warnings=warnings, doc=d, stats=stats, tint=tint, orn=orn, meta=d.seg_meta,
                 info=dict(scanned=scanned, producer=producer, rotated_chars=rotated,
                           scan_pages=sum(1 for s in signals if s[0] and s[1] and s[1] >= 9 * s[2])))
 
@@ -1196,6 +1302,12 @@ def _analyse(pdf_bytes, first_page=None, last_page=None):
 def convert(pdf_bytes, first_page=None, last_page=None):
     a = _analyse(pdf_bytes, first_page, last_page)
     return a["md"], a["warnings"]
+
+
+def convert_with_meta(pdf_bytes, first_page=None, last_page=None):
+    """convert() plus the source of every segment (see build_markdown): (markdown, warnings, seg_meta)"""
+    a = _analyse(pdf_bytes, first_page, last_page)
+    return a["md"], a["warnings"], a["meta"]
 
 
 def _fmt_pages(nums):

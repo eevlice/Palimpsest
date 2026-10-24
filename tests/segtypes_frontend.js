@@ -16,6 +16,16 @@ function fn(name) {               // a top-level "function name(...){...}" by br
   }
   throw new Error('unbalanced ' + name);
 }
+function block(prefix) {          // a top-level "window.name=(...)=>{...};" by brace matching
+  const at = src.indexOf(prefix);
+  if (at < 0) throw new Error('missing ' + prefix);
+  let i = src.indexOf('{', at), depth = 0;
+  for (; i < src.length; i++) {
+    if (src[i] === '{') depth++;
+    else if (src[i] === '}' && --depth === 0) return src.slice(at, i + 1) + ';';
+  }
+  throw new Error('unbalanced ' + prefix);
+}
 function line(prefix) {           // a one-line top-level statement
   const at = src.indexOf(prefix);
   if (at < 0) throw new Error('missing ' + prefix);
@@ -26,18 +36,18 @@ const code = [
   ...['foldCase', 'segType', 'segMarkerLen', 'segTailLen', 'fnNumber', 'typeOf', 'refLabels', 'maskRefs',
       'inlineParse', 'isWordChar', 'findSpans', 'parseTerms', 'glossHitsForText',
       'searchSpans', 'renderSource', 'refMismatch', 'neighborText', 'canMerge', 'exportText',
-      'normalizeProject', 'isDone', 'headingTitle', 'computeSections', 'sectionStats', 'segState', 'padWidth', 'railLabel',
+      'normalizeProject', 'isDone', 'mergeMeta', 'projectForSave', 'headingTitle', 'computeSections', 'sectionStats', 'segState', 'padWidth', 'railLabel',
       'windowStartFor', 'windowLabel', 'goToWindow', 'railGoto', 'pageEarlier', 'pageLater', 'jumpToLastTranslated', 'lastTranslatedIndex',
-      'roman', 'headingDepths', 'railModel', 'flowCells', 'railWhere', 'railCellClass', 'railOpen', 'applyRailOpen', 'setRailOpen'].map(fn),
+      'roman', 'headingDepths', 'railModel', 'flowCells', 'railWhere', 'railCellClass', 'railOpen', 'applyRailOpen', 'setRailOpen'].map(fn), block('window.mergeDown='), block('window.undoMerge='),
   'return {segType,inlineParse,findSpans,renderSource,refMismatch,neighborText,canMerge,exportText,normalizeProject,' +
-  'headingTitle,computeSections,sectionStats,isDone,segState,railLabel,roman,headingDepths,railModel,flowCells,railWhere,railCellClass,railOpen,applyRailOpen,setRailOpen,RAIL_PER_ROW,' +
+  'headingTitle,computeSections,sectionStats,isDone,mergeMeta,projectForSave,mergeDown:(i)=>window.mergeDown(i),undoMerge:()=>window.undoMerge(),getP:()=>P,segState,railLabel,roman,headingDepths,railModel,flowCells,railWhere,railCellClass,railOpen,applyRailOpen,setRailOpen,RAIL_PER_ROW,' +
   'windowStartFor,windowLabel,goToWindow,railGoto,pageEarlier,pageLater,jumpToLastTranslated,PREFS_:()=>PREFS,LAYOUT,SAVED,' +
   'getWin:()=>winStart,setWin:v=>{winStart=v},calls:CALLS,setMerge:v=>{MERGE_MODE=v},setP:p=>{P=p},setSearch:q=>{SEARCH={query:q}}};'
 ].join('\n');
 // DOM-free stubs for the window / rail navigation functions pulled out of index.html
 const STUBS = `let winStart=0, MERGE_MODE=false, GLOSS_FILTER=null, PREFS={}; const CALLS=[], SAVED=[], LAYOUT={closed:false,pressed:null};
 const window={innerWidth:1400,scrollTo(){}}; const document={querySelector(sel){ return sel==='.ws-layout'?{classList:{toggle(c,on){ if(c==='rail-closed') LAYOUT.closed=!!on; }}}:null; }}; function savePref(k,v){ SAVED.push([k,v]); PREFS[k]=v; } const $=id=>({scrollIntoView(){CALLS.push('scroll:'+id)},classList:{toggle(){}},setAttribute(k,v){ if(id==='btn-rail'&&k==='aria-pressed') LAYOUT.pressed=v; }});
-function renderWindow(){CALLS.push('renderWindow')} function renderRail(){CALLS.push('renderRail')}
+function renderWindow(){CALLS.push('renderWindow')} function updateProgress(){} function updateUndoBar(){} function queueSave(){CALLS.push('save')} function renderRail(){CALLS.push('renderRail')}
 function mergeSelClick(i){CALLS.push('merge:'+i)} function updateRail(){CALLS.push('updateRail')} function clearGlossaryFilter(){GLOSS_FILTER=null;CALLS.push('clearFilter')} function closeRailMobile(){}
 `;
 const api = new Function('let P=null, SEARCH={query:""};\n' + STUBS + code.replace(/^const esc=/m, 'const esc=') )();
@@ -55,7 +65,10 @@ const old = { id: 'p_1', name: 'Eski', source_lang: 'English', target_lang: 'Tur
   approved: [true, false, false], synopsis: '', terms: '', rules: '', style: '', cost: 0, segCost: {}, segEffort: {}, _undo: null };
 const before = JSON.stringify(old);
 const normalized = api.normalizeProject(JSON.parse(before));
-check('old project: normalizeProject changes nothing', JSON.stringify(normalized) === before);
+const added = Object.keys(normalized).filter(k => !(k in JSON.parse(before)));
+const { segMeta: _sm, ...rest } = normalized;
+check('old project: normalizeProject adds only segMeta (all null) and changes nothing else',
+  added.join() === 'segMeta' && _sm.every(x => x === null) && JSON.stringify(rest) === before, added);
 check('old project: every segment is a paragraph', old.segments.every(s => api.segType(s).type === 'para'));
 
 // helpers on a typed project
@@ -311,6 +324,47 @@ check('sections: heading with a footnote ref keeps the title clean', api.heading
   api.setP({ segments: ['Before.', img, 'After.'], finals: [null, img, null], approved: [false, true, false] });
   check('model context skips placeholders', api.neighborText(0, 1) === 'After.' && api.neighborText(2, -1) === 'Before.');
   check('no merge across a figure or a caption', !api.canMerge(1) && !api.canMerge(0));
+}
+
+// ---------- segMeta: the PDF source of each segment, a parallel array ----------
+{
+  const m = (pages, flags) => ({ pages, boxes: pages.map(p => [p, 1, 2, 3, 4]), style: 'Body 11', flags: flags || [] });
+  const old = api.normalizeProject({ segments: ['a', 'b'], finals: [null, null], approved: [false, false] });
+  check('segMeta: missing -> nulls of the right length (older and non-PDF projects)', Array.isArray(old.segMeta) && old.segMeta.length === 2 && old.segMeta.every(x => x === null));
+  const keep = api.normalizeProject({ segments: ['a'], finals: [null], approved: [false], segMeta: [m([17])] });
+  check('segMeta: kept when its length matches', keep.segMeta[0].pages[0] === 17);
+  const bad = api.normalizeProject({ segments: ['a', 'b'], finals: [null, null], approved: [false, false], segMeta: [m([1])] });
+  check('segMeta: a wrong length is replaced by nulls, never left out of step', bad.segMeta.length === 2 && bad.segMeta[0] === null);
+  const mm = api.mergeMeta(m([18], ['stil-farkli']), m([17, 18]));
+  check('mergeMeta: pages and boxes together, flags kept', mm.pages.join() === '17,18' && mm.boxes.length === 3 && mm.flags.join() === 'stil-farkli' && mm.style === 'Body 11');
+  check('mergeMeta: null + meta keeps the meta; null + null stays null', api.mergeMeta(null, m([5])).pages.join() === '5' && api.mergeMeta(null, null) === null);
+  const q = api.normalizeProject({ segments: ['First part of a', 'paragraph that goes on.', 'Next one.'], finals: [null, null, null],
+    approved: [false, false, false], segMeta: [m([17]), m([18]), m([19])] });
+  api.setP(q); api.mergeDown(0);
+  const P2 = api.getP();
+  const lens = [P2.segments.length, P2.finals.length, P2.approved.length, P2.segMeta.length];
+  check('merge: every parallel array, segMeta included, keeps the same length', lens.every(x => x === 2), lens);
+  check('merge: the merged segment\'s meta covers both sources', P2.segMeta[0].pages.join() === '17,18' && P2.segMeta[1].pages.join() === '19');
+  api.undoMerge();
+  const P3 = api.getP();
+  check('undo (split back): segMeta returns to one entry per segment', P3.segMeta.length === 3 && P3.segMeta[1].pages.join() === '18' && P3.segments.length === 3);
+}
+
+// ---------- what reaches the project file ----------
+{
+  const plain = api.normalizeProject({ id: 'p', segments: ['a', 'b'], finals: [null, null], approved: [false, false] });
+  const out = JSON.parse(JSON.stringify(api.projectForSave(plain)));
+  check('save: an all-null segMeta (non-PDF, older projects) is left out of the file', !('segMeta' in out) && Array.isArray(plain.segMeta));
+  const pdf = api.normalizeProject({ id: 'p', segments: ['a', 'b'], finals: [null, null], approved: [false, false], segMeta: [{ pages: [3], boxes: [], style: 'X 1', flags: [] }, null] });
+  check('save: a PDF project keeps its segMeta', JSON.parse(JSON.stringify(api.projectForSave(pdf))).segMeta.length === 2);
+  check('save: the in-memory project is not changed', Array.isArray(plain.segMeta) && plain.segMeta.length === 2);
+  // an undo snapshot saved without segMeta (it was all null) still splits back to matching lengths
+  const q = api.normalizeProject({ segments: ['First part of a', 'paragraph that goes on.', 'Next one.'], finals: [null, null, null], approved: [false, false, false] });
+  api.setP(q); api.mergeDown(0);
+  const P2 = api.getP(); delete P2._undo.segMeta;
+  api.undoMerge();
+  const P3 = api.getP();
+  check('undo from a snapshot without segMeta: segMeta rebuilt with the right length', P3.segMeta.length === P3.segments.length && P3.segments.length === 3);
 }
 
 console.log(failed ? 'FAILED ' + failed : 'ALL PASS');
