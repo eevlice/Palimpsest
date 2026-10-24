@@ -12,7 +12,7 @@ if exist .git (
   set GIT_TERMINAL_PROMPT=0
   git pull --ff-only --quiet >NUL 2>&1
 )
-python -c "import flask, anthropic, openai, google.genai, docx, cryptography, pypdfium2, pypandoc" 2>NUL
+python -c "import flask, anthropic, openai, google.genai, docx, cryptography, pypdfium2, pdfminer, pypandoc" 2>NUL
 if errorlevel 1 (
   echo First run: installing the required libraries...
   pip install -r requirements.txt
