@@ -949,7 +949,9 @@ i_c = next(i for i, x in enumerate(segs) if "centered remark" in x)
 check("a deviation no rule names keeps the review flag, with its reason", types[i_c] == "para" and "centered" in meta[i_c]["flags"]
       and "stil-farkli" in meta[i_c]["flags"] and meta[i_c]["role"] is None, meta[i_c])
 plain = [i for i, x in enumerate(segs) if x.startswith("Body 0 of page 2")]
-check("a normal paragraph has no reasons", plain and meta[plain[0]]["flags"] == [], meta[plain[0]] if plain else None)
+# ("of page 2" in the synthetic prose is an in-book page reference: that flag is not a shape reason)
+check("a normal paragraph has no reasons", plain and [f for f in meta[plain[0]]["flags"] if f != "sayfa-gonderme"] == [],
+      meta[plain[0]] if plain else None)
 check("role counts in the stats", st["role_epigraph"] == 1 and st["role_attribution"] == 2 and st["role_blockquote"] == 1 and st["role_verse"] == 1, st)
 
 # a quote cut by a page break goes on in a one-line, unindented rest at the top of the next page
@@ -1066,6 +1068,165 @@ d = P.Doc([over_page(p) for p in range(1, 9)])
 md, st = P.build_markdown(d, 0, 7)
 check("a block lying over other lines is no block quote (it keeps the review flag)", not any(x.startswith("> ") for x in md.split("\n\n")),
       [x[:60] for x in md.split("\n\n") if "stray piece" in x])
+
+# ---------------------------------------------------------------- notes: callouts, page-bottom footnotes, endnotes
+from segtypes import reorder_footnotes, seg_type as _st2
+
+
+class Chars:
+    """a page's chars in content order: body lines, raised callouts (6.5pt, 4pt up), small note lines"""
+    def __init__(self):
+        self.c = []
+
+    def text(self, t, x, base, font=B, size=11.0):
+        self.c += line(t, x, base, font, size, idx0=len(self.c), italic="Italic" in font, bold="Bold" in font,
+                       weight=700 if "Bold" in font else 400)
+        return x + len(t) * 0.5 * size
+
+    def sup(self, t, x, base, gap=0.0):
+        self.c += line(t, x + gap, base - 4, B, 6.5, idx0=len(self.c))
+
+
+# a raised number after a word is a callout; after a digit an exponent; after a capital a formula (B12)
+got = []
+for t, n in (("the end of a sentence.", "3"), ("ten to the power 10", "2"), ("a dose of vitamin B", "12")):
+    k = Chars()
+    k.sup(n, k.text(t, 100, 200), 200)
+    L = lines_text(k.c)
+    got.append((len(L), L[0]["refs"], L[0]["plain"]))
+check("callout: a raised number after a word; not after a digit (10²) or a capital (B12)",
+      got == [(1, ["3"], "the end of a sentence.3"), (1, [], "ten to the power 102"), (1, [], "a dose of vitamin B12")], got)
+k = Chars()
+k.sup("7", k.text("a short last line.", 100, 200), 200, gap=2.5)
+k.text("Next line of text that runs on here.", 100, 214)
+L = lines_text(k.c)
+check("callout: a number standing just past the end of its line folds into it", L[0]["refs"] == ["7"] and len(L) == 2, [l["md"] for l in L])
+
+
+def foot_page(p):
+    """full pages (the text block reaches the notes); page 3 cites notes 1 and 2, note 2 and the paragraph run on to
+    page 4, which cites note 3"""
+    k = Chars()
+    first = 0
+    if p == 4:
+        k.text("next page where the sentence ends.", 100, 130)
+        k.sup("3", k.text("A third sentence with its own note.", 100, 144), 144)
+        first = 2
+    for j in range(first, 30):
+        k.text("Body %d of the %d: %s" % (j, p, FULL[:48]), 100, 130 + 14 * j)
+    if p == 3:
+        k.sup("1", k.text("A sentence on this leaf that has a note.", 100, 550), 550)
+        k.sup("2", k.text("Then another with a second note, and the text runs to the", 100, 564), 564)
+        k.text("1 A synthetic footnote that ends here.", 100, 640, "Note-Regular", 9)
+        k.text("2 The second note runs on over the", 100, 652, "Note-Regular", 9)
+    elif p == 4:
+        k.text("leaf break and ends overleaf.", 100, 640, "Note-Regular", 9)
+        k.text("3 A third note.", 100, 652, "Note-Regular", 9)
+    else:
+        for j in (30, 31):
+            k.text("Body %d of the %d: %s" % (j, p, FULL[:48]), 100, 130 + 14 * j)
+    return P.build_blocks(p, W, H, k.c, [])
+
+
+d = P.Doc([foot_page(p) for p in range(1, 9)])
+md, st = P.build_markdown(d, 0, 7)
+segs = [x for x in md.split("\n\n") if x.strip()]
+cut = [x for x in segs if "runs to the" in x]
+check("footnote: callouts become [^label] right after the word, the paragraph cut by the page still joins",
+      len(cut) == 1 and "has a note.[^b1-1] Then" in cut[0] and "second note, and the text runs to the[^b1-2] next page where" in cut[0], cut)
+check("footnote: each note is its own definition segment, without its number",
+      "[^b1-1]: A synthetic footnote that ends here." in segs and "[^b1-3]: A third note." in segs, [x for x in segs if x.startswith("[^")])
+check("footnote: a note running on overleaf is one note", "[^b1-2]: The second note runs on over the leaf break and ends overleaf." in segs,
+      [x for x in segs if x.startswith("[^b1-2]")])
+check("footnote: counts, nothing unmatched", (st["note_refs"], st["note_bodies"], st["note_refs_matched"], st["note_refs_unmatched"],
+                                             st["note_bodies_unmatched"]) == (3, 3, 3, 0, 0), dict(st))
+re_segs, warns = reorder_footnotes(segs)
+i1 = next(i for i, x in enumerate(re_segs) if "has a note.[^b1-1]" in x)
+check("footnote: the import reorder puts the definitions after the paragraph citing them",
+      re_segs[i1 + 1].startswith("[^b1-1]:") and re_segs[i1 + 2].startswith("[^b1-2]:") and not warns, (re_segs[i1 + 1:i1 + 3], warns))
+
+
+def end_page(p):
+    k = Chars()
+    y = 130
+    if p in (1, 4):
+        k.text("Chapter %s Title" % ("One" if p == 1 else "Two"), 100, 90, "Head-Bold", 16)
+    if p in (1, 2, 4, 5, 6):
+        for j in range(10):
+            t = "Body %d of page %d: %s" % (j, p, FULL[:48])
+            if j == 3 and p in (1, 2, 4, 5, 6):
+                n = {1: "1", 2: "2", 4: "1", 5: "2", 6: "3"}[p]
+                k.sup(n, k.text("Body %d of page %d ends a sentence here." % (j, p), 100, y), y)
+            elif j == 6 and p == 6:
+                k.sup("4", k.text("A sentence whose note is missing.", 100, y), y)
+            else:
+                k.text(t, 100, y)
+            y += 14
+    if p == 3:
+        for j in range(10):
+            k.text("Body %d of page %d: %s" % (j, p, FULL[:48]), 100, y)
+            y += 14
+    if p == 7:
+        k.text("Notes", 100, 90, "Head-Bold", 16)
+        y = 160
+        for head, ns in (("Chapter One", (1, 2, 3)), ("Chapter Two", (1, 2, 3))):
+            k.text(head, 100, y, "Head-Bold", 16)
+            y += 28
+            for n in ns:
+                k.text("%d. A synthetic endnote number %d of %s." % (n, n, head.lower()), 100, y, "Note-Regular", 10)
+                y += 16
+                if n == 1 and head == "Chapter One":     # a wrapped line of note 1 that starts with a number
+                    k.text("3. 14 is where the wrapped reference of note one ends.", 100, y, "Note-Regular", 10)
+                    y += 16
+            y += 12
+    if p == 8:
+        k.text("Bibliography", 100, 90, "Head-Bold", 16)
+        for n in (1, 2, 3):
+            k.text("%d. Author, A. 2001. A Synthetic Title. Place: Press." % n, 100, 130 + 16 * n, "Note-Regular", 10)
+    return P.build_blocks(p, W, H, k.c, [])
+
+
+d = P.Doc([end_page(p) for p in range(1, 9)])
+md, st = P.build_markdown(d, 0, 7)
+segs = [x for x in md.split("\n\n") if x.strip()]
+check("endnotes: numbering restarts per chapter, matched by chapter and number",
+      any("page 1 ends a sentence here.[^b1-1]" in x for x in segs) and any("page 4 ends a sentence here.[^b2-1]" in x for x in segs)
+      and "[^b2-3]: A synthetic endnote number 3 of chapter two." in segs, [x for x in segs if "[^" in x][:12])
+check("endnotes: a callout without its note is written as the number and flagged", any("is missing.4" in x for x in segs)
+      and "atif-eslesmedi" in d.seg_meta[next(i for i, x in enumerate(segs) if "is missing.4" in x)]["flags"])
+i3 = next((i for i, x in enumerate(segs) if "number 3 of chapter one" in x), None)
+check("endnotes: a note nobody cites stays as it was, flagged", i3 is not None and segs[i3].startswith("3. ")
+      and "not-eslesmedi" in d.seg_meta[i3]["flags"], segs[i3] if i3 is not None else None)
+check("endnotes: an emptied group heading goes, one with a note left stays (and so does Notes)",
+      "# Chapter Two" not in segs and "# Chapter One" in segs and "# Notes" in segs, [x for x in segs if x.startswith("#")])
+check("endnotes: a number out of sequence that comes again later is a line of the note before",
+      any(x.startswith("[^b1-1]: A synthetic endnote number 1") and "3. 14 is where the wrapped" in x for x in segs),
+      [x for x in segs if x.startswith("[^b1-1]")])
+check("bibliography: numbered entries after it are no notes", sum("Synthetic Title" in x for x in segs) == 3
+      and not any(x.startswith("[^") and "Synthetic Title" in x for x in segs))
+check("endnotes: counts", (st["note_refs"], st["note_bodies"], st["note_refs_matched"], st["note_refs_unmatched"], st["note_bodies_unmatched"],
+                           st["notes_heads_removed"]) == (6, 6, 5, 1, 1, 1), dict(st))
+
+
+# ---------------------------------------------------------------- in-book page references vs citations
+def refs_of(texts, heads=()):
+    md = [("head", dict(lvl=2, text=h), dict(flags=set())) for h in heads]
+    md += [("p", dict(text=t), dict(flags=set())) for t in texts]
+    st = collections.Counter()
+    P.page_refs(md, st)
+    return [it[2].get("page_refs") for it in md[len(heads):]]
+
+
+got = refs_of(["As we saw earlier (see p. 42), this holds.", "This is shown on pages 12–14 of the book.",
+               "See chapter 3 for more.", "The points listed below are the main ones.", "Mentioned before (p. 7) in passing."])
+check("page reference: see p., pages a–b, see chapter, listed below, a bare (p. N)",
+      got == [["s.42"], ["s.12–14"], ["bölüm 3"], ["below"], ["s.7"]], got)
+got = refs_of(["Smith (2003, p. 4) says so.", "Jones, *A Synthetic Title*, p. 15.", "Ibid., pp. 13–14.",
+               "the “three word phrase” (p. 256) here.", "Lee et al. found it, p. 9.", "Noted by Brown (p. 5) once."])
+check("citation: author and year, a title, ibid., a quoted phrase, et al., a name before (p. N) are not page references",
+      got == [None] * 6, got)
+got = refs_of(["See p. 4 of the guide."], heads=["Bibliography"])
+check("page reference: none inside a bibliography", got == [None], got)
 
 print("FAILED %d" % failed if failed else "ALL PASS")
 sys.exit(1 if failed else 0)

@@ -246,6 +246,12 @@ THRESHOLDS = {
     "stray_tokens": 6,            # ...or up to this many one-letter tokens - round 1
     "head_wrap_em": 2.6,          # a heading continues on the next line within this many sizes - round 1
     "rotated_warn": 20,           # warn about turned text from this many glyphs - round 1
+    "ref_size": 0.85,             # a note callout is set at most this share of the line's size - gaps 1, Far Calls (0.5)
+    "ref_raise": 0.15,            # ...with its baseline raised by more than this share of the size - gaps 1, Attachment
+    "ref_max_chars": 3,           # ...and at most this many digits or signs - gaps 1
+    "ref_gap_em": 0.5,            # a callout row past a line's end starts within this many sizes of it - gaps 1, Far Calls
+    "foot_size": 0.92,            # a page-bottom footnote is set at most this share of the body size - gaps 1
+    "notes_seq_share": 0.7,       # a notes group counts when this share of its entries follow 1, 2, 3... - gaps 1
 }
 
 
@@ -288,8 +294,15 @@ def fam_of(style):
     return re.sub(r"-(BoldItalic|LightItalic|RegularItalic|Italic|Bold|Regular|Light|Medium|Semibold|ExtraBold|Roman|SmallCaps)$", "", f), float(s)
 
 
+# a note callout in line text: REF_OPEN + the number or sign as printed + REF_CLOSE (private-use characters, never in
+# a book); the writer turns it into [^label] or back into the plain number
+REF_OPEN, REF_CLOSE = "\ue000", "\ue001"
+REF = re.compile(REF_OPEN + "([^" + REF_CLOSE + "]*)" + REF_CLOSE)
+NOTE_SIGNS = "*†‡§¶"
+
+
 def terminal(s):
-    return bool(re.search(r"[.!?…:;\"”’)\]»][*_]*\s*$", s))
+    return bool(re.search(r"[.!?…:;\"”’)\]»][*_]*\s*$", REF.sub("", s)))
 
 
 def _similar_key(text):
@@ -480,6 +493,22 @@ def build_lines(chars, page_no, orn_fonts=frozenset()):
             rows[-1].append(c)
         else:
             rows.append([c])
+    # a row of small callouts only ("50" mid-line, "51" at the end of the next line) splits into one row per
+    # callout, so that each folds into its own line
+    split = []
+    for r in rows:
+        ink = sorted((c for c in r if c.ch.strip()), key=lambda c: c.x0)
+        if not ink or not all((c.ch.isdigit() or c.ch in NOTE_SIGNS) and c.size <= T["ref_size"] * body for c in ink):
+            split.append(r)
+            continue
+        part = [ink[0]]
+        for a, b in zip(ink, ink[1:]):
+            if b.x0 - a.x1 > T["ref_gap_em"] * body:
+                split.append(part)
+                part = []
+            part.append(b)
+        split.append(part)
+    rows = split
 
     def rsize(r):
         s = [c.size for c in r if c.ch.strip()]
@@ -491,12 +520,14 @@ def build_lines(chars, page_no, orn_fonts=frozenset()):
             continue
         rx0, rx1 = min(c.x0 for c in r), max(c.x1 for c in r)
         tiny = all(c.ch in "¹²³⁴⁵⁶⁷⁸⁹⁰₀₁₂₃₄₅₆₇₈₉⁄/ " for c in r)
+        # a note callout at the end of a line sticks out past it
+        callout = 0 < len([c for c in r if c.ch.strip()]) <= T["ref_max_chars"] and all(c.ch.isdigit() or c.ch in NOTE_SIGNS + " " for c in r)
         best = None
         for j, n in enumerate(rows):
             if j == i or j in merged or sizes[j] <= 0 or (sizes[i] > T["script_size"] * sizes[j] and not tiny):
                 continue
             nx0, nx1 = min(c.x0 for c in n), max(c.x1 for c in n)
-            if (nx0 - T["script_slack"] <= rx0 and rx1 <= nx1 + T["script_slack"]
+            if (nx0 - T["script_slack"] <= rx0 and (rx1 <= nx1 + T["script_slack"] or callout and rx0 <= nx1 + T["ref_gap_em"] * sizes[j])
                     and abs(r[0].base - n[0].base) <= (T["script_reach_tiny"] if tiny else T["script_reach"]) * sizes[j]):
                 d = abs(r[0].base - n[0].base)
                 if best is None or d < best[0]:
@@ -654,10 +685,41 @@ def inline_md(toks, bold_ok=True):
     return "".join(out)
 
 
+def _mark_refs(l):
+    """Note callouts: digits or a note sign (*, †, ...) set smaller and raised, right after a word or its closing
+    punctuation. After a digit it is an exponent (10², 6′0″), after a capital a formula or a name (B12, CO2), lowered
+    a subscript: none is a callout.
+    The run is wrapped in REF_OPEN/REF_CLOSE and takes the style of the word before it."""
+    cs, z, base = l["chars"], l["size"], l["base"]
+    raised = lambda c: ((c.ch.isdigit() or c.ch in NOTE_SIGNS) and c.size <= T["ref_size"] * z
+                        and c.base < base - T["ref_raise"] * z)
+    i = 0
+    while i < len(cs):
+        if not raised(cs[i]):
+            i += 1
+            continue
+        j = i
+        while j + 1 < len(cs) and raised(cs[j + 1]):
+            j += 1
+        run = cs[i:j + 1]
+        prev = next((c for c in reversed(cs[:i]) if c.ch.strip()), None)
+        same = all(c.ch.isdigit() for c in run) or all(c.ch in NOTE_SIGNS for c in run)
+        if (prev is not None and (prev.ch[-1:].islower() or prev.ch[-1:] in ".,;:!?’”\")»")
+                and same and len(run) <= T["ref_max_chars"]):
+            run[0].ch = REF_OPEN + run[0].ch
+            run[-1].ch += REF_CLOSE       # one char may be both ends
+            for c in run:
+                c.italic, c.bold = prev.italic, prev.bold
+        i = j + 1
+
+
 def _prepare_line(l):
+    _mark_refs(l)
     toks = line_tokens(l)
     l["md"], l["md_nobold"] = inline_md(toks, True), inline_md(toks, False)
-    l["plain"] = "".join(t[0] for t in toks)
+    # the block rules read the callout's digits as printed, as they always did ("1928.⁶³ Yet" is no list item)
+    l["plain"] = REF.sub(r"\1", "".join(t[0] for t in toks))
+    l["refs"] = REF.findall(l["md"])
     ne = [c for c in l["chars"] if c.ch.strip()]
     n = max(1, len(ne))
     l["italic_share"] = sum(1 for c in ne if c.italic) / n
@@ -1697,6 +1759,51 @@ class _ShapeRoles:
             b["flags"] = why
 
 
+FOOT_START = re.compile(r"^\s*[*_]*(\d{1,3}|[" + NOTE_SIGNS + r"]{1,3})[.)]?[*_]*\s*(?=\S)")
+
+
+class _Notes:
+    """Stage 6d (Doc mixin): page-bottom footnotes. Below everything set at body size, smaller, starting with a number
+    (or sign) that a callout on the same page carries; the lines up to the next such start belong to it. Small lines
+    at the foot of the next page before any number go on with the last note when it ended mid-sentence.
+    Sets role "dipnot" and b["foot"] = [(number, or None for a continuation, lines)]."""
+
+    def _footnotes(self):
+        if not self.body_style:
+            return
+        bsize = fam_of(self.body_style)[1]
+        small = lambda b: b["size"] <= T["foot_size"] * bsize
+        last = None                     # (style, text) of the last note, while it may go on overleaf
+        for p in self.pages:
+            live = [b for b in p["blocks"] if b["role"] not in ("sil", "ön sayfa", "dizin", "altyazı")]
+            floor = max((b["bot"] for b in live if not small(b)), default=None)
+            if floor is None:
+                last = None
+                continue
+            refs = {r for b in live if not small(b) for l in b["lines"] for r in l["refs"]}
+            seen, carry = set(), last
+            last = None
+            for b in sorted((b for b in live if small(b) and b["top"] >= floor and b["box"] is None), key=lambda b: b["top"]):
+                notes = []
+                for l in b["lines"]:
+                    m = FOOT_START.match(l["plain"])
+                    if m and m.group(1) in refs and m.group(1) not in seen:
+                        seen.add(m.group(1))
+                        notes.append((m.group(1), [l]))
+                    elif notes:
+                        notes[-1][1].append(l)
+                    elif not seen and carry and carry[0] == b["style"] and not terminal(carry[1]):
+                        notes.append((None, [l]))
+                    else:
+                        break
+                else:
+                    if notes:
+                        b["role"], b["foot"] = "dipnot", notes
+                        last = (b["style"], notes[-1][1][-1]["plain"])
+                        continue
+                last = None
+
+
 # ====================================================================================================================
 # 7. MERGES
 #   in:  every line of the book (lexicon); line texts of a block or two paragraph parts (joins)
@@ -1779,7 +1886,7 @@ def join_lines(texts, hy, stats, amb=None):
 # ====================================================================================================================
 
 
-class Doc(_Margins, _Objects, _Styles, _Roles, _ShapeRoles, _Merges):
+class Doc(_Margins, _Objects, _Styles, _Roles, _ShapeRoles, _Notes, _Merges):
     """The book-level stages over every page, in this order. One step runs out of its section's order: running heads
     that repeat a heading (stage 4) need the heading roles of stage 6 first."""
     def __init__(self, pages):
@@ -1802,6 +1909,8 @@ class Doc(_Margins, _Objects, _Styles, _Roles, _ShapeRoles, _Merges):
         self._object_groups()
         # 6c. epigraph, block quote, verse, attribution, box from shape
         self._shape_roles()
+        # 6d. page-bottom footnotes
+        self._footnotes()
         # 7. the hyphen lexicon for the joins written in stage 8
         self.lex = self._hyphen_lexicon()
 
@@ -1855,6 +1964,288 @@ def _meta_add(m, other):
     m["role"], m["conf"] = m.get("role") or other.get("role"), m.get("conf") or other.get("conf")
 
 
+NOTES_HEAD = re.compile(r"^[*_]*(end ?)?notes?[*_]*$", re.I)
+# sections that end a notes section and are never notes themselves
+NOT_NOTES = re.compile(r"\b(bibliography|references|works cited|sources|further reading|suggested readings?|"
+                       r"recommended readings?|index|appendix|glossary|acknowledgm?ents?|about the authors?|permissions|"
+                       r"credits)\b", re.I)
+NOTE_ENTRY = re.compile(r"^[*_]*(\d{1,3})[.)]?[*_]*\s+(?=\S)")
+LOWER_START = re.compile(r"[*_“\"‘(]*[a-z]")
+
+
+def _txt(it):
+    return it[1]["text"] if it[0] in ("p", "head", "note") else it[1]
+
+
+def _set_txt(md, i, t):
+    if md[i][0] in ("p", "head", "note"):
+        md[i][1]["text"] = t
+    else:
+        md[i] = (md[i][0], t, md[i][2])
+
+
+def _size_of(m):
+    return (m.get("style") or "").rsplit(" ", 1)[-1] or None
+
+
+def _notes_sections(md):
+    """Endnote sections: a "Notes" heading, then numbered entries, in groups under headings (a chapter's title or
+    "Chapter N") or right under it. An unnumbered paragraph goes on with the entry before it when it starts in
+    lowercase or keeps the entry's size. The section ends at a heading with no entry under it, at a bibliography,
+    index and the like, or at text that does not go on. A group counts when it starts at 1 and its numbers mostly
+    follow each other (page-keyed notes, "2 Take John ...", do not). -> [dict(head, groups=[dict(head, entries)])]"""
+    out, i = [], 0
+    while i < len(md):
+        it = md[i]
+        if not (it[0] == "head" and NOTES_HEAD.match(it[1]["text"].strip())):
+            i += 1
+            continue
+        sec, j, grp = dict(head=i, groups=[]), i + 1, None
+        while j < len(md):
+            kind, v, m = md[j]
+            t = _txt(md[j]).strip() if kind in ("p", "head", "note", "quote", "raw") else ""
+            if kind == "head":
+                nxt = next((k for k in range(j + 1, len(md)) if md[k][0] != "head"), None)
+                if NOTES_HEAD.match(t) or NOT_NOTES.search(t) or nxt is None or not NOTE_ENTRY.match(_txt(md[nxt]).strip()):
+                    break
+                grp = dict(head=j, entries=[])
+                sec["groups"].append(grp)
+            elif NOTE_ENTRY.match(t):
+                if grp is None:
+                    grp = dict(head=None, entries=[])
+                    sec["groups"].append(grp)
+                grp["entries"].append(dict(n=int(NOTE_ENTRY.match(t).group(1)), i=j, cont=[]))
+            elif t and grp and grp["entries"] and not t.startswith(("!", ":::", "|")) and (
+                    LOWER_START.match(t) or _size_of(m) == _size_of(md[grp["entries"][-1]["i"]][2])):
+                grp["entries"][-1]["cont"].append(j)
+            elif t.startswith("!"):
+                pass                                        # a figure or table placeholder inside the notes
+            else:
+                break
+            j += 1
+        for g in sec["groups"]:
+            # a number out of sequence that comes again later is a line of the note before ("17.541-50, / 18.158")
+            es = g["entries"]
+            for k in range(len(es) - 1, 0, -1):
+                if es[k]["n"] != es[k - 1]["n"] + 1 and any(e["n"] == es[k]["n"] for e in es[k + 1:]):
+                    es[k - 1]["cont"] += [es[k]["i"]] + es[k]["cont"]
+                    del es[k]
+            ns = [e["n"] for e in g["entries"]]
+            g["ok"] = bool(ns) and ns[0] == 1 and sum(b == a + 1 for a, b in zip(ns, ns[1:])) >= T["notes_seq_share"] * (len(ns) - 1)
+        if any(g["ok"] for g in sec["groups"]):
+            out.append(sec)
+        i = max(j, i + 1)
+    return out
+
+
+def _align(runs, groups):
+    """callout runs (numbering restarts) to note groups, in order, as many shared numbers as possible -> {run: group}"""
+    R, G = len(runs), len(groups)
+    best = [[0] * (G + 1) for _ in range(R + 1)]
+    for a in range(R - 1, -1, -1):
+        for g in range(G - 1, -1, -1):
+            best[a][g] = max(best[a + 1][g], best[a][g + 1],
+                             len({n for n in runs[a]} & groups[g]) + best[a + 1][g + 1])
+    pairs, a, g = {}, 0, 0
+    while a < R and g < G:
+        share = len({n for n in runs[a]} & groups[g])
+        if share and best[a][g] == share + best[a + 1][g + 1]:
+            pairs[a] = g
+            a, g = a + 1, g + 1
+        elif best[a][g] == best[a + 1][g]:
+            a += 1
+        else:
+            g += 1
+    return pairs
+
+
+def resolve_notes(md, stats):
+    """Callouts to their notes. Page-bottom footnotes match a callout on their page by number or sign. Endnotes:
+    callouts split into runs where the numbering starts again, the runs aligned with the note groups in order, then
+    matched by number. Every note gets a label unique in the book, [^b<group or chapter>-<n>]: the callout becomes
+    [^label] in the text, the note its own segment "[^label]: text" (the importer's reorder puts it after the first
+    paragraph citing it). A notes heading whose entries all found their callouts goes; one left with unmatched
+    entries stays. Unmatched callouts are written as the number and flagged "atif-eslesmedi", unmatched notes stay
+    as they were and are flagged "not-eslesmedi". Removed items are set to None."""
+    sections = _notes_sections(md)
+    in_notes = {k for s in sections for k in range(s["head"], max([s["head"]] + [e["i"] for g in s["groups"] for e in g["entries"]]
+                                                                     + [c for g in s["groups"] for e in g["entries"] for c in e["cont"]]) + 1)}
+    groups = [g for s in sections for g in s["groups"] if g["ok"]]
+    calls, chapter, chap_of = [], 0, {}             # calls: [item, nth callout in it, value]
+    for i, it in enumerate(md):
+        if it[0] == "head" and it[1]["lvl"] <= 2:
+            chapter += 1
+        chap_of[i] = chapter
+        if i in in_notes or it[0] == "note" or it[0] not in ("p", "head", "quote", "raw"):
+            continue
+        calls += [[i, k, v] for k, v in enumerate(REF.findall(_txt(it)))]
+    used, label_of = set(), {}                      # label_of: (item, nth) -> label
+
+    def unique(label, page):
+        if label in used:
+            label = f"{label}-{page}"
+        while label in used:
+            label += "x"
+        used.add(label)
+        return label
+    # page-bottom footnotes
+    feet = [i for i, it in enumerate(md) if it[0] == "note"]
+    foot_label = {}
+    for c in calls:
+        pages = md[c[0]][2]["pages"]
+        cand = [f for f in feet if md[f][1]["num"] == c[2] and md[f][1]["page"] in pages]
+        f = next((f for f in cand if f not in foot_label), cand[0] if cand else None)
+        if f is None:
+            continue
+        if f not in foot_label:
+            n = c[2] if c[2].isdigit() else "".join("abcde"[NOTE_SIGNS.index(ch)] for ch in c[2])
+            foot_label[f] = unique(f"b{max(1, chap_of[f])}-{n}", md[f][1]["page"])
+        label_of[(c[0], c[1])] = foot_label[f]
+    # endnotes
+    runs, prev = [], None
+    for c in calls:
+        if (c[0], c[1]) in label_of or not c[2].isdigit():
+            continue
+        n = int(c[2])
+        if prev is None or n <= prev:
+            runs.append([])
+        runs[-1].append(c)
+        prev = n
+    gsets = [{e["n"] for e in g["entries"]} for g in groups]
+    entry_label = {}
+    for a, g in _align([[int(c[2]) for c in r] for r in runs], gsets).items():
+        for c in runs[a]:
+            e = next((e for e in groups[g]["entries"] if e["n"] == int(c[2])), None)
+            if e is None:
+                continue
+            if e["i"] not in entry_label:
+                entry_label[e["i"]] = unique(f"b{g + 1}-{e['n']}", min(md[e["i"]][2]["pages"]))
+            label_of[(c[0], c[1])] = entry_label[e["i"]]
+    # write: callouts
+    ref_items = {c[0] for c in calls}
+    for i, it in enumerate(md):
+        if it is None or REF_OPEN not in _txt(it):
+            continue
+        k = iter(range(10 ** 6))
+
+        def sub(m, i=i, k=k):
+            label = label_of.get((i, next(k))) if i in ref_items else None
+            if label:
+                return f"[^{label}]"
+            if i in ref_items:
+                md[i][2]["flags"].add("atif-eslesmedi")
+            return m.group(1)
+        _set_txt(md, i, re.sub(r"[ \t]*" + REF.pattern, sub, _txt(it)))
+    # write: notes
+    for f in feet:
+        if f in foot_label:
+            md[f] = ("raw", f"[^{foot_label[f]}]: " + FOOT_START.sub("", md[f][1]["text"], count=1), md[f][2])
+        else:
+            md[f][2]["flags"].add("not-eslesmedi")
+    removed = 0
+    for s in sections:
+        whole = True
+        for g in s["groups"]:
+            done = g["ok"] and all(e["i"] in entry_label for e in g["entries"])
+            for e in g["entries"]:
+                if e["i"] not in entry_label:
+                    if g["ok"]:
+                        md[e["i"]][2]["flags"].add("not-eslesmedi")
+                    continue
+                body = [NOTE_ENTRY.sub("", _txt(md[e["i"]]).strip(), count=1)] + [_txt(md[c]).strip() for c in e["cont"]]
+                for c in e["cont"]:
+                    _meta_add(md[e["i"]][2], md[c][2])
+                    md[c] = None
+                md[e["i"]] = ("raw", f"[^{entry_label[e['i']]}]: " + " ".join(body), md[e["i"]][2])
+            if done and g["head"] is not None:
+                md[g["head"]] = None
+                removed += 1
+            whole &= done
+        if whole:
+            md[s["head"]] = None
+            removed += 1
+    matched_feet = len(foot_label)
+    stats["note_refs"] += len(calls)
+    stats["note_bodies"] += len(feet) + sum(len(g["entries"]) for g in groups)
+    stats["note_refs_matched"] += len(label_of)
+    stats["note_bodies_matched"] += matched_feet + len(entry_label)
+    stats["note_refs_unmatched"] += len(calls) - len(label_of)
+    stats["note_bodies_unmatched"] += len(feet) - matched_feet + sum(len(g["entries"]) for g in groups) - len(entry_label)
+    stats["notes_heads_removed"] += removed
+
+
+PAGE_REF = re.compile(r"\b(?:pp?\.|pages?)\s?(\d{1,4})(?:\s?[–—-]\s?(\d{1,4}))?\b(?!\s?(?:%|percent))")
+NUMBER_WORDS = "one|two|three|four|five|six|seven|eight|nine|ten|eleven|twelve|thirteen|fourteen|fifteen|sixteen|seventeen|eighteen|nineteen|twenty"
+CHAPTER_REF = re.compile(r"(?:\b(?:see|cf\.)\s+(?:also\s+)?(?:the\s+)?|\(\s*)chapters?\s+(\d{1,2}|[IVXL]{1,5}\b|(?:" + NUMBER_WORDS + r")\b)", re.I)
+AROUND_REF = re.compile(r"\b(?:see|discussed|described|mentioned|noted|shown|outlined|explained|cited|quoted|listed)\s+(?:\w+\s+)?(above|below)\b", re.I)
+# what makes a page number a citation of another work: a year, et al., ed./trans./vol., ibid., a title in italics or
+# quotes, "Name, p." right before
+CITATION = re.compile(r"\b(1[5-9]|20)\d\d[a-z]?\b|\bet al\b|\b(?i:eds?|trans|vol|vols|ibid|op\. cit|cit)\.|\*\w|_\w|“|"
+                      r"\b[A-Z][\w’'-]+,\s*$")
+# a sentence ends at . ! ? before a capital, not after an initial or one of these abbreviations
+SENTENCE_END = re.compile(r"(\w*)[.!?][”’\")]?\s+(?=[*_“\"‘(]*[A-Z])")
+NOT_NAMES = {"There", "Here", "This", "That", "These", "Those", "It", "See", "Above", "Below", "Earlier", "Later", "Again",
+             "Chapter", "Part", "Section", "Page"}
+ABBREV = {"p", "pp", "ed", "eds", "no", "cf", "ch", "vol", "vols", "esp", "rev", "cit", "ff", "ibid", "trans", "ms", "mr",
+          "mrs", "dr", "st", "vs", "e.g", "i.e"}
+
+
+def _citation(text, a, b):
+    """text[a:b] is a page or chapter number: is it another work's? Read the clause it stands in: inside an open
+    parenthesis, from it; else from the sentence start, at most 100 characters back; and on to the clause's end."""
+    before = text[max(0, a - 100):a]
+    if re.search(r"[,.]”\s*$|”,\s*$", before):
+        return True                                 # '“Title,” p. 4'
+    op = before.rfind("(")
+    if op >= 0 and ")" not in before[op:]:
+        # "(p. 42)" after a quotation, a quoted passage, a name ("Joly (p. 5)"), or in a sentence that quotes three
+        # words or more or names a year: the page of the quoted work
+        lead = before[:op]
+        ends = [m.end() for m in SENTENCE_END.finditer(lead)
+                if m.group(1).lower() not in ABBREV and not (len(m.group(1)) == 1 and m.group(1).isupper())]
+        lead = lead[ends[-1]:] if ends else lead
+        if not re.match(r"\s*(see|cf\.)", before[op + 1:], re.I) and (
+                re.search(r"[”\"’.!?)*_]\s*$", lead)
+                or re.search(r"\b[A-Z][\w’'-]+\s*$", lead) and lead.split()[-1] not in NOT_NAMES
+                or re.search(r"“[^”]*\s[^”]*\s[^”]*”|\b(1[5-9]|20)\d\d[a-z]?\b", lead)):
+            return True
+        before = before[op + 1:]
+    else:
+        ends = [m.end() for m in SENTENCE_END.finditer(before)
+                if m.group(1).lower() not in ABBREV and not (len(m.group(1)) == 1 and m.group(1).isupper())]
+        before = before[ends[-1]:] if ends else before
+    after = re.split(r"[).;!?]", text[b:b + 60], maxsplit=1)[0]
+    return bool(CITATION.search(before) or CITATION.search(after))
+
+
+def page_refs(md, stats):
+    """References to a page of this book ("see p. 42", "pp. 12–14", "see chapter 3", "discussed above"), not
+    citations of other works: the segment is flagged "sayfa-gonderme" with its targets in meta page_refs. Notes
+    sections are read too, bibliography and index sections are not. The text is left alone."""
+    skip_lvl = None
+    for it in md:
+        kind, v, m = it
+        if kind == "head":
+            if skip_lvl is not None and v["lvl"] <= skip_lvl:
+                skip_lvl = None
+            if NOT_NOTES.search(v["text"]) and not re.search(r"\bnotes?\b", v["text"], re.I):
+                skip_lvl = v["lvl"]
+            continue
+        if skip_lvl is not None or kind not in ("p", "quote", "raw") or _txt(it).startswith(("!", "|")):
+            continue
+        text, found = _txt(it), []
+        for rx, fmt in ((PAGE_REF, lambda g: "s." + g.group(1) + ("–" + g.group(2) if g.group(2) else "")),
+                        (CHAPTER_REF, lambda g: "bölüm " + g.group(1)),
+                        (AROUND_REF, lambda g: g.group(1).lower())):
+            for g in rx.finditer(text):
+                if not _citation(text, g.start(), g.end()):
+                    found.append(fmt(g))
+        if found:
+            m["flags"].add("sayfa-gonderme")
+            m["page_refs"] = list(dict.fromkeys(found))
+            stats["page_refs"] += 1
+
+
 def build_markdown(doc, first_idx, last_idx):
     """pages[first_idx..last_idx] (0-based, inclusive) -> markdown, stats. The source of every segment (pages, boxes,
     style, flags) is left in doc.seg_meta, one entry per blank-line-separated segment of the markdown."""
@@ -1862,6 +2253,8 @@ def build_markdown(doc, first_idx, last_idx):
     stats = collections.Counter()
     lex, amb = doc.hyphen_real, doc.hyphen_ambiguous
     pending = []                        # figures/tables met while a paragraph is still open: written after it
+    feet = []                           # footnotes met while a paragraph is still open: written after it
+    last_foot = None                    # the last footnote, which may go on overleaf
     index_done = False
 
     def captions(blocks):
@@ -1909,6 +2302,8 @@ def build_markdown(doc, first_idx, last_idx):
             cur = None
         while pending:
             write_item(pending.pop(0))
+        md.extend(feet)
+        feet.clear()
     doc.complex_table_pages = []
     doc.object_merge_log = []
     for p in doc.pages:
@@ -1922,6 +2317,17 @@ def build_markdown(doc, first_idx, last_idx):
             role, ls = b["role"], b["lines"]
             if role == "altyazı":
                 continue                                    # written with its figure or table
+            if role == "dipnot":                            # a paragraph running on overleaf stays open
+                for num, nl in b["foot"]:
+                    text = join_lines([l["md"].strip() for l in nl], lex, stats, amb)
+                    if num is None and last_foot:
+                        j = join_hyphen(last_foot[1]["text"], text, doc.hyphen_real, stats, mark="-", amb=amb)
+                        last_foot[1]["text"] = j if j is not None else last_foot[1]["text"] + " " + text
+                        _meta_add(last_foot[2], _meta_of(b))
+                    elif num is not None:
+                        last_foot = ("note", dict(page=p["p"], num=num, text=text), _meta_of(b))
+                        (feet if cur else md).append(last_foot)
+                continue
             if role == "dizin":
                 stats["index_words"] += b["nwords"]
                 if not index_done:
@@ -2026,15 +2432,21 @@ def build_markdown(doc, first_idx, last_idx):
         for it in items:
             place(it)
     flush()
+    resolve_notes(md, stats)
+    md = [it for it in md if it is not None]
+    page_refs(md, stats)
     out, meta = [], []
     for kind, v, m in md:
         text = (v["text"] if not v.get("box") else fenced("kutu", v["text"])) if kind == "p" else (
-            "#" * MD_LEVEL[v["lvl"]] + " " + v["text"] if kind == "head" else "> " + v if kind == "quote" else v)
+            "#" * MD_LEVEL[v["lvl"]] + " " + v["text"] if kind == "head" else "> " + v if kind == "quote" else
+            v["text"] if kind == "note" else v)
         if not text.strip():
             continue
         out.append(text)
         meta.append(dict(pages=sorted(m["pages"]), boxes=m["boxes"], style=m["style"], flags=sorted(m["flags"]),
                          role=m.get("role"), conf=m.get("conf")))
+        if m.get("page_refs"):
+            meta[-1]["page_refs"] = m["page_refs"]
     doc.seg_meta = meta
     return "\n\n".join(out) + "\n", stats
 
@@ -2140,6 +2552,18 @@ def _analyse(pdf_bytes, first_page=None, last_page=None):
     if stats["style_flags"]:
         warnings.append(f"{stats['style_flags']} blok gövdeden farklı stilde ama hiçbir başlığa ya da görsel/tabloya "
                         "bağlanamadı; \"stil-farkli\" olarak gözden geçirmeye işaretlendi.")
+    if stats["note_refs"] or stats["note_bodies"]:
+        w = (f"Notlar: {stats['note_refs']} atıf, {stats['note_bodies']} not gövdesi; {stats['note_refs_matched']} atıf "
+             f"{stats['note_bodies_matched']} nota bağlandı, notlar ilk atıf yapan paragrafın ardına taşındı.")
+        if stats["note_refs_unmatched"] or stats["note_bodies_unmatched"]:
+            w += (f" Eşleşmeyen: {stats['note_refs_unmatched']} atıf (\"atif-eslesmedi\"), "
+                  f"{stats['note_bodies_unmatched']} not gövdesi (\"not-eslesmedi\").")
+        if stats["notes_heads_removed"]:
+            w += f" Boşalan {stats['notes_heads_removed']} not başlığı kaldırıldı."
+        warnings.append(w)
+    if stats["page_refs"]:
+        warnings.append(f"{stats['page_refs']} paragrafta kitap içi sayfa göndermesi var (\"sayfa-gonderme\"): Türkçe "
+                        "baskıda sayfa numaraları değişecek.")
     if rotated >= T["rotated_warn"]:
         warnings.append(f"Eğik ya da dikey yazılmış {rotated} karakter (filigran, kenar yazısı) metne alınmadı.")
     skipped = [p["p"] for p in d.pages[first - 1:last] if p["cover"]]

@@ -92,6 +92,26 @@ check("review copy: inline italics and footnote refs as runs", any(r_.italic and
       and any(r_.font.superscript and r_.text == "1" for r_ in t.cell(2, 1).paragraphs[0].runs))
 check("review copy: placeholders as text, untranslated marked", t.cell(3, 0).text == "[Görsel · s.4]" and t.cell(4, 1).text.startswith("[UNTRANSLATED]"))
 
+# ---------------------------------------------------------------- in-book page references as Word comments; note labels
+NOTE = "Sayfa göndermesi: Türkçe baskıda sayfa numarası değişecek."
+rows = [{"src": "As shown on p. 42, the end.[^b2-13]", "tgt": "s. 42'de gösterildiği gibi son.[^b2-13]", "comment": NOTE},
+        {"src": "No reference here.", "tgt": "Burada gönderme yok."}]
+r = c.post("/export_docx", json={"mode": "redaksiyon", "name": "r", "rows": rows})
+d = docx.Document(io.BytesIO(r.data))
+t = d.tables[0]
+comments = list(d.comments) if hasattr(d, "comments") else []
+check("review copy: a page reference is one Word comment on its source cell", r.status_code == 200 and len(comments) == 1
+      and comments[0].text == NOTE and comments[0].author == "Palimpsest", [(x.author, x.text) for x in comments])
+check("review copy: a book-unique note label is written as its number", any(r_.font.superscript and r_.text == "13" for r_ in t.cell(1, 1).paragraphs[0].runs))
+md = ('Birinci paragraf.\n\n[%s]{.comment-start id="0" author="Palimpsest"}s. 42\'de gösterildiği gibi.'
+      '[]{.comment-end id="0"}\n\nÜçüncü.' % NOTE)
+r = c.post("/export_docx", json={"mode": "word", "name": "w", "markdown": md})
+z = zipfile.ZipFile(io.BytesIO(r.data))
+xml = z.read("word/comments.xml").decode("utf-8") if "word/comments.xml" in z.namelist() else ""
+body = z.read("word/document.xml").decode("utf-8")
+check("Word: the comment span becomes a Word comment, the text stays", NOTE in xml and "Palimpsest" in xml
+      and "gösterildiği gibi" in body and "comment-start" not in body, xml[:200])
+
 # ---------------------------------------------------------------- Word: named blocks get their own styles
 md = "\n\n".join([
     "# Bölüm",

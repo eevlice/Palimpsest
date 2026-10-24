@@ -497,7 +497,8 @@ def _runs(par, text):
         elif s.startswith("*") and len(s) > 1:
             r = par.add_run(s[1:-1]); r.italic = True
         elif s.startswith("[^"):
-            r = par.add_run(re.sub(r"\D*(\d+)$", r"\1", s[2:-1])); r.font.superscript = True
+            num = re.search(r"\d+$", s[2:-1])         # "[^b2-13]" -> 13
+            r = par.add_run(num.group(0) if num else s[2:-1]); r.font.superscript = True
         else:
             par.add_run(s)
 
@@ -533,7 +534,8 @@ def _cell(cell, seg):
 
 
 def redaction_docx(rows, ref):
-    """the review copy: one two-column table, source | translation, one row per segment, on the reference styles"""
+    """the review copy: one two-column table, source | translation, one row per segment, on the reference styles. A
+    row's "comment" (an in-book page reference) becomes a Word comment on its source cell."""
     import docx
     d = docx.Document(ref)
     body = d.element.body
@@ -549,6 +551,9 @@ def redaction_docx(rows, ref):
         cells = table.add_row().cells
         _cell(cells[0], r.get("src", ""))
         _cell(cells[1], r.get("tgt", ""))
+        runs = cells[0].paragraphs[0].runs
+        if r.get("comment") and runs:
+            d.add_comment(runs, text=r["comment"], author="Palimpsest", initials="P")
     out = io.BytesIO()
     d.save(out)
     return out.getvalue()
@@ -558,7 +563,7 @@ def redaction_docx(rows, ref):
 def export_docx():
     """Word export. mode "word": the translation through Pandoc with reference.docx (Heading 1-3, Body Text, First
     Paragraph, Caption, Epigraph, Block Text, Verse, Attribution, Box; tables as Word tables, footnotes as Word
-    footnotes). mode "redaksiyon": a two-column review
+    footnotes, Pandoc comment spans as Word comments). mode "redaksiyon": a two-column review
     table. The markdown and the rows come from the page (the same exportText the Markdown export uses)."""
     d = request.get_json() or {}
     ref = os.path.join(HERE, "reference.docx")

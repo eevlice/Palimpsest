@@ -242,6 +242,7 @@
   .sp-hl{position:absolute;background:rgba(160,65,45,.16);outline:1px solid rgba(160,65,45,.45);pointer-events:none;}
   .sp-num{font-family:'Spline Sans Mono',monospace;font-size:10px;color:var(--ink-soft);margin-top:4px;}
   .sp-missing{font-family:'Spline Sans Mono',monospace;font-size:11px;color:var(--ink-soft);padding:20px 0;}
+  .pref-flag{display:inline-block;margin-left:8px;color:var(--pencil);vertical-align:middle;line-height:0;cursor:default;}
   .dev-flag{display:inline-block;width:7px;height:7px;margin-left:8px;padding:0;border:1.2px solid var(--pencil);border-radius:50%;
     background:none;cursor:pointer;vertical-align:middle;}
   .review-warn a.pg-link{color:inherit;text-decoration:underline;text-underline-offset:2px;cursor:pointer;}
@@ -771,6 +772,7 @@ const effortTitle=(v)=>'Düşünme eforu · '+EFFORT_HINT[v||'off'];
 
 // --- inline SVG icons (stroke uses currentColor so they theme correctly) ---
 const ICON={
+  pageref:'<svg viewBox="0 0 24 24" width="11" height="11" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M6 2h8l4 4v16H6z"/><path d="M9 13h6M12 10v6"/></svg>',
   source:'<svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h5"/><path d="M14 2v6h6"/><circle cx="16.5" cy="16.5" r="3"/><path d="m21 21-2.2-2.2"/></svg>',
   check:'<svg viewBox="0 0 24 24" width="15" height="15" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round"><polyline points="20 6 9 17 4 12"/></svg>',
   rerun:'<svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><polyline points="23 4 23 10 17 10"/><path d="M20.49 15a9 9 0 1 1-2.12-9.36L23 10"/></svg>',
@@ -994,22 +996,25 @@ function deleteProject(p){
 // Markers come off on the way to the model and out of the translation box;
 // they go back on here, taken from the source. A final that already starts
 // with its marker (projects translated before segment types) is left alone.
-function exportText(segments,finals){
+function exportText(segments,finals,each){
   return segments.map((s,i)=>{
-    const f=finals[i];
-    const t=segType(s);
-    if(t.type==='image') return s;                 // a placeholder is never translated
-    if(f===null){
-      const m=segMarkerLen(s);
-      return s.slice(0,m)+(t.type==='table'?'':'[UNTRANSLATED] ')+s.slice(m);
-    }
-    if(f===''||f===undefined) return f;
-    if(t.type==='heading'&&!SEG_H.test(f)) return '#'.repeat(t.level)+' '+f;
-    if(t.type==='footnote'&&!SEG_F.test(f)) return '[^'+t.label+']: '+f;
-    if(t.type in FENCE_STYLE_OF&&!SEG_FENCE.test(f)) return wrapSeg(f,t.type);
-    if(t.type==='blockquote'&&!SEG_BQ.test(f)) return wrapSeg(f,t.type);
-    return f;
+    const out=exportSeg(s,finals[i]);
+    return each&&out?each(out,i):out;
   }).join('\n\n');
+}
+function exportSeg(s,f){
+  const t=segType(s);
+  if(t.type==='image') return s;                 // a placeholder is never translated
+  if(f===null){
+    const m=segMarkerLen(s);
+    return s.slice(0,m)+(t.type==='table'?'':'[UNTRANSLATED] ')+s.slice(m);
+  }
+  if(f===''||f===undefined) return f;
+  if(t.type==='heading'&&!SEG_H.test(f)) return '#'.repeat(t.level)+' '+f;
+  if(t.type==='footnote'&&!SEG_F.test(f)) return '[^'+t.label+']: '+f;
+  if(t.type in FENCE_STYLE_OF&&!SEG_FENCE.test(f)) return wrapSeg(f,t.type);
+  if(t.type==='blockquote'&&!SEG_BQ.test(f)) return wrapSeg(f,t.type);
+  return f;
 }
 function exportProject(pid){
   fetch('/project/'+encodeURIComponent(pid)).then(r=>r.json()).then(d=>{
@@ -1507,6 +1512,17 @@ window.closeTableEditor=()=>{ const ed=$('tab-editor'); if(ed.classList.contains
 // ================================================================
 function hasSource(i){ const m=P&&Array.isArray(P.segMeta)?P.segMeta[i]:null; return !!(m&&Array.isArray(m.pages)&&m.pages.length); }
 function srcBtn(i){ return hasSource(i)?`<button class="seg-btn icon src-btn" onclick="openSource(${i})" title="Kaynak sayfayı göster">${ICON.source}</button>`:''; }
+// an in-book page reference ("see p. 42"): marked in the gutter, a Word comment in both exports
+const PAGE_REF_NOTE='Sayfa göndermesi: Türkçe baskıda sayfa numarası değişecek.';
+function hasPageRef(i){ const m=P&&Array.isArray(P.segMeta)?P.segMeta[i]:null; return !!(m&&(m.flags||[]).includes('sayfa-gonderme')); }
+function pageRefFlag(i){ return hasPageRef(i)?`<span class="pref-flag" title="${PAGE_REF_NOTE}" aria-label="${PAGE_REF_NOTE}">${ICON.pageref}</span>`:''; }
+// Pandoc reads [note]{.comment-start ...}text[]{.comment-end ...} as a Word comment; the marker and a fence's closing
+// line stay outside it
+function docxComment(out,id){
+  const a=segMarkerLen(out); let z=out.length-segTailLen(out);
+  while(z>a&&out[z-1]==='\n') z--;
+  return out.slice(0,a)+`[${PAGE_REF_NOTE}]{.comment-start id="${id}" author="Palimpsest"}`+out.slice(a,z)+`[]{.comment-end id="${id}"}`+out.slice(z);
+}
 function devFlag(i){
   const m=P&&Array.isArray(P.segMeta)?P.segMeta[i]:null;
   if(!m||!(m.flags||[]).includes('stil-farkli')) return '';
@@ -2456,7 +2472,7 @@ function renderWindow(){
       }
       mergeCtl=`<div class="merge-join">${inner}</div>`;
     }
-    div.innerHTML=`<div class="seg-num">${gutter}${devFlag(i)}</div>
+    div.innerHTML=`<div class="seg-num">${gutter}${devFlag(i)}${pageRefFlag(i)}</div>
       <div class="src">${ty.type==='table'?`<div class="tab-box">${tableHTML(P.segments[i])}</div>`:renderSource(i)}${quoteNote}</div><div class="tgt-area">${right}</div><div class="seg-warn" id="warn-${i}"></div>${mergeCtl}`;
     c.appendChild(div);
     if(P.finals[i]!==null){
@@ -2692,8 +2708,11 @@ async function exportAs(mode){
   if(mode==='md') return exportMarkdown();
   const base=P.name.replace(/[^a-z0-9]+/gi,'_')+'.'+P.target_lang.toLowerCase()+(mode==='redaksiyon'?'.redaksiyon':'');
   const body=mode==='redaksiyon'
-    ?{mode, name:base, rows:P.segments.map((s,i)=>({src:s, tgt:exportText([s],[P.finals[i]])}))}
-    :{mode:'word', name:base, markdown:exportText(P.segments,P.finals)};
+    ?{mode, name:base, rows:P.segments.map((s,i)=>Object.assign({src:s, tgt:exportText([s],[P.finals[i]])},hasPageRef(i)?{comment:PAGE_REF_NOTE}:{}))}
+    :{mode:'word', name:base, markdown:exportText(P.segments,P.finals,(out,i)=>{
+        const t=segType(out).type;
+        return hasPageRef(i)&&t!=='image'&&t!=='table'?docxComment(out,i):out;
+      })};
   $('export-meta').textContent='· Word hazırlanıyor…';
   try{
     const res=await fetch('/export_docx',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(body)});

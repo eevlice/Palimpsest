@@ -11,13 +11,13 @@ Each stage is a section of `pdf_import.py`; its input and output are written at 
 | # | Stage | In | Out |
 |---|---|---|---|
 | 1 | Reading (`_page_chars`, `_dedupe`, `_tint_boxes`, `_page_graphics`) | a pdfium page | `Ch` glyph records (top-left origin, effective size, advance box, italic/bold, turned), tinted boxes, images, rules, scan signals |
-| 2 | Lines (`build_lines`, `line_tokens`, `inline_md`, `_prepare_line`) | glyphs of a page | lines: rows by baseline, split at jumps; word spaces inferred; `md`, `plain`, style mix |
+| 2 | Lines (`build_lines`, `line_tokens`, `inline_md`, `_mark_refs`, `_prepare_line`) | glyphs of a page | lines: rows by baseline, split at jumps; word spaces inferred; note callouts marked; `md`, `plain`, `refs`, style mix |
 | 3 | Blocks (`build_blocks`) | lines, boxes, images, rules | page dict: blocks (paragraph breaks by gap, indent, list item, style change unless inline), two-column order, figures and ruled tables cut out as items |
 | 4 | Margins (`_Margins`) | all pages | `sil` on running heads/feet, folios, slugs, watermarks; the text block (`text_top`/`text_bot`); covers; tiny tinted panels stop being boxes |
 | 5 | Objects (`find_grids`, `grid_markdown`, `_Objects`) | rules, glyphs; items and roles | tables as markdown or a placeholder; blocks above/inside/below a figure or table become its captions (`altyazı`) |
-| 6 | Roles (`_Styles`, `_Roles`, `_ShapeRoles`) | blocks with margins marked | style statistics → heading tiers, body, lists, boxes, front matter, index; shape → epigraph, block quote, verse, attribution; reasons in `flags`, a confidence in `conf` |
+| 6 | Roles (`_Styles`, `_Roles`, `_ShapeRoles`, `_Notes`) | blocks with margins marked | style statistics → heading tiers, body, lists, boxes, front matter, index; shape → epigraph, block quote, verse, attribution; reasons in `flags`, a confidence in `conf`; page-bottom footnotes (`dipnot`) |
 | 7 | Merges (`_Merges`, `join_hyphen`, `join_lines`) | lines of the book; texts to join | hyphen lexicon; joins inside blocks, across page breaks, around objects; a hyphen kept only when the book writes the compound |
-| 8 | Writing (`build_markdown`, `_analyse`) | `Doc`, the page range | markdown, warnings (Turkish), `seg_meta` (one entry per segment) |
+| 8 | Writing (`build_markdown`, `resolve_notes`, `page_refs`, `_analyse`) | `Doc`, the page range | markdown, warnings (Turkish), `seg_meta` (one entry per segment); callouts matched to notes; in-book page references flagged |
 
 Stages 4–7 run over the whole book in `Doc.__init__`. One step runs out of order: margin lines that repeat a
 heading (stage 4) need the heading roles of stage 6 first. The whole document is always analysed; only the
@@ -40,6 +40,7 @@ requested pages are written.
 | `atıf` | `::: {custom-style="Attribution"}` | attribution |
 | `altyazı` | `::: {custom-style="Caption"}` around its figure/table | caption |
 | `dizin` | one placeholder `![Dizin · s.a–b](…)` | image |
+| `dipnot` | `[^label]: text`, its own segment (see Notes) | footnote |
 | `ön sayfa`, `sil` | left out (counted in the warnings) | — |
 
 Figures become `![Görsel · s.N](…)`, tables a markdown table or `![Tablo · s.N](…)` when cells are merged.
@@ -47,6 +48,32 @@ Named roles carry a confidence in `seg_meta` (0.5 style only, 0.6–0.7 shape, 0
 these are fixed values in `_shape_roles`, not thresholds. A deviation no rule names keeps the review flag
 `stil-farkli` together with its reasons (`indent`, `indent-right`, `narrow`, `centered`, `right`, `ragged`,
 `italic-block`, `smaller`, `font`, `hanging`).
+
+## Notes and page references
+
+- **Callouts** (stage 2): digits or a note sign (`*†‡§¶`) set smaller and raised, right after a lowercase letter or
+  closing punctuation. After a digit they are an exponent, after a capital a formula or name (B12): not callouts.
+  A row of callouts standing past a line's end, or several callouts on one baseline, fold into their own lines.
+  In the line's `md` a callout sits between two private-use characters until stage 8 resolves it; `plain` keeps
+  its digits, as the block rules always read them.
+- **Page-bottom footnotes** (`_Notes`, stage 6d): below everything set at body size, smaller, starting with a number
+  a callout on the same page carries. Small lines at the foot of the next page before any number go on with the
+  last note when it ended mid-sentence.
+- **Endnotes** (`resolve_notes`, stage 8): a "Notes" heading, numbered entries in groups under headings (a chapter's
+  title, "Chapter N") or directly under it. A group counts when it starts at 1 and mostly runs 1, 2, 3…; page-keyed
+  notes (John Reveal) and unnumbered source lists (NEI) are not notes. Bibliography, references, index and the like
+  end a notes section and are never notes. Callouts are split into runs where the numbering starts again and the
+  runs are aligned with the groups in order (most shared numbers), then matched by number.
+- **Output**: every note gets a label unique in the book, `[^b<group or chapter>-<n>]`; the callout becomes
+  `[^label]`, the note its own `[^label]: text` segment, which the import's `reorder_footnotes` puts after the
+  first paragraph citing it. A notes heading whose entries were all matched goes. Unmatched callouts are written as
+  their number and flagged `atif-eslesmedi`; unmatched notes stay as they were, flagged `not-eslesmedi`. The
+  warning gives the counts.
+- **Page references** (`page_refs`, stage 8): "see p. 42", "pp. 12–14", "page 42", "(p. 42)", "see chapter 3",
+  "discussed above/below", when no citation cue stands in the clause (a year, et al., ed./trans./vol., ibid., a
+  title in italics or quotes, a name before the page, a three-word quotation before "(p. N)"). Bibliography and
+  index sections are skipped. The segment is flagged `sayfa-gonderme` with its targets in `seg_meta.page_refs`;
+  the text is untouched. The app marks it in the gutter and both Word exports carry a comment.
 
 ## Thresholds
 
@@ -264,6 +291,12 @@ first version of the importer; later rounds are the karne rounds, with the test 
 | `stray_tokens` | 6 | ...or up to this many one-letter tokens | round 1 |
 | `head_wrap_em` | 2.6 | a heading continues on the next line within this many sizes | round 1 |
 | `rotated_warn` | 20 | warn about turned text from this many glyphs | round 1 |
+| `ref_size` | 0.85 | a note callout is set at most this share of the line's size | gaps 1, Far Calls (0.5) |
+| `ref_raise` | 0.15 | ...with its baseline raised by more than this share of the size | gaps 1, Attachment |
+| `ref_max_chars` | 3 | ...and at most this many digits or signs | gaps 1 |
+| `ref_gap_em` | 0.5 | a callout row past a line's end starts within this many sizes of it | gaps 1, Far Calls |
+| `foot_size` | 0.92 | a page-bottom footnote is set at most this share of the body size | gaps 1 |
+| `notes_seq_share` | 0.7 | a notes group counts when this share of its entries follow 1, 2, 3... | gaps 1 |
 
 ## Known limits
 
@@ -278,6 +311,8 @@ first version of the importer; later rounds are the karne rounds, with the test 
 - Tables are recognised only when ruled; borderless tables stay text (an appendix list in Characters becomes
   short paragraphs and stray headings).
 - The index is looked for in the last quarter of the book only.
+- Notes keyed by page and phrase ("2 Take John and Grace: …"), with no callouts in the text, are left as they
+  are. Page-bottom footnotes were tested only on synthetic pages (no tuning book has them).
 - Unreachable-in-practice branches are kept as safety nets: a control-character glyph, an empty ruled grid, a
   book without styles (`_suggest`), no measurable text block (falls back to page bands), an unknown role in
   `build_markdown` (written as plain text), password-protected or empty PDFs.
