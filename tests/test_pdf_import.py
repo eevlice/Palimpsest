@@ -754,5 +754,151 @@ heads = [l for l in md.split("\n") if l.startswith("#")]
 check("title page and the half title repeating it are not headings; the part opener is", not any("Synthetic Title" in h for h in heads)
       and any("PART ONE" in h for h in heads), heads[:4])
 
+# ================================================================ import round 6
+def runs_line(parts, x, base, idx0, size=11):
+    """one line made of style runs: [(text, font)]; italic/bold follow the font name"""
+    out, cx = [], x
+    for text, font in parts:
+        out += line(text, cx, base, font, size, idx0=idx0 + len(out), italic="Italic" in font, bold="Bold" in font,
+                    weight=700 if "Bold" in font else 400)
+        cx += len(text) * 0.5 * size
+    return out
+
+
+def page_runs(p, rows):
+    """rows: [(parts, x, base)] or [(parts, x, base, size)] -> built page"""
+    chars = []
+    for r in rows:
+        chars += runs_line(r[0], r[1], r[2], len(chars), *r[3:])
+    return P.build_blocks(p, W, H, chars, [])
+
+
+def full(text, n=66):
+    """pad a line to n characters: a line that runs to the right edge"""
+    return text + " " + "x" * (n - len(text) - 1) if len(text) < n - 1 else text
+
+
+B = "Body-Regular"
+FULL = "ordinary words of running prose fill this whole line up to here"            # 64 chars: a full line
+
+
+def prose(p, top, n, x=100):
+    return [([("Body %d of page %d: %s" % (k, p, FULL[:48]), B)], x, top + 14 * k) for k in range(n)]
+
+
+# -- 1. an inline run that takes most of a line stays in its paragraph; a heading needs a block that ended
+def inline_page(p):
+    rows = prose(p, 120, 4)
+    rows.append(([("Yet another line opens a sentence and it names the scholar, author of", B)], 100, 176))   # full, open
+    rows.append(([("A Long Book Title Set In Italics Across Most Of The", "Title-Italic"), (" Line, who then", B)], 100, 190))
+    rows.append(([("goes on writing here until the sentence finally comes to an end.", B)], 100, 204))
+    rows.append(([("Bold Lead Heading Running Almost To The Right Edge Of The Text", "Head-Bold")], 100, 232))  # near right
+    rows += prose(p, 250, 3)
+    return page_runs(p, rows)
+d = P.Doc([inline_page(p) for p in range(1, 9)])
+md, st = P.build_markdown(d, 0, 7)
+segs = [s for s in md.split("\n\n") if s.strip()]
+k = next(i for i, s in enumerate(segs) if "Long Book Title" in s)
+check("a line set mostly in another style stays in its paragraph (no block split, no heading)",
+      not segs[k].startswith("#") and "author of *A Long Book Title" in segs[k] and "sentence finally comes" in segs[k], segs[k][:160])
+check("a bold line after a finished paragraph is still its own block", any(s.startswith("#") and "Bold Lead Heading" in s for s in segs)
+      or any(s.startswith("**Bold Lead Heading") for s in segs), [s[:60] for s in segs if "Bold Lead" in s])
+
+# a paragraph dominated by runs in a heading style (long italic titles) is still a paragraph
+def titles_page(p):
+    rows = prose(p, 120, 3)
+    rows.append(([("Sub Head %d" % p, "Sub-Italic")], 100, 176))
+    rows += prose(p, 194, 2)
+    if p == 4:
+        rows += [([("His Books Include A Very Long Title Indeed", "Sub-Italic"), (" and also the", B)], 100, 250 + 14 * k)
+                 for k in range(4)] + [([("Another Long Title.", "Sub-Italic")], 100, 306)]
+    return page_runs(p, rows)
+d = P.Doc([titles_page(p) for p in range(1, 13)])
+md, st = P.build_markdown(d, 0, 11)
+check("a long paragraph in a heading style's runs is no heading", any(l.startswith("#") and "Sub Head 2" in l for l in md.split("\n"))
+      and not any(l.startswith("#") and "His Books" in l for l in md.split("\n")), [l[:50] for l in md.split("\n") if "His Books" in l][:1])
+
+# a heading-styled block of body size right under an open sentence, no space above, lowercase: the paragraph going on
+def cont_page(p):
+    rows = prose(p, 120, 3)
+    rows.append(([("Here the line leaves its sentence open and runs to the right", B)], 100, 162))
+    rows.append(([("continues in", "Odd-Bold")], 100, 176))
+    rows.append(([("the next block until it ends here.", B)], 100, 190))
+    rows += [([("SECTION %d" % k, "Odd-Bold")], 100, 230 + 60 * k) for k in range(1)] + prose(p, 250, 3)
+    return page_runs(p, rows)
+d = P.Doc([cont_page(p) for p in range(1, 9)])
+md, st = P.build_markdown(d, 0, 7)
+check("no heading may start in lowercase right after an open sentence", not any(l.startswith("#") and "continues in" in l for l in md.split("\n")),
+      [l for l in md.split("\n") if "continues in" in l])
+
+d.lex = {"half-moon"}
+check("a line-end hyphen before a compound is real when the book writes its first part with a hyphen",
+      d.hyphen_real("half", "moon-shaped") and not d.hyphen_real("hal", "fmoon-shaped"))
+
+# -- 2. list items with a bold lead-in and a hanging indent are one segment each; bullets too
+def list_page(p):
+    rows = prose(p, 120, 2)
+    rows.append(([("Two kinds:", B)], 100, 148))
+    rows.append(([("1. Bold Lead-In Words Here In A Bold Face, Set Long.", "Lead-Bold"), (" Then text goes", B)], 100, 166))
+    rows.append(([("continues on the next line with a hanging indent to the end.", B)], 112, 180))
+    rows.append(([("2. Another Lead-In.", "Lead-Bold"), (" Short item text that runs on to the very end of it", B)], 100, 194))
+    rows.append(([("right edge and then ends.", B)], 112, 208))
+    rows.append(([("• Bulleted Lead.", "Lead-Bold"), (" A bulleted item whose text runs to the far right side of", B)], 100, 222))
+    rows.append(([("end of the line and wraps under itself.", B)], 112, 236))
+    rows.append(([("• Second bullet.", B)], 100, 250))
+    rows += prose(p, 280, 3)
+    return page_runs(p, rows)
+d = P.Doc([list_page(p) for p in range(1, 9)])
+md, st = P.build_markdown(d, 0, 7)
+segs = [s for s in md.split("\n\n") if s.strip()]
+one = [s for s in segs if "Bold Lead-In Words" in s]
+check("a numbered item with a bold lead-in is one segment with its continuation", len(one) == 8 and all("hanging indent to the end" in s
+      and not s.startswith("#") for s in one), one[:1])
+check("the next number starts the next item", all(any(s.startswith("2.") and "then ends" in s for s in segs) for _ in [0]), [s[:50] for s in segs if "Another Lead" in s][:1])
+bul = [s for s in segs if "Bulleted Lead" in s]
+check("a bulleted item is one segment with its wrapped line, the next bullet is another", len(bul) == 8 and all("wraps under itself" in s
+      and "Second bullet" not in s for s in bul), bul[:1])
+
+# -- 3. running heads that carry the page number go even when their text changes per section; a margin line that
+# repeats a heading goes too; both are counted in the warnings
+def head_page(p):
+    sec = "Alpha Part" if p <= 4 else "Beta Part"
+    rows = [([(f"{sec} {p + 10}" if p % 2 else f"{p + 10} The Book Title", "Run-Regular")], 100, 60, 9)]
+    heads = {1: "Gamma Section", 3: "Delta Section", 5: "Gamma Section", 6: "Epsilon Section", 8: "Zeta Section"}
+    if p in heads:                                                                     # a heading style of the book
+        rows.append(([(heads[p], "Head-Bold")], 100, 104, 16))
+    rows += prose(p, 130, 12)
+    if p in (2, 3):
+        rows.append(([("Gamma Section", "Run-Regular")], 100, 700, 9))                  # foot repeating the heading
+    return page_runs(p, rows)
+d = P.Doc([head_page(p) for p in range(1, 9)])
+md, st = P.build_markdown(d, 0, 7)
+check("running heads with the page number go although their text changes", "Alpha Part" not in md and "Beta Part" not in md
+      and "Book Title" not in md, [l for l in md.split("\n") if "Part" in l or "Title" in l][:3])
+check("a foot repeating a heading goes, the heading stays", md.count("Gamma Section") == 2
+      and sum(1 for l in md.split("\n") if l.startswith("#") and "Gamma" in l) == 2, md.count("Gamma Section"))
+check("the removals are counted for the warnings", sum(p["running_removed"] for p in d.pages) == 10, [p["running_removed"] for p in d.pages])
+check("a note ending in a number has a running head's shape", P.FOLIO.match("See Abel, 23") is not None)   # the page offset decides
+def note_page(p):
+    names = ["Abel", "Brook", "Crane", "Drake", "Ebert", "Frost", "Grant", "Hurst"]
+    rows = prose(p, 130, 12) + [([("See %s, %d" % (names[p - 1], p * 7 + 3), "Note-Regular")], 100, 690, 9)]
+    return page_runs(p, rows)
+d = P.Doc([note_page(p) for p in range(1, 9)])
+notes = [l for p in d.pages for b in p["blocks"] for l in b["lines"] if l["plain"].startswith("See ")]
+check("...its number does not follow the pages, so it is no running head", len(notes) == 8 and not any(l["sil"] for l in notes)
+      and sum(p["running_removed"] for p in d.pages) == 0, [l["sil"] for l in notes])
+
+# -- 4. a set-apart block in the margin band or a bare folio goes (counted); elsewhere it stays, flagged
+def flag_page(p):
+    rows = prose(p, 130, 12)
+    if p == 3:
+        rows.append(([("Odd margin note text", "Odd-Regular")], 100, 40))
+        rows.append(([("An odd set-apart remark between paragraphs.", "Odd-Regular")], 100, 330))
+    return page_runs(p, rows)
+d = P.Doc([flag_page(p) for p in range(1, 9)])
+md, st = P.build_markdown(d, 0, 7)
+check("a set-apart block in the margin band goes and is counted", "Odd margin note" not in md and st["flag_removed"] == 1, st["flag_removed"])
+check("a set-apart block in the text stays, flagged for review", "odd set-apart remark" in md and st["style_flags"] == 1, st["style_flags"])
+
 print("FAILED %d" % failed if failed else "ALL PASS")
 sys.exit(1 if failed else 0)
