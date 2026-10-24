@@ -36,11 +36,11 @@ const code = [
   ...['foldCase', 'segType', 'segMarkerLen', 'segTailLen', 'fnNumber', 'typeOf', 'refLabels', 'maskRefs',
       'inlineParse', 'isWordChar', 'findSpans', 'parseTerms', 'glossHitsForText',
       'searchSpans', 'renderSource', 'refMismatch', 'neighborText', 'canMerge', 'exportText',
-      'normalizeProject', 'isDone', 'mergeMeta', 'projectForSave', 'headingTitle', 'computeSections', 'sectionStats', 'segState', 'padWidth', 'railLabel',
+      'normalizeProject', 'isDone', 'mergeMeta', 'projectForSave', 'splitRow', 'parseMdTable', 'cellEsc', 'buildMdTable', 'emptyLike', 'tableShapeOf', 'tableMismatch', 'gridFits', 'mdInline', 'tableHTML', 'hasSource', 'srcBtn', 'devFlag', 'firstSegForPage', 'linkifyPages', 'autoTermsFilter', 'headingTitle', 'computeSections', 'sectionStats', 'segState', 'padWidth', 'railLabel',
       'windowStartFor', 'windowLabel', 'goToWindow', 'railGoto', 'pageEarlier', 'pageLater', 'jumpToLastTranslated', 'lastTranslatedIndex',
-      'roman', 'headingDepths', 'railModel', 'flowCells', 'railWhere', 'railCellClass', 'railOpen', 'applyRailOpen', 'setRailOpen'].map(fn), block('window.mergeDown='), block('window.undoMerge='),
+      'roman', 'headingDepths', 'railModel', 'flowCells', 'railWhere', 'railCellClass', 'railOpen', 'applyRailOpen', 'setRailOpen'].map(fn), block('const ICON='), block('window.mergeDown='), block('window.undoMerge='),
   'return {segType,inlineParse,findSpans,renderSource,refMismatch,neighborText,canMerge,exportText,normalizeProject,' +
-  'headingTitle,computeSections,sectionStats,isDone,mergeMeta,projectForSave,mergeDown:(i)=>window.mergeDown(i),undoMerge:()=>window.undoMerge(),getP:()=>P,segState,railLabel,roman,headingDepths,railModel,flowCells,railWhere,railCellClass,railOpen,applyRailOpen,setRailOpen,RAIL_PER_ROW,' +
+  'headingTitle,computeSections,sectionStats,isDone,mergeMeta,projectForSave,parseMdTable,buildMdTable,emptyLike,tableShapeOf,tableMismatch,gridFits,tableHTML,hasSource,srcBtn,devFlag,firstSegForPage,linkifyPages,autoTermsFilter,mergeDown:(i)=>window.mergeDown(i),undoMerge:()=>window.undoMerge(),getP:()=>P,segState,railLabel,roman,headingDepths,railModel,flowCells,railWhere,railCellClass,railOpen,applyRailOpen,setRailOpen,RAIL_PER_ROW,' +
   'windowStartFor,windowLabel,goToWindow,railGoto,pageEarlier,pageLater,jumpToLastTranslated,PREFS_:()=>PREFS,LAYOUT,SAVED,' +
   'getWin:()=>winStart,setWin:v=>{winStart=v},calls:CALLS,setMerge:v=>{MERGE_MODE=v},setP:p=>{P=p},setSearch:q=>{SEARCH={query:q}}};'
 ].join('\n');
@@ -365,6 +365,38 @@ check('sections: heading with a footnote ref keeps the title clean', api.heading
   api.undoMerge();
   const P3 = api.getP();
   check('undo from a snapshot without segMeta: segMeta rebuilt with the right length', P3.segMeta.length === P3.segments.length && P3.segments.length === 3);
+}
+
+// ---------- round B: tables, source preview, warnings, glossary filter ----------
+{
+  const src = '| Name | Note |\n|---|---|\n| a \\| b | *one* |\n| c |  |';
+  const t = api.parseMdTable(src);
+  check('table: header and rows parsed, an escaped pipe stays inside its cell', t.head.join('/') === 'Name/Note' && t.rows[0][0] === 'a | b' && t.rows[1][1] === '', t);
+  const back = api.buildMdTable(t);
+  check('table: written back as markdown, the pipe escaped again', back === '| Name | Note |\n|---|---|\n| a \\| b | *one* |\n| c |  |', back);
+  check('table: a typed pipe or line break in a cell cannot break the grid', api.buildMdTable({ head: ['x|y'], rows: [['line\nbreak']] }) === '| x\\|y |\n|---|\n| line break |');
+  check('table: an empty grid has the same shape', JSON.stringify(api.tableShapeOf(api.buildMdTable(api.emptyLike(t)))) === JSON.stringify(api.tableShapeOf(src)));
+  api.setP({ segments: [src], finals: ['| A | B |\n|---|---|'], approved: [false] });
+  check('table: a lost row is the usual structure warning', /satır/.test(api.tableMismatch(0)) && !api.gridFits(0));
+  api.setP({ segments: [src], finals: [api.buildMdTable({ head: ['Ad', 'Not'], rows: [['a | b', 'bir'], ['c', '']] })], approved: [false] });
+  check('table: same shape -> no warning, the grid is used', api.tableMismatch(0) === '' && api.gridFits(0));
+  check('table: drawn as a real HTML table', /<table class="mdt"><thead><tr><th>Name<\/th>/.test(api.tableHTML(src)) && /<em>one<\/em>/.test(api.tableHTML(src)));
+  // source preview availability
+  const meta = { pages: [17, 18], boxes: [[17, 1, 2, 3, 4]], style: 'X 9', flags: ['stil-farkli'] };
+  api.setP({ segments: ['a', 'b'], finals: [null, null], approved: [false, false], segMeta: [meta, null] });
+  check('source button only where segMeta exists', /src-btn/.test(api.srcBtn(0)) && api.srcBtn(1) === '' && api.hasSource(0) && !api.hasSource(1));
+  check('style flag mark with the style in its title', /Gövde stilinden farklı: X 9/.test(api.devFlag(0)) && api.devFlag(1) === '');
+  api.setP({ segments: ['a'], finals: [null], approved: [false] });
+  check('no segMeta at all (non-PDF project): no button, no mark', api.srcBtn(0) === '' && api.devFlag(0) === '');
+  // warnings: page numbers become links to the first segment from that page
+  const segMeta = [{ pages: [3] }, { pages: [5, 6] }, null, { pages: [9] }];
+  check('first segment of a page (or the next page that has one)', api.firstSegForPage(segMeta, 6) === 1 && api.firstSegForPage(segMeta, 7) === 3 && api.firstSegForPage(segMeta, 20) === -1);
+  const html = api.linkifyPages('İki sütunlu görünen sayfalar: 5, 23 (önce sol). Dizin (s. 393–401) dahil edilmedi. 181 paragraf birleştirildi.');
+  check('page numbers in warnings are links; counts are not', (html.match(/pg-link/g) || []).length === 3 && /reviewJump\(393\)/.test(html) && !/reviewJump\(181\)/.test(html), html);
+  // glossary: entries under 5 occurrences stay out of the automatic list
+  const segs = ['The koan again.', 'A koan, the koan.', 'Koan here and koan there.', 'Rare word once.'];
+  const f = api.autoTermsFilter('koan = koan\nrare word = nadir\nnot a term line', segs, 5);
+  check('auto glossary: kept when the source occurs 5+ times (same matcher as the text marks)', f.kept === 'koan = koan\nnot a term line' && f.dropped.join() === 'rare word', f);
 }
 
 console.log(failed ? 'FAILED ' + failed : 'ALL PASS');

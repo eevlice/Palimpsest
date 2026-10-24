@@ -220,6 +220,45 @@
   .seg.tab .src{font-family:'Spline Sans Mono',monospace;font-size:11.5px;line-height:1.55;white-space:pre-wrap;overflow-x:auto;}
   .seg.tab .tgt-edit{font-family:'Spline Sans Mono',monospace;font-size:11.5px;}
   .seg.img{padding-top:6px;padding-bottom:6px;}
+  /* source preview: the PDF page beside the text, the segment's boxes washed in */
+  .src-panel{position:fixed;top:0;right:0;bottom:0;width:min(46vw,680px);background:var(--paper);border-left:1px solid var(--rule);
+    z-index:60;display:flex;flex-direction:column;}
+  /* while the panel is open the page makes room for it, so every row's buttons stay reachable */
+  body.src-open .wrap{max-width:none;margin:0 calc(min(46vw,680px) + 20px) 0 20px;}
+  .sp-head{display:flex;align-items:center;justify-content:space-between;gap:8px;padding:10px 14px;border-bottom:1px solid var(--rule);
+    font-family:'Spline Sans Mono',monospace;font-size:11px;letter-spacing:.08em;text-transform:uppercase;color:var(--ink-soft);}
+  .sp-tools{display:flex;gap:6px;}
+  .sp-body{flex:1;overflow:auto;padding:14px;--zoom:1;}
+  .sp-page{position:relative;width:calc(100% * var(--zoom));margin:0 0 18px;}
+  .sp-page img{display:block;width:100%;height:auto;box-shadow:0 0 0 1px var(--rule);}
+  .sp-hl{position:absolute;background:rgba(160,65,45,.16);outline:1px solid rgba(160,65,45,.45);pointer-events:none;}
+  .sp-num{font-family:'Spline Sans Mono',monospace;font-size:10px;color:var(--ink-soft);margin-top:4px;}
+  .sp-missing{font-family:'Spline Sans Mono',monospace;font-size:11px;color:var(--ink-soft);padding:20px 0;}
+  .dev-flag{display:inline-block;width:7px;height:7px;margin-left:8px;padding:0;border:1.2px solid var(--pencil);border-radius:50%;
+    background:none;cursor:pointer;vertical-align:middle;}
+  .review-warn a.pg-link{color:inherit;text-decoration:underline;text-underline-offset:2px;cursor:pointer;}
+  /* markdown tables: the grid itself, source and translation alike */
+  .mdt{border-collapse:collapse;font-size:13px;line-height:1.35;}
+  .mdt th,.mdt td{border:1px solid var(--rule);padding:4px 6px;vertical-align:top;text-align:left;}
+  .mdt th{font-weight:600;}
+  .mdt.grid td,.mdt.grid th{padding:0;}
+  .mdt textarea.cell{display:block;width:100%;min-width:70px;box-sizing:border-box;border:0;background:transparent;resize:none;
+    font:inherit;padding:4px 6px;overflow:hidden;}
+  .mdt textarea.cell:focus{outline:1px solid var(--thread);}
+  .seg.tab .src{font-family:inherit;white-space:normal;}
+  .tab-box{overflow:hidden;}
+  .tab-wide .tab-box .mdt{zoom:var(--tz,1);}
+  .tab-open{margin-top:8px;}
+  .tab-editor{position:fixed;inset:0;background:var(--paper);z-index:70;overflow:auto;padding:22px 28px;}
+  .tab-editor .te-head{display:flex;justify-content:space-between;align-items:center;margin-bottom:14px;
+    font-family:'Spline Sans Mono',monospace;font-size:11px;letter-spacing:.08em;text-transform:uppercase;color:var(--ink-soft);}
+  .tab-editor .te-label{font-family:'Spline Sans Mono',monospace;font-size:10px;letter-spacing:.08em;text-transform:uppercase;
+    color:var(--ink-soft);margin:18px 0 6px;}
+  .export-menu{position:fixed;z-index:65;background:var(--paper);border:1px solid var(--rule);display:flex;flex-direction:column;min-width:260px;}
+  .export-menu button{font-family:'Spline Sans Mono',monospace;font-size:11px;letter-spacing:.04em;text-align:left;padding:9px 12px;
+    background:none;border:0;border-bottom:1px solid var(--rule);color:var(--ink);cursor:pointer;}
+  .export-menu button:last-child{border-bottom:0;}
+  .export-menu button:hover{color:var(--pencil);}
   .img-line{grid-column:1 / -1;font-family:'Spline Sans Mono',monospace;font-size:11px;letter-spacing:.06em;
     text-transform:uppercase;color:var(--ink-soft);}
   .fn-ref{font-family:'Spline Sans Mono',monospace;font-size:.62em;color:var(--pencil);
@@ -724,6 +763,7 @@ const effortTitle=(v)=>'Düşünme eforu · '+EFFORT_HINT[v||'off'];
 
 // --- inline SVG icons (stroke uses currentColor so they theme correctly) ---
 const ICON={
+  source:'<svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h5"/><path d="M14 2v6h6"/><circle cx="16.5" cy="16.5" r="3"/><path d="m21 21-2.2-2.2"/></svg>',
   check:'<svg viewBox="0 0 24 24" width="15" height="15" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round"><polyline points="20 6 9 17 4 12"/></svg>',
   rerun:'<svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><polyline points="23 4 23 10 17 10"/><path d="M20.49 15a9 9 0 1 1-2.12-9.36L23 10"/></svg>',
   pencil:'<svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 20h9"/><path d="M16.5 3.5a2.12 2.12 0 0 1 3 3L7 19l-4 1 1-4Z"/></svg>',
@@ -1011,13 +1051,16 @@ $('analyze').onclick=async()=>{
       approved:new Array(data.segments.length).fill(false),
       synopsis:data.synopsis,terms:data.terms,rules:'',style:'',cost:0,segEffort:{}};
     if(Array.isArray(data.segMeta)&&data.segMeta.length===data.segments.length) P.segMeta=data.segMeta;   // PDF only
-    $('synopsis').value=data.synopsis;$('terms').value=data.terms;$('rules').value='';$('style').value='';
+    const tf=autoTermsFilter(data.terms,data.segments,5);
+    P.terms=tf.kept;
+    const termNote=tf.dropped.length?[`${tf.dropped.length} terim kaynakta 5'ten az geçtiği için otomatik sözlüğe alınmadı: ${tf.dropped.slice(0,8).join(', ')}${tf.dropped.length>8?'…':''}`]:[];
+    $('synopsis').value=data.synopsis;$('terms').value=tf.kept;$('rules').value='';$('style').value='';
     $('setup-status').textContent='';
     $('review-meta').textContent=`${data.count} paragraphs · context read $${data.setup_cost.toFixed(4)}`;
     // the scanned-PDF warning gets its own box at the top; the rest stay in the small list at the bottom
     const scanW=data.scanned?(data.warnings||[]).find(w=>/taranmış/.test(w)):null;
     $('review-scan').textContent=scanW||'';$('review-scan').classList.toggle('hidden',!scanW);
-    $('review-warn').textContent=(data.warnings||[]).filter(w=>w!==scanW).join('\n');
+    $('review-warn').innerHTML=[...(data.warnings||[]).filter(w=>w!==scanW),...termNote].map(w=>linkifyPages(esc(w))).join('\n');
     showScreen('review');
   }catch(e){$('setup-err').innerHTML=`<div class="err">Server unreachable.</div>`;
     $('analyze').disabled=false;$('setup-status').textContent='';}
@@ -1347,7 +1390,173 @@ function refMismatch(i){
   if(f.includes('\u27e6')) return 'Çeviride çözülmemiş ⟦n⟧ işareti kaldı';
   return '';
 }
-function updateSegWarn(i){ const el=$('warn-'+i); if(el) el.textContent=refMismatch(i); }
+function updateSegWarn(i){ const el=$('warn-'+i); if(el) el.textContent=refMismatch(i)||tableMismatch(i); }
+
+// ================================================================
+// TABLES: a markdown table segment is drawn as a real table; its translation is edited cell by cell and saved as
+// markdown again ("|" inside a cell is escaped as "\|")
+// ================================================================
+function splitRow(line){
+  let s=line.trim();
+  if(s.startsWith('|')) s=s.slice(1);
+  if(s.endsWith('|')&&!s.endsWith('\\|')) s=s.slice(0,-1);
+  return s.split(/(?<!\\)\|/).map(c=>c.trim().replace(/\\\|/g,'|'));
+}
+function parseMdTable(md){
+  if(!SEG_TAB.test(md||'')) return null;
+  const lines=md.split('\n');
+  return {head:splitRow(lines[0]), rows:lines.slice(2).map(splitRow)};
+}
+function cellEsc(s){ return String(s==null?'':s).replace(/\r?\n/g,' ').replace(/\|/g,'\\|').trim(); }
+function buildMdTable(t){
+  const row=r=>'| '+r.map(cellEsc).join(' | ')+' |';
+  return [row(t.head),'|'+'---|'.repeat(t.head.length),...t.rows.map(row)].join('\n');
+}
+function emptyLike(t){ return {head:t.head.map(()=>''), rows:t.rows.map(r=>r.map(()=>''))}; }
+function tableShapeOf(md){
+  const t=parseMdTable((md||'').trim());
+  return t?{rows:t.rows.length+1, cols:[t.head.length,...t.rows.map(r=>r.length)]}:null;
+}
+function tableMismatch(i){
+  if(typeOf(i).type!=='table') return '';
+  const f=P.finals[i];
+  if(f===null||f===undefined||!f.trim()) return '';
+  const a=tableShapeOf(P.segments[i]), b=tableShapeOf(f);
+  if(!b) return 'Tablo yapısı bozuk: çeviri bir markdown tablosu değil';
+  if(a.rows!==b.rows||a.cols.join()!==b.cols.join())
+    return `Tablo yapısı uyuşmuyor — kaynak: ${a.rows} satır × ${Math.max(...a.cols)} sütun · çeviri: ${b.rows} satır × ${Math.max(...b.cols)} sütun`;
+  return '';
+}
+function gridFits(i){ const f=P.finals[i]; return f!=null&&!!f.trim()&&!tableMismatch(i); }
+function mdInline(s){
+  return esc(s).replace(/\*\*\*([^*]+)\*\*\*/g,'<strong><em>$1</em></strong>').replace(/\*\*([^*]+)\*\*/g,'<strong>$1</strong>')
+    .replace(/\*([^*]+)\*/g,'<em>$1</em>');
+}
+function tableHTML(md){
+  const t=parseMdTable(md);
+  if(!t) return esc(md);
+  return `<table class="mdt"><thead><tr>${t.head.map(c=>`<th>${mdInline(c)}</th>`).join('')}</tr></thead>`+
+    `<tbody>${t.rows.map(r=>`<tr>${r.map(c=>`<td>${mdInline(c)}</td>`).join('')}</tr>`).join('')}</tbody></table>`;
+}
+function gridHTML(i,md){
+  const t=parseMdTable(md.trim());
+  const cell=(v,r,c)=>`<textarea class="cell" rows="1" data-i="${i}" data-r="${r}" data-c="${c}" aria-label="Satır ${r+1}, sütun ${c+1}">${esc(v)}</textarea>`;
+  return `<table class="mdt grid"><thead><tr>${t.head.map((v,c)=>`<th>${cell(v,0,c)}</th>`).join('')}</tr></thead>`+
+    `<tbody>${t.rows.map((row,r)=>`<tr>${row.map((v,c)=>`<td>${cell(v,r+1,c)}</td>`).join('')}</tr>`).join('')}</tbody></table>`;
+}
+function gridValue(table){
+  const rows=[...table.querySelectorAll('tr')].map(tr=>[...tr.querySelectorAll('textarea.cell')].map(x=>x.value));
+  return buildMdTable({head:rows[0], rows:rows.slice(1)});
+}
+function bindGrid(i,root){
+  root.querySelectorAll('textarea.cell').forEach(x=>{
+    x.oninput=()=>{ P.finals[i]=gridValue(x.closest('table')); autoGrow(x); updateSegWarn(i); queueSave(); };
+    autoGrow(x);
+  });
+}
+// a table wider than its column: shown scaled down, edited in the full-screen editor
+function fitTable(i,div){
+  const box=div.querySelector('.src .tab-box'); if(!box) return;
+  const tb=box.querySelector('.mdt'); if(!tb) return;
+  const avail=box.clientWidth, need=tb.scrollWidth;
+  if(need<=avail+2) return;
+  div.classList.add('tab-wide');
+  div.style.setProperty('--tz',Math.max(0.35,avail/need).toFixed(3));
+  box.insertAdjacentHTML('afterend',`<button class="tb tab-open" onclick="openTableEditor(${i})">Tabloyu aç</button>`);
+  div.querySelectorAll('.tgt-area textarea.cell').forEach(x=>{ x.readOnly=true; });
+}
+window.openTableEditor=(i)=>{
+  const ed=$('tab-editor'); ed.classList.remove('hidden');
+  const tgt=P.finals[i]===null?`<p class="meta">Henüz çeviri yok — satırdaki “Çevir” ya da “Kendi çevirimi yaz” ile başlayın.</p>`
+    :gridFits(i)?gridHTML(i,P.finals[i]):`<p class="meta">${esc(tableMismatch(i))}</p><textarea class="tgt-edit" id="te-raw">${esc(P.finals[i])}</textarea>`;
+  ed.innerHTML=`<div class="te-head"><span>Tablo · ¶ ${i+1}</span><button class="tb icon-only" onclick="closeTableEditor()" title="Kapat (Esc)">×</button></div>
+    <div class="te-label">Kaynak</div>${tableHTML(P.segments[i])}<div class="te-label">Çeviri</div><div id="te-tgt">${tgt}</div>`;
+  ed.dataset.i=i;
+  bindGrid(i,ed);
+  const raw=$('te-raw'); if(raw) raw.oninput=()=>{ P.finals[i]=raw.value; queueSave(); };
+};
+window.closeTableEditor=()=>{ const ed=$('tab-editor'); if(ed.classList.contains('hidden')) return; ed.classList.add('hidden'); ed.innerHTML=''; renderWindow(); };
+
+// ================================================================
+// SOURCE PREVIEW: the PDF page a segment came from (PDF imports: segMeta + the project's PDF copy on the server)
+// ================================================================
+function hasSource(i){ const m=P&&Array.isArray(P.segMeta)?P.segMeta[i]:null; return !!(m&&Array.isArray(m.pages)&&m.pages.length); }
+function srcBtn(i){ return hasSource(i)?`<button class="seg-btn icon src-btn" onclick="openSource(${i})" title="Kaynak sayfayı göster">${ICON.source}</button>`:''; }
+function devFlag(i){
+  const m=P&&Array.isArray(P.segMeta)?P.segMeta[i]:null;
+  if(!m||!(m.flags||[]).includes('stil-farkli')) return '';
+  return `<button class="dev-flag" onclick="openSource(${i})" title="Gövde stilinden farklı: ${esc(m.style||'?')}" aria-label="Gövde stilinden farklı"></button>`;
+}
+const SRC={i:-1,pages:[],zoom:1}, SRC_SCALE=2;
+window.openSource=(i)=>{ if(!hasSource(i)) return; SRC.i=i; SRC.pages=P.segMeta[i].pages.slice(); drawSource(); };
+window.sourcePage=(d)=>{
+  if(SRC.i<0) return;
+  SRC.pages=[d<0?Math.max(1,SRC.pages[0]-1):SRC.pages[SRC.pages.length-1]+1];
+  drawSource();
+};
+window.zoomSource=(d)=>{ SRC.zoom=Math.min(3,Math.max(1,+(SRC.zoom+0.25*d).toFixed(2))); $('sp-body').style.setProperty('--zoom',SRC.zoom); };
+window.closeSource=()=>{ SRC.i=-1; const el=$('src-panel'); if(el) el.classList.add('hidden'); document.body.classList.remove('src-open'); };
+function drawSource(){
+  const panel=$('src-panel'); panel.classList.remove('hidden'); document.body.classList.add('src-open');
+  const m=P.segMeta[SRC.i]||{boxes:[]};
+  $('sp-title').textContent='Kaynak · ¶ '+(SRC.i+1)+' · s.'+SRC.pages.join(', ');
+  const body=$('sp-body'); body.style.setProperty('--zoom',SRC.zoom);
+  body.innerHTML=SRC.pages.map(pg=>`<div class="sp-page" data-page="${pg}"><img alt="Sayfa ${pg}" src="/page_image?project=${encodeURIComponent(P.id)}&page=${pg}&scale=${SRC_SCALE}"><div class="sp-num">s.${pg}</div></div>`).join('');
+  body.scrollTop=0;
+  body.querySelectorAll('.sp-page').forEach((div,k)=>{
+    const pg=+div.dataset.page, img=div.querySelector('img');
+    img.onload=()=>{
+      const W=img.naturalWidth/SRC_SCALE, H=img.naturalHeight/SRC_SCALE;
+      (m.boxes||[]).filter(b=>b[0]===pg).forEach(b=>{
+        const hl=document.createElement('div'); hl.className='sp-hl';
+        hl.style.cssText=`left:${b[1]/W*100}%;top:${b[2]/H*100}%;width:${(b[3]-b[1])/W*100}%;height:${(b[4]-b[2])/H*100}%`;
+        div.appendChild(hl);
+      });
+      const hl=div.querySelector('.sp-hl');
+      if(k===0&&hl) body.scrollTop=Math.max(0,hl.offsetTop-80);
+    };
+    img.onerror=()=>{ div.innerHTML=`<div class="sp-missing">Sayfa ${pg} gösterilemedi.</div>`; };
+  });
+}
+document.addEventListener('keydown',e=>{
+  if(e.key!=='Escape') return;
+  if(!$('tab-editor').classList.contains('hidden')){ closeTableEditor(); return; }
+  if(!$('src-panel').classList.contains('hidden')) closeSource();
+});
+// page numbers in the import warnings: a link to the first segment from that page
+function firstSegForPage(meta,n){
+  let after=-1;
+  for(let i=0;i<(meta||[]).length;i++){
+    const ps=meta[i]&&meta[i].pages; if(!ps||!ps.length) continue;
+    if(ps.includes(n)) return i;
+    if(after<0&&Math.min(...ps)>n) after=i;
+  }
+  return after;
+}
+function linkifyPages(html){
+  return html.replace(/(s\.\s*|sayfalar:\s*|sayfası atlandı:\s*)([\d–,\s]*\d)/g,(all,pre,list)=>
+    pre+list.replace(/(\d+)(?:–(\d+))?/g,(m,a)=>`<a class="pg-link" href="#" onclick="reviewJump(${a});return false">${m}</a>`));
+}
+window.reviewJump=(n)=>{
+  const i=firstSegForPage(P.segMeta,n); if(i<0) return;
+  $('start').onclick();
+  goToWindow(i);
+  const el=$('seg-'+i); if(el) el.scrollIntoView({block:'start'});
+};
+// new setups only: a glossary entry whose source occurs fewer than `min` times in the book (counted with the same
+// matcher that marks glossary terms in the text) does not enter the automatic list. The user's own entries come later
+// and are never filtered.
+function autoTermsFilter(text,segs,min){
+  const kept=[],dropped=[];
+  (text||'').split('\n').forEach(line=>{
+    if(!line.trim()) return;
+    if(!line.includes('=')){ kept.push(line); return; }
+    const src=parseTerms(line)[0].src;
+    const n=src?segs.reduce((k,s)=>k+findSpans(s||'',src).length,0):0;
+    (n>=min?kept:dropped).push(n>=min?line:src);
+  });
+  return {kept:kept.join('\n'),dropped};
+}
 function glossFlagBtn(i){
   const hits=glossHitsForText(P.segments[i]);
   if(!hits.length) return '';
@@ -1932,7 +2141,7 @@ function segActionsHTML(i,costTag){
   const open=SEG_EXTRA_OPEN[i]?' open':'';
   return `<div class="seg-actions">
       <button class="seg-btn icon approve${P.approved[i]?' on':''}" onclick="approveSeg(${i})" title="${P.approved[i]?'Onaylandı':'Bu paragrafı onayla'}">${ICON.check}</button>
-      ${glossFlagBtn(i)}
+      ${glossFlagBtn(i)}${srcBtn(i)}
       <button class="seg-btn icon seg-toggle${open?' active':''}" id="toggle-${i}" onclick="toggleSegExtra(${i})" title="Model, efor ve maliyet">${ICON.more}</button>
       <div class="seg-extra${open}" id="extra-${i}">
         ${modelSelector(i)}${effortSelector(i)}
@@ -2188,19 +2397,20 @@ function renderWindow(){
       // a placeholder: one quiet line, nothing to translate or approve (no "done" tint either)
       const label=(/^!\[([^\]]*)\]/.exec(P.segments[i])||[])[1]||'Görsel';
       div.className='seg img';
-      div.innerHTML=`<div class="img-line">${esc(label)}</div>`;
+      div.innerHTML=`<div class="img-line">${esc(label)} ${srcBtn(i)}</div>`;
       c.appendChild(div);
       continue;
     }
     let right;
     if(P.finals[i]!==null){
       const costTag=(P.segCost&&P.segCost[i]!=null)?`<span class="seg-cost">$${P.segCost[i].toFixed(4)}</span>`:'';
-      right=`<textarea class="tgt-edit" id="edit-${i}">${esc(P.finals[i])}</textarea>${segActionsHTML(i,costTag)}`;
+      right=(ty.type==='table'&&gridFits(i)?`<div class="tab-box">${gridHTML(i,P.finals[i])}</div>`
+        :`<textarea class="tgt-edit" id="edit-${i}">${esc(P.finals[i])}</textarea>`)+segActionsHTML(i,costTag);
     }else{
       right=`<div class="placeholder"></div>
         <div class="seg-actions">
           <button class="seg-btn primary icon" onclick="runSeg(${i})" title="Makine ile çevir">${ICON.translate}</button>
-          ${glossFlagBtn(i)}
+          ${glossFlagBtn(i)}${srcBtn(i)}
           ${modelSelector(i)}${effortSelector(i)}
           <button class="seg-btn icon" onclick="writeSeg(${i})" title="Kendi çevirimі yaz">${ICON.pencil}</button>
         </div>`;
@@ -2217,13 +2427,16 @@ function renderWindow(){
       }
       mergeCtl=`<div class="merge-join">${inner}</div>`;
     }
-    div.innerHTML=`<div class="seg-num">${gutter}</div>
-      <div class="src">${ty.type==='table'?esc(P.segments[i]):renderSource(i)}</div><div class="tgt-area">${right}</div><div class="seg-warn" id="warn-${i}"></div>${mergeCtl}`;
+    div.innerHTML=`<div class="seg-num">${gutter}${devFlag(i)}</div>
+      <div class="src">${ty.type==='table'?`<div class="tab-box">${tableHTML(P.segments[i])}</div>`:renderSource(i)}</div><div class="tgt-area">${right}</div><div class="seg-warn" id="warn-${i}"></div>${mergeCtl}`;
     c.appendChild(div);
     if(P.finals[i]!==null){
-      const ed=$('edit-'+i);ed.oninput=()=>{P.finals[i]=ed.value;autoGrow(ed);updateSegWarn(i);queueSave();};
+      const ed=$('edit-'+i);
+      if(ed) ed.oninput=()=>{P.finals[i]=ed.value;autoGrow(ed);updateSegWarn(i);queueSave();};
+      else bindGrid(i,div);
       updateSegWarn(i);
     }
+    if(ty.type==='table') fitTable(i,div);
     if(P.segEffort && P.segEffort[i]) setSegEffort(i,P.segEffort[i]);
     onModelChange(i);
   }
@@ -2312,6 +2525,10 @@ function memoryPairs(uptoIndex){
 }
 
 window.writeSeg=(i)=>{
+  if(typeOf(i).type==='table'){                       // an empty grid of the same shape
+    P.finals[i]=buildMdTable(emptyLike(parseMdTable(P.segments[i])));P.approved[i]=false;
+    renderWindow();queueSave();return;
+  }
   const area=$('seg-'+i).querySelector('.tgt-area');
   area.innerHTML=`<textarea class="tgt-edit" id="edit-${i}" placeholder="Çevirinizi yazın…"></textarea>
     <div class="seg-actions">
@@ -2349,6 +2566,7 @@ window.runSeg=async(i)=>{
     P.segCost[i]=data.cost;
     if(!P.segEffort)P.segEffort={};
     P.segEffort[i]=segEffort;
+    if(typeOf(i).type==='table'){ renderWindow();updateProgress();renderRail();queueSave();return; }   // into the grid
     const tk=data.tokens||{};
     const cacheInfo=tk.cache_read?`<span class="seg-cache" title="Bağlam önbellekten okundu">${ICON.bolt}</span>`:'';
     SEG_EXTRA_OPEN[i]=true;
@@ -2433,7 +2651,30 @@ function save(){
     })
     .catch(()=>{$('save-pill').textContent='kaydetme başarısız';});
 }
-$('export').onclick=()=>{
+$('export').onclick=(e)=>{
+  e.stopPropagation();
+  const menu=$('export-menu'), r=$('export').getBoundingClientRect();
+  menu.style.left=r.left+'px'; menu.style.top=(r.bottom+6)+'px';
+  menu.classList.toggle('hidden');
+  menu.querySelectorAll('button').forEach(b=>{ b.onclick=()=>{ menu.classList.add('hidden'); exportAs(b.dataset.mode); }; });
+};
+document.addEventListener('click',e=>{ const m=document.getElementById('export-menu'); if(m&&!m.contains(e.target)) m.classList.add('hidden'); });
+async function exportAs(mode){
+  if(mode==='md') return exportMarkdown();
+  const base=P.name.replace(/[^a-z0-9]+/gi,'_')+'.'+P.target_lang.toLowerCase()+(mode==='redaksiyon'?'.redaksiyon':'');
+  const body=mode==='redaksiyon'
+    ?{mode, name:base, rows:P.segments.map((s,i)=>({src:s, tgt:exportText([s],[P.finals[i]])}))}
+    :{mode:'word', name:base, markdown:exportText(P.segments,P.finals)};
+  $('export-meta').textContent='· Word hazırlanıyor…';
+  try{
+    const res=await fetch('/export_docx',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(body)});
+    if(!res.ok){ const d=await res.json().catch(()=>({})); $('export-meta').textContent='· '+(d.error||'Word dışa aktarma başarısız'); return; }
+    const blob=await res.blob();
+    const a=document.createElement('a');a.href=URL.createObjectURL(blob);a.download=base+'.docx';a.click();
+    $('export-meta').textContent=`· ${P.segments.length} paragraftan ${P.segments.filter((s,i)=>isDone(P.segments,P.approved,i)).length} tanesi dışa aktarıldı`;
+  }catch(err){ $('export-meta').textContent='· Sunucuya ulaşılamadı'; }
+}
+function exportMarkdown(){
   const out=exportText(P.segments,P.finals);
   const blob=new Blob([out],{type:'text/plain;charset=utf-8'});
   const a=document.createElement('a');a.href=URL.createObjectURL(blob);
@@ -2441,3 +2682,18 @@ $('export').onclick=()=>{
   $('export-meta').textContent=`· ${P.segments.length} paragraftan ${P.segments.filter((s,i)=>isDone(P.segments,P.approved,i)).length} tanesi dışa aktarıldı`;
 };
 </script>
+<aside class="src-panel hidden" id="src-panel" aria-label="Kaynak önizleme">
+  <div class="sp-head"><span id="sp-title"></span><span class="sp-tools">
+    <button class="tb icon-only" onclick="zoomSource(-1)" title="Uzaklaştır">−</button>
+    <button class="tb icon-only" onclick="zoomSource(1)" title="Yakınlaştır">+</button>
+    <button class="tb icon-only" onclick="sourcePage(-1)" title="Önceki sayfa">‹</button>
+    <button class="tb icon-only" onclick="sourcePage(1)" title="Sonraki sayfa">›</button>
+    <button class="tb icon-only" onclick="closeSource()" title="Kapat (Esc)">×</button></span></div>
+  <div class="sp-body" id="sp-body"></div>
+</aside>
+<div class="tab-editor hidden" id="tab-editor"></div>
+<div class="export-menu hidden" id="export-menu">
+  <button data-mode="word">Word — yalnızca çeviri</button>
+  <button data-mode="redaksiyon">Word — redaksiyon kopyası (kaynak | çeviri)</button>
+  <button data-mode="md">Markdown</button>
+</div>

@@ -12,7 +12,7 @@ if [ -d .git ]; then
   GIT_TERMINAL_PROMPT=0 git pull --ff-only --quiet 2>/dev/null || true
 fi
 # Install libraries if missing (first run only), quietly.
-python3 -c "import flask, anthropic, openai, google.genai, docx, cryptography, pypdfium2" 2>/dev/null || {
+python3 -c "import flask, anthropic, openai, google.genai, docx, cryptography, pypdfium2, pypandoc" 2>/dev/null || {
   echo "First run: installing the required libraries..."
   pip3 install --quiet -r requirements.txt
 }

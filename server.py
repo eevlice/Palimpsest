@@ -21,7 +21,11 @@ import json
 import glob
 import shutil
 import datetime
-from flask import Flask, request, jsonify, send_from_directory
+import io
+import zlib
+import struct
+import tempfile
+from flask import Flask, request, jsonify, send_from_directory, send_file
 
 import keys
 import spending
@@ -169,6 +173,8 @@ def build_context(provider, model, src, tgt, full_text):
         f"Reason specifically about the {src}->{tgt} direction and the book's genre. "
         f"Format one per line as `source = ` leaving the target BLANK for the "
         f"translator to decide, unless a {tgt} rendering is strongly conventional. "
+        f"Each line holds exactly ONE source term (one spelling or variant) and at most ONE target: never join "
+        f"variants with '/', ';' or 'or' - give every variant its own line. "
         f"Prefer a short, high-value list over an exhaustive one.\n\n"
         f"BOOK:\n{sample}"
     )
@@ -440,6 +446,132 @@ def delete_project():
     return jsonify({"ok": True})
 
 
+def _png(width, height, data, stride, channels):
+    """raw RGB(A) rows -> PNG bytes (zlib only, no image library)"""
+    rows = b"".join(b"\x00" + bytes(data[y * stride:y * stride + width * channels]) for y in range(height))
+    chunk = lambda kind, body: struct.pack(">I", len(body)) + kind + body + struct.pack(">I", zlib.crc32(kind + body) & 0xFFFFFFFF)
+    ihdr = struct.pack(">IIBBBBB", width, height, 8, 6 if channels == 4 else 2, 0, 0, 0)
+    return b"\x89PNG\r\n\x1a\n" + chunk(b"IHDR", ihdr) + chunk(b"IDAT", zlib.compress(rows, 6)) + chunk(b"IEND", b"")
+
+
+@app.route("/page_image")
+def page_image():
+    """One page of a project's PDF copy, drawn on request at `scale` (1 = 72 dpi) - nothing is written to disk.
+    The boxes in segMeta are PDF points from the top-left corner: multiply by the image width / page width."""
+    pid, page = request.args.get("project", ""), request.args.get("page", "")
+    path = pdf_path(pid) if pid else ""
+    if not path or not os.path.exists(path):
+        return jsonify({"error": "Bu projenin PDF kopyası yok."}), 404
+    try:
+        import pypdfium2 as pdfium
+        scale = min(4.0, max(0.5, float(request.args.get("scale", "1.5"))))
+        doc = pdfium.PdfDocument(path)
+        n = int(page)
+        if not 1 <= n <= len(doc):
+            return jsonify({"error": f"Sayfa {n} yok (PDF {len(doc)} sayfa)."}), 404
+        bm = doc[n - 1].render(scale=scale, rev_byteorder=True)
+        channels = 4 if bm.mode in ("RGBA", "RGBX") else 3
+        png = _png(bm.width, bm.height, bm.buffer, bm.stride, channels)
+    except ValueError:
+        return jsonify({"error": "Geçersiz sayfa ya da ölçek."}), 400
+    return send_file(io.BytesIO(png), mimetype="image/png", max_age=3600)
+
+
+PLACEHOLDER_LINE = re.compile(r"^!\[([^\]\r\n]*)\]\([^)\s]+\)$", re.M)
+
+
+def docx_markdown(md):
+    """The app's markdown as Pandoc should read it: a figure/table/index placeholder stays visible text
+    ("[Görsel · s.17]") instead of an image Pandoc would try to load."""
+    return PLACEHOLDER_LINE.sub(lambda m: "\\[" + m.group(1) + "\\]", md)
+
+
+def _runs(par, text):
+    """inline **bold**, *italic* and footnote refs [^x] (as superscript) into python-docx runs"""
+    for m in re.finditer(r"(\*\*\*[^*]+\*\*\*|\*\*[^*]+\*\*|\*[^*]+\*|\[\^[^\]\s]+\]|[^*\[]+|[*\[])", text):
+        s = m.group(0)
+        if s.startswith("***"):
+            r = par.add_run(s[3:-3]); r.bold = r.italic = True
+        elif s.startswith("**"):
+            r = par.add_run(s[2:-2]); r.bold = True
+        elif s.startswith("*") and len(s) > 1:
+            r = par.add_run(s[1:-1]); r.italic = True
+        elif s.startswith("[^"):
+            r = par.add_run(re.sub(r"\D*(\d+)$", r"\1", s[2:-1])); r.font.superscript = True
+        else:
+            par.add_run(s)
+
+
+def _cell(cell, seg):
+    """one segment into a table cell, styled like the Word export: headings, captions, placeholders, plain text"""
+    import segtypes as st
+    t = st.seg_type(seg)["type"]
+    cell.paragraphs[0].text = ""
+    par = cell.paragraphs[0]
+    if t == "heading":
+        m = st.HEADING.match(seg)
+        par.style = "Heading %d" % min(3, len(m.group(1)))
+        _runs(par, seg[m.end():])
+    elif t == "caption":
+        par.style = "Caption"
+        _runs(par, st.strip_marker(seg))
+    elif t == "image":
+        par.style = "Body Text"
+        par.add_run("[" + seg[2:seg.index("]")] + "]")
+    elif t == "table":
+        par.style = "Body Text"
+        par.add_run(seg)
+    else:
+        par.style = "Body Text"
+        _runs(par, st.strip_marker(seg) if t == "footnote" else seg)
+
+
+def redaction_docx(rows, ref):
+    """the review copy: one two-column table, source | translation, one row per segment, on the reference styles"""
+    import docx
+    d = docx.Document(ref)
+    body = d.element.body
+    for el in list(body):
+        if not el.tag.endswith("sectPr"):
+            body.remove(el)
+    table = d.add_table(rows=1, cols=2)
+    table.style = "Table"
+    for cell, text in zip(table.rows[0].cells, ("Kaynak", "Çeviri")):
+        cell.paragraphs[0].text = text
+        cell.paragraphs[0].runs[0].bold = True
+    for r in rows:
+        cells = table.add_row().cells
+        _cell(cells[0], r.get("src", ""))
+        _cell(cells[1], r.get("tgt", ""))
+    out = io.BytesIO()
+    d.save(out)
+    return out.getvalue()
+
+
+@app.route("/export_docx", methods=["POST"])
+def export_docx():
+    """Word export. mode "word": the translation through Pandoc with reference.docx (Heading 1-3, Body Text, First
+    Paragraph, Caption; tables as Word tables, footnotes as Word footnotes). mode "redaksiyon": a two-column review
+    table. The markdown and the rows come from the page (the same exportText the Markdown export uses)."""
+    d = request.get_json() or {}
+    ref = os.path.join(HERE, "reference.docx")
+    name = re.sub(r"[^A-Za-z0-9_-]+", "_", d.get("name") or "ceviri")
+    if d.get("mode") == "redaksiyon":
+        data = redaction_docx(d.get("rows") or [], ref)
+    else:
+        try:
+            import pypandoc
+        except ImportError:
+            return jsonify({"error": "Word dışa aktarma için pypandoc_binary gerekli: pip3 install -r requirements.txt"}), 400
+        with tempfile.TemporaryDirectory() as tmp:
+            out = os.path.join(tmp, "out.docx")
+            pypandoc.convert_text(docx_markdown(d.get("markdown") or ""), "docx", format="markdown",
+                                  outputfile=out, extra_args=["--reference-doc=" + ref])
+            data = open(out, "rb").read()
+    return send_file(io.BytesIO(data), as_attachment=True, download_name=name + ".docx",
+                     mimetype="application/vnd.openxmlformats-officedocument.wordprocessingml.document")
+
+
 @app.route("/setup", methods=["POST"])
 def setup():
     f = request.files.get("file")
@@ -492,6 +624,7 @@ def setup():
                                        "cost": cost1, "book_chars": len(text)})
             return jsonify({"error": f"Özet üretilemedi: {problem} ({_spent(tokens1, cost1)}). Tekrar deneyebilirsin."}), 502
         synopsis, terms = split_context(blob)
+        terms = split_term_variants(terms)
         # Condense the brief once now, to cut tokens on every later call.
         condensed, condense_info, condense_note = condense_brief(provider, model, synopsis)
         total_cost = cost1
@@ -598,6 +731,29 @@ def translate_simple():
         })
     except Exception as e:
         return jsonify({"error": f"Translation failed: {e}"}), 500
+
+
+VARIANT_SEP = re.compile(r"\s*/\s*|\s*;\s*|\s+or\s+", re.I)
+
+
+def split_term_variants(terms):
+    """One variant per glossary line, whatever the model sent: "colour / color = renk" becomes two lines, both "= renk";
+    "A / B = X / Y" pairs up when both sides have the same number of variants. Other lines pass through untouched."""
+    out = []
+    for line in (terms or "").split("\n"):
+        if "=" not in line:
+            out.append(line)
+            continue
+        src, tgt = line.split("=", 1)
+        srcs = [s.strip() for s in VARIANT_SEP.split(src.strip()) if s.strip()]
+        tgts = [s.strip() for s in VARIANT_SEP.split(tgt.strip()) if s.strip()]
+        if len(srcs) <= 1:
+            out.append(line)
+            continue
+        for k, s in enumerate(srcs):
+            t = tgts[k] if len(tgts) == len(srcs) else tgt.strip()
+            out.append(f"{s} = {t}".rstrip())
+    return "\n".join(out)
 
 
 def carry_meta(raw_segs, segs, meta):
