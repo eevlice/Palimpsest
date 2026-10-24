@@ -126,6 +126,9 @@ def from_model(out, prompt_text, labels, src_type):
         if rs != ro or cs != co:
             warnings.append("Tablo yapısı uyuşmuyor: kaynakta %d satır × %s sütun, çeviride %d satır × %s sütun" % (
                 rs, "/".join(map(str, sorted(set(cs)))), ro, "/".join(map(str, sorted(set(co))))))
+    # a model sometimes sets a space before the marker ("dinlenmek ⟦2⟧"): only horizontal space goes, a line break
+    # (a verse line's hard break) stays
+    out = re.sub(r"[ \t\u00A0\u202F]+(⟦\d+⟧)", r"\1", out)
     want = Counter(int(k) for k in PLACEHOLDER.findall(prompt_text))
     got = Counter(int(k) for k in PLACEHOLDER.findall(out))
     if want != got:

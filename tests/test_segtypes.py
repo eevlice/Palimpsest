@@ -116,5 +116,15 @@ for t, style in (("epigraph", "Epigraph"), ("attribution", "Attribution"), ("box
     check(t + ": fence off, refs as placeholders", text == "Text⟦1⟧ here." and labels == ["n1"])
     check(t + ": context text without fence", ST.strip_for_context(seg) == "Text here.")
 
+# ---- a space the model sets before a marker goes; a line break does not
+t, labels = to_prompt("Resting[^b10-33] here.")
+out, w = from_model("dinlenmek ⟦1⟧ burada.", t, labels, {"type": "para"})
+check("space before a marker: removed, the ref sits on the word", out == "dinlenmek[^b10-33] burada." and not w)
+out, w = from_model("dinlenmek\u00A0\u202F⟦1⟧ burada.", t, labels, {"type": "para"})
+check("no-break spaces before a marker: removed too", out == "dinlenmek[^b10-33] burada.")
+t, labels = to_prompt("::: {custom-style=\"Verse\"}\nline\\\n[^n1]rest\n:::")
+out, w = from_model("satır\\\n⟦1⟧devam", t, labels, {"type": "para"})
+check("a line break (verse hard break) before a marker stays", out == "satır\\\n[^n1]devam")
+
 print("FAILED %d" % failed if failed else "ALL PASS")
 sys.exit(1 if failed else 0)

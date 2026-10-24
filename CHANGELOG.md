@@ -28,6 +28,7 @@
 ### Düzeltilenler
 - Türkçe ayarlı sistemlerde arama ve sözlükte "I" harfinin bozulması.
 - Kurulum özetinin kesik ya da biçimsiz gelmesi artık kabul edilmiyor.
+- Model bir dipnot işaretinin önüne boşluk koyduğunda dipnot numarası sözcükten ayrık kalıyordu.
 
 ### Bilinen sınırlar
 - Windows başlatıcısı (`start.bat`) gerçek bir Windows'ta denenmedi.
