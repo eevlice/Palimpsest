@@ -49,6 +49,27 @@ these are fixed values in `_shape_roles`, not thresholds. A deviation no rule na
 `stil-farkli` together with its reasons (`indent`, `indent-right`, `narrow`, `centered`, `right`, `ragged`,
 `italic-block`, `smaller`, `font`, `hanging`).
 
+## Scanned PDFs
+
+Every page is one of three kinds (`page_kind`): digital; scanned with an OCR layer (a full-page image under mostly
+invisible text); scanned without text (a full-page image alone).
+
+- More than half of the requested pages scanned without text: the import is refused, with what to do (run OCR:
+  Acrobat "Recognize Text", ABBYY FineReader, OCRmyPDF). A few such pages in a scanned book: a warning with their
+  pages.
+- OCR pages whose words are more than 5% unknown to the word list are read again with pdfminer.six (MIT); the
+  reading with fewer unknown words is kept, page by page. pdfium drops the last letter of most words in Trauma's
+  layer ("Althoug Hinduis i ofte"); pdfminer reads it clean. pypdf (BSD) splits those letters off instead.
+- More than 20% unknown words over the OCR pages after that: refused, with the share and the same advice. Measured
+  per book: digital books 1.1–9.0% (Far Calls the highest, for its Latin, Greek and French), the holdout 3.4–3.8%,
+  Trauma 37.8% through pdfium and 2.7% through pdfminer.
+- On OCR pages fonts say nothing (often one invisible font): the font name, italic and bold are dropped, size and
+  position stay. Words the list does not know go to `seg_meta.suspect` (flag `ocr-supheli`; a capitalised word met
+  three times or more counts as a name); the app underlines them, dotted, and a click opens the source page. The
+  warning: "Taranmış: italik/kalın bilgisi yok, N şüpheli sözcük."
+- The word list is `data/words_en.txt.gz`: SCOWL 2020.12.07 up to size 70 (131,776 words, 360 KB gzipped; licence
+  in `data/SCOWL-LICENSE.txt`, free to use, change and distribute with its notice).
+
 ## Notes and page references
 
 - **Callouts** (stage 2): digits or a note sign (`*†‡§¶`) set smaller and raised, right after a lowercase letter or
@@ -64,8 +85,10 @@ these are fixed values in `_shape_roles`, not thresholds. A deviation no rule na
   number (Sazima). A hanging-indented block of the same style goes on with the open note; small lines at the foot
   of the next page before any number go on with the last note when it ended mid-sentence. A paragraph inside a
   note is kept as a hard break; a number printed twice ("21 21") is dropped once more. Notes carry no review flag.
-- **Endnotes** (`resolve_notes`, stage 8): a "Notes" heading, numbered entries in groups under headings (a chapter's
-  title, "Chapter N") or directly under it. A group counts when it starts at 1 and mostly runs 1, 2, 3…; page-keyed
+- **Endnotes** (`resolve_notes`, stage 8): a section named Notes, Note, Endnotes, End Notes, Notes and Sources, Notes
+  to Chapter N (a heading or a plain line), numbered entries in groups. A group is named by a heading or a plain
+  short line (a chapter's title, "Chapter N", "N", a roman numeral) followed by its entry 1; with no name, numbering
+  that starts again at 1 starts a new group. A section none of whose notes is cited stays as it is, with a warning. A group counts when it starts at 1 and mostly runs 1, 2, 3…; page-keyed
   notes (John Reveal) and unnumbered source lists (NEI) are not notes. Bibliography, references, index and the like
   end a notes section and are never notes. Callouts are split into runs where the numbering starts again and the
   runs are aligned with the groups in order (most shared numbers), then matched by number.
@@ -296,12 +319,26 @@ first version of the importer; later rounds are the karne rounds, with the test 
 | `stray_tokens` | 6 | ...or up to this many one-letter tokens | round 1 |
 | `head_wrap_em` | 2.6 | a heading continues on the next line within this many sizes | round 1 |
 | `rotated_warn` | 20 | warn about turned text from this many glyphs | round 1 |
+| `textless_reject` | 0.5 | a scanned PDF with more than this share of pages without any text is refused | gaps 2 |
+| `image_on_page` | 0.5 | a picture with less than this share of its area on the page is not on it | gaps 2, Zukav |
+| `fig_display_size` | 1.2 | a line inside a picture set this many times the page's body size is a title, not a label | gaps 2, Zukav |
+| `ocr_retry` | 0.05 | an OCR page with more unknown words than this share is read again with pdfminer | gaps 2, Trauma (0.38 pdfium, 0.03 pdfminer) |
+| `ocr_reject` | 0.2 | OCR text with more unknown words than this share is refused | gaps 2: digital books 0.01-0.09 (Far Calls, Latin and Greek), Trauma's broken layer 0.38 |
+| `notes_label_words` | 12 | a plain line naming a group of notes has at most this many words | gaps 2 |
 | `ref_size` | 0.85 | a note callout is set at most this share of the line's size | gaps 1, Far Calls (0.5) |
 | `ref_raise` | 0.15 | ...with its baseline raised by more than this share of the size | gaps 1, Attachment |
 | `ref_max_chars` | 3 | ...and at most this many digits or signs | gaps 1 |
 | `ref_gap_em` | 0.5 | a callout row past a line's end starts within this many sizes of it | gaps 1, Far Calls |
 | `foot_size` | 0.92 | a page-bottom footnote is set at most this share of the body size | gaps 1 |
 | `notes_seq_share` | 0.7 | a notes group counts when this share of its entries follow 1, 2, 3... | gaps 1 |
+
+## Line-end hyphens
+
+pdfium marks a line-end hyphen itself; a hyphen (U+2010) or non-breaking hyphen (U+2011) at a line's end, and any
+line-end hyphen of a page read by pdfminer, are marked the same way. The hyphen stays when the book writes the
+compound with a hyphen elsewhere, or when both pieces are English words and the joined form is neither an English
+word nor a word of the book ("self-esteem" stays, "some-thing" and, in a book that writes it,
+"counter-transference" join).
 
 ## Known limits
 

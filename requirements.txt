@@ -5,4 +5,5 @@ google-genai
 python-docx
 cryptography
 pypdfium2
+pdfminer.six
 pypandoc_binary

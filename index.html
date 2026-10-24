@@ -243,6 +243,8 @@
   .sp-num{font-family:'Spline Sans Mono',monospace;font-size:10px;color:var(--ink-soft);margin-top:4px;}
   .sp-missing{font-family:'Spline Sans Mono',monospace;font-size:11px;color:var(--ink-soft);padding:20px 0;}
   .pref-flag{display:inline-block;margin-left:8px;color:var(--pencil);vertical-align:middle;line-height:0;cursor:default;}
+  mark.ocr-sus{background:none;color:inherit;text-decoration:underline dotted var(--pencil);text-underline-offset:3px;
+    text-decoration-thickness:1.5px;cursor:pointer;}
   .dev-flag{display:inline-block;width:7px;height:7px;margin-left:8px;padding:0;border:1.2px solid var(--pencil);border-radius:50%;
     background:none;cursor:pointer;vertical-align:middle;}
   .review-warn a.pg-link{color:inherit;text-decoration:underline;text-underline-offset:2px;cursor:pointer;}
@@ -1372,6 +1374,15 @@ function searchSpans(text,query){
 // **bold** / *italic* rendered without their asterisks. Highlights are laid
 // over raw indices; a highlight that crosses a bold/italic edge is emitted
 // as one <mark> per run so the tags never overlap.
+// OCR pages: the words the importer's word list does not know (segMeta.suspect), each occurrence as a span
+function suspectSpans(i){
+  const m=P&&Array.isArray(P.segMeta)?P.segMeta[i]:null, raw=P.segments[i], out=[];
+  ((m&&m.suspect)||[]).forEach(w=>{
+    const re=new RegExp('(?<![A-Za-z’\'])'+w.replace(/[.*+?^${}()|[\]\\]/g,'\\$&')+'(?![A-Za-z])','g');
+    for(const x of raw.matchAll(re)) out.push({start:x.index,end:x.index+w.length});
+  });
+  return out;
+}
 function renderSource(i){
   const raw=P.segments[i], c=inlineParse(raw), n=raw.length;
   let spans=[];
@@ -1380,6 +1391,7 @@ function renderSource(i){
   }else{
     glossHitsForText(raw).forEach(h=>findSpans(raw,h.src).forEach(sp=>
       spans.push({...sp,open:`<mark class="gloss-hit" onclick="showGlossPopup(event,${h.idx},${i})">`})));
+    suspectSpans(i).forEach(sp=>spans.push({...sp,open:`<mark class="ocr-sus" onclick="openSource(${i})" title="Şüpheli sözcük (OCR): kaynak sayfayı göster">`}));
   }
   spans=spans.filter(sp=>sp.start>=c.off).sort((a,b)=>a.start-b.start);
   const markAt=new Int32Array(n).fill(-1);

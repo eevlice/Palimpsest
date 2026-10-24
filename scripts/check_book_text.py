@@ -8,7 +8,8 @@ Run by the pre-commit hook (scripts/hooks/pre-commit) on the staged files, or by
 
 A file that shares a run of 6 words with one of the test books (the tuning and holdout books under
 ~/palimpsest-spike/karne and ~/palimpsest-spike/karne-holdout) stops the commit; every run found is shown with its
-book. The books are read only from this machine and never copied into the repo: from their gt.json (text already
+book. Files listed by exact path in scripts/book_text_allowlist.txt (each with its reason) are not read. The books
+are read only from this machine and never copied into the repo: from their gt.json (text already
 extracted) or, failing that, from kitap.pdf with pypdfium2. A word index is cached under ~/.palimpsest/. Without the
 book folders the check warns and lets the commit through. PALIMPSEST_BOOK_DIRS (paths separated by ':') replaces
 the default folders."""
@@ -25,6 +26,8 @@ HOME = os.path.expanduser("~")
 DEFAULT_DIRS = [os.path.join(HOME, "palimpsest-spike", "karne", "books"),
                 os.path.join(HOME, "palimpsest-spike", "karne-holdout", "books")]
 CACHE = os.path.join(HOME, ".palimpsest", "book_ngrams.pickle")
+ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+ALLOWLIST = os.path.join(ROOT, "scripts", "book_text_allowlist.txt")
 WORD = re.compile(r"[^\W_]+(?:['’][^\W_]+)?")
 
 
@@ -101,9 +104,20 @@ def on_disk(paths):
         yield path, open(path, "rb").read()
 
 
+def allowlist():
+    """the exact repo-relative paths in ALLOWLIST (a # starts the reason; no globs)"""
+    try:
+        lines = open(ALLOWLIST, encoding="utf-8").read().split("\n")
+    except FileNotFoundError:
+        return set()
+    return {os.path.normpath(l.split("#", 1)[0].strip()) for l in lines if l.split("#", 1)[0].strip()}
+
+
 def find(idx, files):
-    hits = []
+    hits, allowed = [], allowlist()
     for path, blob in files:
+        if os.path.relpath(os.path.realpath(path), os.path.realpath(ROOT)) in allowed:    # the hook runs at the repo root
+            continue                                # listed with its reason (a licence kept verbatim)
         if b"\0" in blob[:4096]:
             continue                                # binary (reference.docx): not text
         ws = words(blob.decode("utf-8", "replace"))

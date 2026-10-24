@@ -1,0 +1,3 @@
+# Files the book-text check does not read: one path per line, relative to the repo root, exactly as written (no
+# globs, no name patterns), each with the reason after a #. Add a file only when its text must stay verbatim.
+data/SCOWL-LICENSE.txt  # SCOWL licence, kept verbatim as it requires; its stock legal wording also occurs in a test book

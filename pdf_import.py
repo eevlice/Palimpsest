@@ -29,6 +29,9 @@ import math
 import ctypes
 import statistics
 import collections
+import functools
+import gzip
+import os
 
 import pypdfium2 as pdfium
 import pypdfium2.raw as raw
@@ -54,6 +57,11 @@ THRESHOLDS = {
     "vrule_min_len": 6,           # shortest vertical rule - round 2
     "scan_invisible_ratio": 9,    # invisible text objects at least this many times the visible ones under a full-page image: a scanned page - round 1, Trauma
     "scan_page_share": 0.5,       # share of text pages that look scanned for the whole book to count as scanned - round 1, Trauma
+    "textless_reject": 0.5,       # a scanned PDF with more than this share of pages without any text is refused - gaps 2
+    "image_on_page": 0.5,         # a picture with less than this share of its area on the page is not on it - gaps 2, Zukav
+    "fig_display_size": 1.2,      # a line inside a picture set this many times the page's body size is a title, not a label - gaps 2, Zukav
+    "ocr_retry": 0.05,            # an OCR page with more unknown words than this share is read again with pdfminer - gaps 2, Trauma (0.38 pdfium, 0.03 pdfminer)
+    "ocr_reject": 0.2,            # OCR text with more unknown words than this share is refused - gaps 2: digital books 0.01-0.09 (Far Calls, Latin and Greek), Trauma's broken layer 0.38
     "ornament_glyphs": 30,        # an ornament-named font with fewer glyphs in the book is decoration - round 1
     "min_chars_page": 20,         # fewer characters per selected page: no text layer - round 0
     "min_chars_total": 400,       # ...and fewer in total - round 0
@@ -251,6 +259,7 @@ THRESHOLDS = {
     "ref_max_chars": 3,           # ...and at most this many digits or signs - gaps 1
     "ref_gap_em": 0.5,            # a callout row past a line's end starts within this many sizes of it - gaps 1, Far Calls
     "foot_size": 0.92,            # a page-bottom footnote is set at most this share of the body size - gaps 1
+    "notes_label_words": 12,      # a plain line naming a group of notes has at most this many words - gaps 2
     "notes_seq_share": 0.7,       # a notes group counts when this share of its entries follow 1, 2, 3... - gaps 1
 }
 
@@ -299,6 +308,27 @@ def fam_of(style):
 REF_OPEN, REF_CLOSE = "\ue000", "\ue001"
 REF = re.compile(REF_OPEN + "([^" + REF_CLOSE + "]*)" + REF_CLOSE)
 NOTE_SIGNS = "*†‡§¶"
+WORD = re.compile(r"[A-Za-z][A-Za-z’']*[A-Za-z]|[A-Za-z]")
+
+
+@functools.lru_cache(maxsize=1)
+def english_words():
+    """SCOWL up to size 70 (data/SCOWL-LICENSE.txt): lowercase English words, inflections included"""
+    with gzip.open(os.path.join(os.path.dirname(os.path.abspath(__file__)), "data", "words_en.txt.gz"), "rt",
+                   encoding="utf-8") as f:
+        return frozenset(f.read().split())
+
+
+def word_key(w):
+    """a token as the word list has it: lowercase, straight apostrophe, no possessive 's"""
+    w = w.replace("’", "'").lower()
+    return w[:-2] if w.endswith("'s") else w
+
+
+def unknown_words(text):
+    """the words of text (two letters or more, or a/I) that are not English words"""
+    E = english_words()
+    return [t for t in WORD.findall(text) if (len(t) >= 2 or t in "aAI") and word_key(t) not in E]
 
 
 def terminal(s):
@@ -445,6 +475,9 @@ def _page_graphics(page):
             continue
         if o.type == raw.FPDF_PAGEOBJ_IMAGE:
             l, b, r, t = o.get_bounds()
+            seen = max(0, min(r, W) - max(l, 0)) * max(0, min(t, H) - max(b, 0))
+            if seen < T["image_on_page"] * (r - l) * (t - b):
+                continue                    # mostly off the page: the bleed of a picture across a spread (Zukav)
             if (r - l) * (t - b) >= T["fullpage_image_share"] * W * H:
                 big = True                  # a scanned page or a full-page background: not a figure
             elif r - l >= T["image_min_side"] and t - b >= T["image_min_side"]:
@@ -465,6 +498,69 @@ def _page_graphics(page):
                     vl.append((x0, min(y0, y1), max(y0, y1)))
             prev = pt if kind != raw.FPDF_SEGMENT_BEZIERTO else None
     return dict(images=images, hl=hl, vl=vl, signals=(big, inv, vis))
+
+
+def page_kind(signals):
+    """"ocr": a full-page image under (mostly) invisible text; "scan": a full-page image and no text at all;
+    "digital": everything else"""
+    big, inv, vis = signals
+    if big and inv and inv >= T["scan_invisible_ratio"] * vis:
+        return "ocr"
+    return "scan" if big and not inv + vis else "digital"
+
+
+def _miner_chars(pdf_bytes, wanted):
+    """the glyphs of some pages read by pdfminer.six instead of pdfium ({page index: [Ch]}), for OCR layers pdfium
+    reads wrong (it drops the last letter of most words in Trauma's). Empty when pdfminer is not installed."""
+    try:
+        from pdfminer.pdfparser import PDFParser
+        from pdfminer.pdfdocument import PDFDocument
+        from pdfminer.pdfpage import PDFPage
+        from pdfminer.pdfinterp import PDFResourceManager, PDFPageInterpreter
+        from pdfminer.converter import PDFPageAggregator
+        from pdfminer.layout import LTChar, LTContainer
+    except ImportError:
+        return {}
+    import io
+    import logging
+    logging.getLogger("pdfminer").setLevel(logging.ERROR)
+    rsrc = PDFResourceManager()
+    dev = PDFPageAggregator(rsrc, laparams=None)
+    interp = PDFPageInterpreter(rsrc, dev)
+    out = {}
+    for i, page in enumerate(PDFPage.create_pages(PDFDocument(PDFParser(io.BytesIO(pdf_bytes))))):
+        if i not in wanted:
+            continue
+        interp.process_page(page)
+        top = page.mediabox[3]
+        chars = []
+
+        def walk(o):
+            for c in o:
+                if isinstance(c, LTChar):
+                    t = c.get_text()
+                    if len(t) == 1 and t not in "\r\n":
+                        chars.append(Ch(t, c.x0, c.x1, top - c.y1, top - c.y0, top - c.matrix[5], c.fontname, c.size,
+                                        idx=len(chars)))
+                elif isinstance(c, LTContainer):
+                    walk(c)
+        walk(dev.get_result())
+        out[i] = _dedupe(chars)
+    return out
+
+
+def unknown_share(chars):
+    """(unknown words, words) of a page's glyphs read in content order; a word ends at a space, a gap of a quarter
+    size or a new baseline"""
+    out, prev = [], None
+    for c in chars:
+        if prev is not None and (c.gsp or abs(c.base - prev.base) > 0.5 * c.size or c.x0 - prev.x1 > 0.25 * c.size):
+            out.append(" ")
+        out.append("" if c.ch in "\x02\u00ad" else c.ch)
+        prev = c
+    words = [t for t in WORD.findall("".join(out)) if len(t) >= 2 or t in "aAI"]
+    E = english_words()
+    return sum(word_key(t) not in E for t in words), len(words)
 
 
 def is_scanned(producer, signals):
@@ -723,6 +819,11 @@ def _mark_refs(l):
 
 
 def _prepare_line(l):
+    # pdfium marks a line-end hyphen as \x02 itself, but not a hyphen or non-breaking hyphen (U+2010, U+2011), nor
+    # any hyphen of a page read by pdfminer (OCR pages)
+    ink = [c for c in l["chars"] if c.ch.strip()]
+    if len(ink) >= 2 and ink[-2].ch.isalpha() and (ink[-1].ch in "\u2010\u2011" or ink[-1].ch == "-" and ink[-1].font == "OCR"):
+        ink[-1].ch = "\x02"
     _mark_refs(l)
     toks = line_tokens(l)
     l["md"], l["md_nobold"] = inline_md(toks, True), inline_md(toks, False)
@@ -812,13 +913,17 @@ def build_blocks(page_no, W, H, chars, boxes, orn_fonts=frozenset(), images=(), 
     # box ("Fig. 2: ...", a wide line along its top or bottom edge): those become the figure's captions. A lot of text
     # over an image is real text set on a background: it stays.
     page_lines = build_lines(chars, page_no, orn_fonts) if images else []
+    page_body = statistics.median([c.size for c in chars if c.ch.strip()] or [T["default_body_pt"]])
     for k, im in enumerate(sorted(images, key=lambda b: (round(b[1]), b[0])), 1):
         h, w = im[3] - im[1], im[2] - im[0]
 
         def label(l):
             """a diagram label, as opposed to a title or caption printed inside the picture's box: one that reads like a
-            caption, or a wide line (35%+ of the picture) in the top or bottom 15% of it, stays in the text"""
+            caption, or a wide line (35%+ of the picture) in the top or bottom 15% of it, stays in the text; so does
+            display type well above the page's body size (a chapter number and title on an ornament band, Zukav)"""
             if CAPTION.match("".join(c.ch for c in l["chars"]).replace("*", "")):
+                return False
+            if l["size"] >= T["fig_display_size"] * page_body:
                 return False
             wide = l["x1"] - l["x0"] >= T["fig_title_width"] * w
             edge = l["bot"] <= im[1] + T["fig_title_band"] * h or l["top"] >= im[3] - T["fig_title_band"] * h
@@ -1863,9 +1968,18 @@ class _Merges:
         return lex
 
     def hyphen_real(self, left, right):
-        """A line-end hyphen before a lowercase word is real only when the book writes that compound with a hyphen
-        elsewhere ("half-" + "moon-shaped" counts "half-moon" too); otherwise the word is joined."""
-        return (left + "-" + right).lower() in self.lex or (left + "-" + right.split("-")[0]).lower() in self.lex
+        """A line-end hyphen before a lowercase word is real when the book writes that compound with a hyphen
+        elsewhere ("half-" + "moon-shaped" counts "half-moon" too), or when both pieces are English words and the
+        joined form is neither one nor a word of the book, an -s/-es/-ed/-ing form included ("self-" + "esteem";
+        "counter-" + "transference" joins in a book that writes "countertransference", "over-" + "hearer" in one that
+        writes "overhearers"); otherwise the word is joined ("some-" + "thing")."""
+        a, b = left.lower(), right.split("-")[0].lower()
+        if (left + "-" + right).lower() in self.lex or (a + "-" + b) in self.lex:
+            return True
+        E = english_words()
+        j = a + b
+        in_book = any(f in self.words for f in (j, j + "s", j + "es", j + "ed", j + "ing", j[:-1] if j.endswith("s") else j))
+        return a in E and b in E and j not in E and not in_book
 
     def hyphen_ambiguous(self, left, right):
         """A join with no evidence in the book: the joined form never occurs, yet both pieces do as words of their own
@@ -1990,7 +2104,11 @@ def _meta_add(m, other):
     m["role"], m["conf"] = m.get("role") or other.get("role"), m.get("conf") or other.get("conf")
 
 
-NOTES_HEAD = re.compile(r"^[*_]*(end ?)?notes?[*_]*$", re.I)
+# a notes section's name: Notes, Note, Endnotes, End Notes, Notes and Sources, Notes to Chapter 3, ...
+NOTES_HEAD = re.compile(r"^[*_]*(?:end\s*)?notes?(?:\s+(?:and|&)\s+(?:sources|references|further reading))?"
+                        r"(?:\s+(?:to|for|on)\s+(?:the\s+)?(?:chapter|ch\.|part)\s+[\w.]+)?[*_.:]*$", re.I)
+# a group label inside a notes section, as a heading or a plain line: "Chapter 3", "3", "III", or a chapter's title
+GROUP_NUMBER = re.compile(r"^[*_]*(?:chapter|ch\.|part)?\s*(\d{1,3}|[ivxlc]{1,7})[*_.:]*$", re.I)
 # sections that end a notes section and are never notes themselves
 NOT_NOTES = re.compile(r"\b(bibliography|references|works cited|sources|further reading|suggested readings?|"
                        r"recommended readings?|index|appendix|glossary|acknowledgm?ents?|about the authors?|permissions|"
@@ -2020,17 +2138,36 @@ def _notes_sections(md):
     lowercase or keeps the entry's size. The section ends at a heading with no entry under it, at a bibliography,
     index and the like, or at text that does not go on. A group counts when it starts at 1 and its numbers mostly
     follow each other (page-keyed notes, "2 Take John ...", do not). -> [dict(head, groups=[dict(head, entries)])]"""
+    def entry_at(k):
+        """the number of the first entry from k on (figures skipped), or None"""
+        while k < len(md) and md[k][0] in ("p", "raw") and _txt(md[k]).startswith("!"):
+            k += 1
+        if k < len(md) and md[k][0] in ("p", "raw", "quote", "note"):
+            e = NOTE_ENTRY.match(_txt(md[k]).strip())
+            return int(e.group(1)) if e else None
+        return None
+
+    def label(t, k):
+        """a plain line naming the next group: short, no sentence, and the group's entry 1 follows"""
+        return (len(t.split()) <= T["notes_label_words"] and (GROUP_NUMBER.match(t) or not terminal(t))
+                and not NOTE_ENTRY.match(t) and entry_at(k + 1) == 1)
+
     out, i = [], 0
     while i < len(md):
         it = md[i]
-        if not (it[0] == "head" and NOTES_HEAD.match(it[1]["text"].strip())):
+        if not (it[0] in ("head", "p", "raw") and NOTES_HEAD.match(_txt(it).strip())):
             i += 1
             continue
         sec, j, grp = dict(head=i, groups=[]), i + 1, None
         while j < len(md):
             kind, v, m = md[j]
             t = _txt(md[j]).strip() if kind in ("p", "head", "note", "quote", "raw") else ""
-            if kind == "head":
+            if kind != "head" and NOTES_HEAD.match(t):
+                break
+            if kind != "head" and t and label(t, j) and (grp is None or grp["entries"]):
+                grp = dict(head=j, entries=[])
+                sec["groups"].append(grp)
+            elif kind == "head":
                 nxt = next((k for k in range(j + 1, len(md)) if md[k][0] != "head"), None)
                 if NOTES_HEAD.match(t) or NOT_NOTES.search(t) or nxt is None or not NOTE_ENTRY.match(_txt(md[nxt]).strip()):
                     break
@@ -2049,6 +2186,15 @@ def _notes_sections(md):
             else:
                 break
             j += 1
+        # with no label between them, numbering that starts again at 1 starts a new group (a chapter's notes)
+        split = []
+        for g in sec["groups"]:
+            split.append(dict(head=g["head"], entries=[]))
+            for e in g["entries"]:
+                if e["n"] == 1 and split[-1]["entries"]:
+                    split.append(dict(head=None, entries=[]))
+                split[-1]["entries"].append(e)
+        sec["groups"] = split
         for g in sec["groups"]:
             # a number out of sequence that comes again later is a line of the note before ("17.541-50, / 18.158")
             es = g["entries"]
@@ -2200,6 +2346,9 @@ def resolve_notes(md, stats):
     stats["note_refs_unmatched"] += len(calls) - len(label_of)
     stats["note_bodies_unmatched"] += len(feet) - matched_feet + sum(len(g["entries"]) for g in groups) - len(entry_label)
     stats["notes_heads_removed"] += removed
+    for s in sections:
+        if not any(e["i"] in entry_label for g in s["groups"] for e in g["entries"]):
+            stats.setdefault("notes_unmatched_pages", []).extend(sorted(md[s["head"]][2]["pages"])[:1])
 
 
 PAGE_REF = re.compile(r"\b(?:pp?\.|pages?)\s?(\d{1,4})(?:\s?[–—-]\s?(\d{1,4}))?\b(?!\s?(?:%|percent))")
@@ -2499,6 +2648,24 @@ def build_markdown(doc, first_idx, last_idx):
     return "\n\n".join(out) + "\n", stats
 
 
+def _flag_suspects(md, meta, ocr_pages):
+    """OCR segments: the words the word list does not know go to seg_meta "suspect" (flag "ocr-supheli"); a
+    capitalised word met three times or more is taken for a name. Returns the number of suspect words."""
+    segs = [x for x in re.split(r"\n\s*\n", md) if x.strip()]
+    plain = lambda t: re.sub(r"\[\^[^\]\s]+\]:?|:::.*|[*_`>#|]", " ", t)
+    caps = collections.Counter(w for t in segs for w in unknown_words(plain(t)) if w[:1].isupper())
+    n = 0
+    for t, m in zip(segs, meta):
+        if not ocr_pages & set(m["pages"]):
+            continue
+        sus = [w for w in unknown_words(plain(t)) if not (w[:1].isupper() and caps[w] >= 3)]
+        if sus:
+            m["suspect"] = list(dict.fromkeys(sus))
+            m["flags"] = sorted(set(m["flags"]) | {"ocr-supheli"})
+            n += len(sus)
+    return n
+
+
 def _page_ranges(first_page, last_page, n):
     first = 1 if first_page in (None, "") else int(first_page)
     last = n if last_page in (None, "") else int(last_page)
@@ -2539,12 +2706,43 @@ def _analyse(pdf_bytes, first_page=None, last_page=None):
     for i in range(n):
         page = doc[i]
         chars = _page_chars(page)
-        for c in chars:
-            if c.ch.strip():
-                font_count[c.font] += 1
         gfx = _page_graphics(page)
         raw_pages.append((page.get_width(), page.get_height(), chars, _tint_boxes(page), gfx))
         signals.append(gfx["signals"])
+    kinds = [page_kind(sg) for sg in signals]
+    sel = range(first - 1, last)
+    textless = [i + 1 for i in sel if kinds[i] == "scan"]
+    if len(textless) > T["textless_reject"] * len(sel):
+        raise PdfImportError(f"Bu PDF taranmış ve sayfalarının çoğunda ({len(textless)}/{len(sel)}) metin katmanı yok; "
+                             "çevrilecek metin okunamıyor. Önce bir OCR programıyla metin katmanı ekle (ör. Adobe Acrobat "
+                             "'Metni Tanı', ABBYY FineReader ya da ücretsiz OCRmyPDF), sonra yeniden içe aktar.")
+    # OCR pages: an unreadable layer is read again with pdfminer, the cleaner reading of each page is kept; fonts and
+    # their italic/bold say nothing in an OCR layer (often one invisible font), so size and position alone remain
+    ocr = [i for i in range(n) if kinds[i] == "ocr"]
+    unk = {i: unknown_share(raw_pages[i][2]) for i in ocr}
+    retry = {i for i in ocr if unk[i][0] > T["ocr_retry"] * max(1, unk[i][1])}
+    miner = _miner_chars(pdf_bytes, retry) if retry else {}
+    for i, chars in list(miner.items()):
+        u = unknown_share(chars)
+        if u[0] / max(1, u[1]) < unk[i][0] / max(1, unk[i][1]):
+            raw_pages[i] = raw_pages[i][:2] + (chars,) + raw_pages[i][3:]
+            unk[i] = u
+        else:
+            del miner[i]
+    for i in ocr:
+        for c in raw_pages[i][2]:
+            c.font, c.italic, c.bold, c.weight = "OCR", False, False, 400
+    sel_ocr = [i for i in ocr if first - 1 <= i < last]
+    bad, words = sum(unk[i][0] for i in sel_ocr), sum(unk[i][1] for i in sel_ocr)
+    if words and bad > T["ocr_reject"] * words:
+        raise PdfImportError(f"Bu PDF taranmış ve OCR metni çok bozuk: sözcüklerin %{round(100 * bad / words)} kadarı "
+                             f"sözlükte yok (sınır %{round(100 * T['ocr_reject'])}). Metin katmanını daha iyi bir OCR ile "
+                             "yeniden oluştur (ör. Adobe Acrobat 'Metni Tanı', ABBYY FineReader ya da ücretsiz OCRmyPDF), "
+                             "sonra yeniden içe aktar.")
+    for rp in raw_pages:
+        for c in rp[2]:
+            if c.ch.strip():
+                font_count[c.font] += 1
     total_chars = sum(len(rp[2]) for rp in raw_pages[first - 1:last])
     if total_chars < T["min_chars_page"] * (last - first + 1) and total_chars < T["min_chars_total"]:
         raise PdfImportError("Bu PDF'te (seçilen sayfalarda) metin katmanı yok ya da çok az. Taranmış bir PDF olabilir; "
@@ -2565,13 +2763,22 @@ def _analyse(pdf_bytes, first_page=None, last_page=None):
     scanned = is_scanned(producer, signals)
     rotated = sum(p.get("rotated", 0) for p in d.pages[first - 1:last])
     warnings = [SCANNED_WARNING] if scanned else []
+    if sel_ocr:
+        suspects = _flag_suspects(md, d.seg_meta, {i + 1 for i in sel_ocr})
+        warnings.append(f"Taranmış: italik/kalın bilgisi yok, {suspects} şüpheli sözcük.")
+        used = sorted(i + 1 for i in miner if first - 1 <= i < last)
+        if used:
+            warnings.append(f"OCR katmanı {len(used)} sayfada yedek okuyucuyla (pdfminer) okundu: " + _fmt_pages(used) + ".")
+    if textless and ocr:
+        warnings.append("Metin katmanı olmayan taranmış sayfalar: " + _fmt_pages(textless) + " (çevrilmeyecek; gerekirse "
+                        "bu sayfalara OCR uygulanmalı).")
     two = [p["p"] for p in d.pages[first - 1:last] if p["two_col"] and p["p"] not in d.index_pages]
     if two:
         warnings.append("İki sütunlu görünen sayfalar: " + _fmt_pages(two) + " (önce sol, sonra sağ sütun yazıldı; metni kontrol et).")
     if stats["page_merges"]:
         warnings.append(f"{stats['page_merges']} paragraf sayfa geçişinde birleştirildi.")
     if stats["hyphen_real"]:
-        warnings.append(f"{stats['hyphen_real']} satır sonu tiresi gerçek tire sayıldı (kitapta aynı sözcük tireli de geçiyor); "
+        warnings.append(f"{stats['hyphen_real']} satır sonu tiresi gerçek tire sayıldı (kitapta tireli geçiyor ya da iki parçası sözcük, birleşik hali değil); "
                         f"{stats['hyphen_soft']} tanesi hece bölme sayılıp birleştirildi.")
     if stats["hyphen_ambiguous"]:
         warnings.append(f"{stats['hyphen_ambiguous']} belirsiz tire birleştirildi.")
@@ -2609,6 +2816,9 @@ def _analyse(pdf_bytes, first_page=None, last_page=None):
         if stats["notes_heads_removed"]:
             w += f" Boşalan {stats['notes_heads_removed']} not başlığı kaldırıldı."
         warnings.append(w)
+    if stats.get("notes_unmatched_pages"):
+        warnings.append("Not bölümü bulundu (s. " + _fmt_pages(sorted(set(stats["notes_unmatched_pages"]))) + ") ama notları "
+                        "metindeki atıflara bağlanamadı; olduğu gibi bırakıldı, kontrol et.")
     if stats["page_refs"]:
         warnings.append(f"{stats['page_refs']} paragrafta kitap içi sayfa göndermesi var (\"sayfa-gonderme\"): Türkçe "
                         "baskıda sayfa numaraları değişecek.")

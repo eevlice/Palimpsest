@@ -48,6 +48,30 @@ code, err = run('x = "the quiet lantern keeper counted"')
 check("five shared words are not enough", code == 0, err)
 code, err = run(b"\x00\x01the quiet lantern keeper counted seven grey boats", binary=True)
 check("binary files are not read", code == 0)
+# a file listed by its exact path in the allowlist is not read; the same text at any other path is
+repo = os.path.join(HOME, "repo")
+os.makedirs(os.path.join(repo, "data")); os.makedirs(os.path.join(repo, "other"))
+C.ROOT, C.ALLOWLIST = repo, os.path.join(repo, "allow.txt")
+open(C.ALLOWLIST, "w").write("# reasons after a hash\ndata/LICENCE.txt  # a licence kept verbatim\n")
+text = "Granted, including the quiet lantern keeper counted seven grey boats."
+for rel in ("data/LICENCE.txt", "other/LICENCE.txt", "data/LICENCE.txt.bak"):
+    open(os.path.join(repo, rel), "w").write(text)
+err = io.StringIO()
+with contextlib.redirect_stderr(err):
+    listed = C.main([os.path.join(repo, "data", "LICENCE.txt")])
+    elsewhere = C.main([os.path.join(repo, "other", "LICENCE.txt")])
+    lookalike = C.main([os.path.join(repo, "data", "LICENCE.txt.bak")])
+check("allowlist: the listed path passes; the same text at another path or a look-alike name stops the commit",
+      (listed, elsewhere, lookalike) == (0, 1, 1), (listed, elsewhere, lookalike, err.getvalue()))
+cwd = os.getcwd(); os.chdir(repo)
+with contextlib.redirect_stderr(io.StringIO()):
+    rel_ok = C.main(["data/LICENCE.txt"])
+os.chdir(cwd)
+check("allowlist: a path given relative to the repo root (as the hook gives staged files) is matched too", rel_ok == 0, rel_ok)
+check("the repo's allowlist names exact paths only, each with a reason",
+      all("#" in l and not any(ch in l.split("#")[0] for ch in "*?[") for l in open(os.path.join(os.path.dirname(HERE), "scripts", "book_text_allowlist.txt"))
+          if l.strip() and not l.startswith("#")))
+
 os.environ["PALIMPSEST_BOOK_DIRS"] = os.path.join(HOME, "nowhere")
 code, err = run('rows = [("the quiet lantern keeper counted seven", 100, 200)]')
 check("without the book folders: a warning, and the commit goes through", code == 0 and "atlandı" in err, err)

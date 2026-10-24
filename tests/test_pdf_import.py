@@ -344,13 +344,16 @@ short = doc_from([[("Short paragraph number %d of page %d here." % (k, p), 112 i
                    for k in range(12)] for p in range(1, 7)])
 check("the most-worded style is body even when its paragraphs are short", short.sugg[short.body_style] == ("gövde", "en çok kelimeli stil"), short.sugg[short.body_style])
 
-# -- hyphen joins without evidence are counted, never decided differently
+# -- a line-end hyphen stays when the book writes the compound, or when both pieces are English words and the joined
+#    form is not; otherwise the word is joined
 words_doc = doc_from([body_rows(1, top=200, n=2) + [("some stress and free time and elementary things and self-aware people", 100, 260, "Body-Regular", 11)]]
                      + [body_rows(p) for p in range(2, 5)])
-check("only a compound the book writes with a hyphen keeps it", words_doc.hyphen_real("self", "aware") and not words_doc.hyphen_real("stress", "free"))
+check("a compound the book writes, or two words whose joined form is no word, keep the hyphen; a split word joins",
+      words_doc.hyphen_real("self", "aware") and words_doc.hyphen_real("stress", "free")
+      and not words_doc.hyphen_real("some", "thing") and not words_doc.hyphen_real("ele", "mentary"))
 st = collections.Counter()
 out = P.join_lines(["a stress\x02", "free week"], words_doc.hyphen_real, st, words_doc.hyphen_ambiguous)
-check("both pieces are words, joined form unseen: still joined, counted as ambiguous", out == "a stressfree week" and st["hyphen_ambiguous"] == 1, (out, st))
+check("both pieces are words, joined form no word: the hyphen stays (not counted as ambiguous)", out == "a stress-free week" and st["hyphen_ambiguous"] == 0, (out, st))
 st = collections.Counter()
 P.join_lines(["an ele\x02", "mentary school"], words_doc.hyphen_real, st, words_doc.hyphen_ambiguous)
 check("a join the book confirms (the joined word occurs) is not ambiguous", st["hyphen_ambiguous"] == 0 and st["hyphen_soft"] == 1, st)
@@ -359,7 +362,8 @@ check("a join the book confirms (the joined word occurs) is not ambiguous", st["
 check("OCR software in the producer means scanned", P.is_scanned("ABBYY PDF Transformer 2.0", []) and not P.is_scanned("Adobe InDesign 20.1", []))
 
 
-def scanned_pdf(n=4, invisible=True, image=True, size=(522, 738)):
+def scanned_pdf(n=4, invisible=True, image=True, size=(522, 738), text=None, textless=(), font=b"Helvetica"):
+    """text(p, k) gives line k of page p; pages in textless carry the image only"""
     pdf = pdfium.PdfDocument.new()
     for p in range(n):
         page = pdf.new_page(*size)
@@ -370,10 +374,10 @@ def scanned_pdf(n=4, invisible=True, image=True, size=(522, 738)):
             raw.FPDFImageObj_SetBitmap(None, 0, img, bm)
             raw.FPDFPageObj_Transform(img, size[0], 0, 0, size[1], 0, 0)
             raw.FPDFPage_InsertObject(page.raw, img)
-        for k in range(8):
-            text = f"Recognised line {k} of scanned page {p} with some ordinary words in it."
-            obj = raw.FPDFPageObj_NewTextObj(pdf.raw, b"Helvetica", 11)
-            buf = (ctypes.c_ushort * (len(text) + 1))(*([ord(c) for c in text] + [0]))
+        for k in range(0 if p in textless else 8):
+            t = text(p, k) if text else f"Recognised line {k} of scanned page {p} with some ordinary words in it."
+            obj = raw.FPDFPageObj_NewTextObj(pdf.raw, font, 11)
+            buf = (ctypes.c_ushort * (len(t) + 1))(*([ord(c) for c in t] + [0]))
             raw.FPDFText_SetText(obj, buf)
             if invisible:
                 raw.FPDFTextObj_SetTextRenderMode(obj, raw.FPDF_TEXTRENDERMODE_INVISIBLE)
@@ -389,6 +393,80 @@ md, warns = P.convert(scanned_pdf())
 check("full-page image under invisible text: the scanned warning comes first", warns[:1] == [P.SCANNED_WARNING], warns)
 md, warns = P.convert(scanned_pdf(invisible=False, image=False))
 check("an ordinary text PDF gets no scanned warning", P.SCANNED_WARNING not in warns, warns)
+
+# -- scanned PDF policy: page kinds, textless pages, OCR quality, fonts, suspect words
+check("page kinds: image under invisible text is OCR, an image alone a textless scan, anything else digital",
+      [P.page_kind(s_) for s_ in ((True, 40, 0), (True, 0, 0), (False, 0, 30), (True, 2, 30))] == ["ocr", "scan", "digital", "digital"])
+try:
+    P.convert(scanned_pdf(n=6, textless={0, 1, 2, 3}))
+    err = None
+except P.PdfImportError as e:
+    err = str(e)
+check("most pages scanned without text: refused, with what to do", err is not None and "4/6" in err and "OCR" in err, err)
+md, warns = P.convert(scanned_pdf(n=8, textless={7}))
+check("a few textless scanned pages: a warning with their pages", any(w.startswith("Metin katmanı olmayan taranmış sayfalar: 8") for w in warns), warns)
+check("OCR pages: the warning says italic/bold is gone and counts the suspect words",
+      any(w == "Taranmış: italik/kalın bilgisi yok, 0 şüpheli sözcük." for w in warns), warns)
+GARBLE = "Althoug Hinduis i ofte though t b unconcerne wit sufferin i thi lif becaus o th emphasi"
+try:
+    P.convert(scanned_pdf(n=4, text=lambda p, k: GARBLE))
+    err = None
+except P.PdfImportError as e:
+    err = str(e)
+check("an OCR layer whose words are mostly no words: refused with the share and a suggestion",
+      err is not None and "%" in err and "sözlükte yok" in err and "OCRmyPDF" in err, err)
+md, warns, meta = P.convert_with_meta(scanned_pdf(n=6, font=b"Helvetica-Bold",
+                                                  text=lambda p, k: f"Plain line {k} of the page {p} names a recognisd word in it."))
+segs = [x for x in md.split("\n\n") if x.strip()]
+check("OCR pages: font names give no bold (size and position stay)", "**" not in md and "*" not in md, md[:200])
+check("OCR pages: words the list does not know are flagged in seg_meta",
+      any("recognisd" in (m.get("suspect") or []) and "ocr-supheli" in m["flags"] for m in meta)
+      and any("şüpheli sözcük" in w and not w.endswith(" 0 şüpheli sözcük.") for w in warns), [m.get("suspect") for m in meta][:3])
+pdf = scanned_pdf(n=2)
+doc_ = pdfium.PdfDocument(pdf)
+mc = P._miner_chars(pdf, {0})[0]
+pc = [c for c in P._page_chars(doc_[0]) if c.ch.strip()]
+mc = [c for c in mc if c.ch.strip()]
+check("pdfminer reads the same glyphs at the same spots as pdfium on a clean layer",
+      "".join(c.ch for c in mc) == "".join(c.ch for c in pc) and all(abs(a.x0 - b.ox) < 0.5 and abs(a.base - b.base) < 0.5 and a.size == b.size for a, b in zip(mc, pc)),
+      ("".join(c.ch for c in mc)[:60], "".join(c.ch for c in pc)[:60]))
+check("unknown-word share: a broken OCR line against a clean one",
+      P.unknown_share([c for c in P._page_chars(pdfium.PdfDocument(scanned_pdf(n=1, text=lambda p, k: GARBLE))[0])])[0] > 10
+      and P.unknown_share(pc)[0] == 0)
+
+
+# -- a non-breaking hyphen at a line's end is a line-end hyphen too
+L = lines_text(line("a funda\u2011", 100, 200) + line("mental idea", 100, 214, idx0=20))
+check("U+2011 at a line's end is marked like pdfium's own line-end hyphen", L[0]["plain"].endswith("\x02"), [l["plain"] for l in L])
+check("...and joins as a split word", P.join_lines([l["md"] for l in L], lambda a, b: False, collections.Counter()) == "a fundamental idea")
+
+
+# -- a picture mostly off the page (the bleed of a spread) is no figure of that page; display type inside a picture
+#    is text, not a diagram label
+def bleed_pdf(x0):
+    pdf = pdfium.PdfDocument.new()
+    page = pdf.new_page(500, 700)
+    bm = raw.FPDFBitmap_Create(8, 8, 0)
+    raw.FPDFBitmap_FillRect(bm, 0, 0, 8, 8, 0xFF888888)
+    img = raw.FPDFPageObj_NewImageObj(pdf.raw)
+    raw.FPDFImageObj_SetBitmap(None, 0, img, bm)
+    raw.FPDFPageObj_Transform(img, 440, 0, 0, 150, x0, 520)
+    raw.FPDFPage_InsertObject(page.raw, img)
+    raw.FPDFPage_GenerateContent(page.raw)
+    out = io.BytesIO()
+    pdf.save(out)
+    return pdfium.PdfDocument(out.getvalue())[0]
+
+
+check("a picture with most of its area off the page is not a figure of the page",
+      P._page_graphics(bleed_pdf(-400))["images"] == [] and len(P._page_graphics(bleed_pdf(30))["images"]) == 1)
+band = (30, 30, 470, 180)
+k = line("Chapter Title On A Band", 120, 150, "Head-Medium", 16) + line("a b label", 300, 100, "Body-Regular", 9, idx0=40)
+k += [c for j in range(8) for c in line("Body %d of the page with ordinary running words of prose here." % j, 100, 250 + 14 * j, idx0=100 + 80 * j)]
+pg = P.build_blocks(1, 500, 700, k, [], images=[band])
+texts = [b_["text"] for b_ in pg["blocks"]]
+check("display type inside a picture stays text; a small label inside it belongs to the picture",
+      any("Chapter Title On A Band" in t for t in texts) and not any("a b label" in t for t in texts), texts[:3])
 
 
 def rotated_pdf(n=5, size=(522, 738)):
@@ -492,7 +570,8 @@ rows = body_rows(1, top=200, n=2) + [("we keep stress and some free time and an 
                                      ("mentary list of plain words here", 100, 274, "Body-Regular", 11)]
 d = doc_from([rows] + [body_rows(p) for p in range(2, 5)])
 check("pieces of a split word are not counted as words", "ele" not in d.words and "mentary" not in d.words and "stress" in d.words and "list" in d.words)
-check("the counter never changes the decision", not d.hyphen_real("stress", "free") and d.hyphen_ambiguous("stress", "free"))
+check("the counter only counts: two words of the book whose joined form neither the book nor the word list has",
+      d.hyphen_real("stress", "free") and d.hyphen_ambiguous("stress", "free"))
 
 
 # -- end to end: a synthetic PDF with an image and its labels
@@ -1248,6 +1327,55 @@ check("bibliography: numbered entries after it are no notes", sum("Synthetic Tit
 check("endnotes: counts", (st["note_refs"], st["note_bodies"], st["note_refs_matched"], st["note_refs_unmatched"], st["note_bodies_unmatched"],
                            st["notes_heads_removed"]) == (6, 6, 5, 1, 1, 1), dict(st))
 
+
+# -- endnote sections: every name, every way of grouping (unit level: the writer's item list)
+def notes_md(name, labels, name_as_head=True):
+    """two chapters citing 1, 2 each, then a notes section named `name`; labels: per group a (kind, text) or None"""
+    R = lambda n: P.REF_OPEN + n + P.REF_CLOSE
+    meta = lambda pg: dict(pages={pg}, boxes=[], style="Body 11", flags=set())
+    nmeta = lambda pg: dict(pages={pg}, boxes=[], style="Note 9", flags=set())
+    md = []
+    for ch in (1, 2):
+        md += [("head", dict(lvl=2, text="Chapter Title %d" % ch, page=ch, base=0, size=16), meta(ch)),
+               ("p", dict(text="A first claim%s and a second claim%s close chapter %d." % (R("1"), R("2"), ch)), meta(ch))]
+    md.append(("head", dict(lvl=2, text=name, page=9, base=0, size=16), meta(9)) if name_as_head else ("p", dict(text=name), meta(9)))
+    for g, lab in enumerate(labels, 1):
+        if lab:
+            kind, t = lab
+            md.append(("head", dict(lvl=3, text=t, page=9, base=0, size=13), meta(9)) if kind == "head" else ("p", dict(text=t), nmeta(9)))
+        md += [("p", dict(text="%d. Source %d of group %d." % (n, n, g)), nmeta(9)) for n in (1, 2)]
+    return md
+
+
+def notes_out(md):
+    st = collections.Counter()
+    P.resolve_notes(md, st)
+    return [P._txt(it) for it in md if it is not None], st
+
+
+cases = [("Notes", [("head", "chapter one: the first"), ("head", "chapter two: the second")], True),
+         ("NOTE", [("p", "Chapter 1"), ("p", "Chapter 2")], True),
+         ("Endnotes", [("p", "1"), ("p", "2")], True),
+         ("End Notes", [("p", "I"), ("p", "II")], True),
+         ("Notes and Sources", [None, None], True),
+         ("notes", [("p", "The First Chapter"), ("p", "The Second Chapter")], False)]
+for name, labels, as_head in cases:
+    out, st = notes_out(notes_md(name, labels, as_head))
+    ok = (any("claim[^b1-1] and a second claim[^b1-2] close chapter 1" in x for x in out)
+          and any("claim[^b2-1] and a second claim[^b2-2] close chapter 2" in x for x in out)
+          and "[^b2-2]: Source 2 of group 2." in out and st["note_refs_unmatched"] == 0 and st["note_bodies_unmatched"] == 0
+          and name not in out and not any(lab and lab[1] in out for lab in labels))
+    check("endnotes named %r, groups %s: matched by chapter and number, the emptied section leaves nothing"
+          % (name, "/".join(lab[0] + ":" + lab[1] if lab else "restart" for lab in labels[:1])), ok, (out[-6:], dict(st)))
+md = notes_md("Notes to Chapter 1", [None])
+md = [it for it in md if not (it[0] == "p" and "chapter 2" in P._txt(it))]
+out, st = notes_out(md)
+check("a section per chapter (Notes to Chapter N)", "[^b1-1]: Source 1 of group 1." in out and st["note_refs_unmatched"] == 0, (out, dict(st)))
+md = notes_md("Notes", [None, None])
+md = [it for it in md if not (it[0] == "p" and "claim" in P._txt(it))]
+out, st = notes_out(md)
+check("a notes section none of whose notes is cited: left as it was, and warned about",
+      "Notes" in out and "1. Source 1 of group 1." in out and st.get("notes_unmatched_pages") == [9], (out, dict(st)))
 
 # ---------------------------------------------------------------- in-book page references vs citations
 def refs_of(texts, heads=()):
