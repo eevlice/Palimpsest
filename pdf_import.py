@@ -44,7 +44,7 @@ CAPTION = re.compile(r"^\s*(figure|fig\.|şekil|resim|görsel|plate|illustration
 # ---------------------------------------------------------------------------- characters
 class Ch:
     __slots__ = ("idx", "ch", "ox", "lr", "x0", "x1", "top", "bot", "base", "font", "size", "weight",
-                 "italic", "bold", "dropcap", "rot")
+                 "italic", "bold", "dropcap", "rot", "gsp")
 
     def __init__(self, ch, x0, x1, top, bot, base, font, size, weight=400, italic=False, bold=False,
                  idx=0, ox=None, lr=None, rot=False):
@@ -54,6 +54,7 @@ class Ch:
         self.lr = x1 if lr is None else lr          # end of the advance box (loose box)
         self.dropcap = False
         self.rot = rot                              # set at an angle (diagonal watermark, vertical edge tab)
+        self.gsp = False                            # pdfium generated a space right before this char
 
 
 def size_key(font, size):
@@ -66,7 +67,8 @@ def fam_of(style):
 
 
 def _page_chars(page):
-    """per-character records, top-left origin; effective size = FontSize * text-matrix scale"""
+    """per-character records, top-left origin; effective size = FontSize * the matrix's height across the baseline
+    (a slanted faux italic is no taller than its upright text)"""
     H = page.get_height()
     tpg = page.get_textpage()
     tp = tpg.raw
@@ -75,9 +77,10 @@ def _page_chars(page):
     ox, oy = ctypes.c_double(), ctypes.c_double()
     m, loose = raw.FS_MATRIX(), raw.FS_RECTF()
     buf, fl = ctypes.create_string_buffer(96), ctypes.c_int()
-    out = []
+    out, gsp = [], False
     for i in range(n):
         if raw.FPDFText_IsGenerated(tp, i):
+            gsp = gsp or raw.FPDFText_GetUnicode(tp, i) == 32
             continue
         u = raw.FPDFText_GetUnicode(tp, i)
         if u in (13, 10):
@@ -89,12 +92,14 @@ def _page_chars(page):
         raw.FPDFText_GetFontInfo(tp, i, buf, 96, ctypes.byref(fl))
         fn = buf.value.decode("latin-1")
         w = raw.FPDFText_GetFontWeight(tp, i)
-        rot = abs(m.b) + abs(m.c) > 0.1 * (abs(m.a) + abs(m.d))
+        # turned text has b != 0; c alone is a shear (faux italic), which stays in the flow
+        rot = abs(m.b) > 0.1 * (abs(m.a) + abs(m.d))
         out.append(Ch(chr(u), l.value, r.value, H - t.value, H - b.value, H - oy.value, fn,
-                      raw.FPDFText_GetFontSize(tp, i) * (math.hypot(m.c, m.d) or 1.0), w,
+                      raw.FPDFText_GetFontSize(tp, i) * (abs(m.a * m.d - m.b * m.c) / math.hypot(m.a, m.b) if m.a or m.b else 1.0), w,
                       bool(fl.value & 0x40) or bool(re.search(r"italic|oblique", fn, re.I)),
                       w >= 600 or bool(re.search(r"bold|black|heavy", fn, re.I)),
                       idx=i, ox=ox.value, lr=loose.right, rot=rot))
+        out[-1].gsp, gsp = gsp, False
     return out
 
 
@@ -286,6 +291,9 @@ def build_lines(chars, page_no, orn_fonts=frozenset()):
     chars = [c for c in chars if c.font not in orn_fonts]
     body = statistics.median([c.size for c in chars if c.ch.strip()] or [10.0])
     caps = [c for c in chars if c.size >= 2.5 * body and c.ch.isalpha() and c.size < 40]
+    # a drop cap stands alone: big letters next to each other are a title on a page with little small text
+    caps = [c for c in caps if not any(d is not c and abs(d.base - c.base) < 0.3 * c.size and abs(d.x0 - c.x0) < 2 * c.size
+                                       for d in caps)]
     capset = {id(c) for c in caps}
     chars = [c for c in chars if id(c) not in capset]
     rows = []
@@ -376,8 +384,8 @@ def line_tokens(line):
     Letter-spaced (tracked) lines: the gaps between glyphs fall into two clusters, letter gaps and word gaps; a word
     break is a gap in the large cluster, and the line's own space glyphs are ignored (some PDFs put one between every
     letter). One tracked word has a single cluster: no break.
-    Other lines: real ' ' chars are honoured; extra spaces are inferred from the advance gap: 0.5 em for ALL-CAPS
-    with real spaces, 0.2 em otherwise."""
+    Other lines: real ' ' chars are honoured (unless hidden inside the previous glyph); extra spaces are inferred
+    from the advance gap (0.5 em for ALL-CAPS with real spaces, 0.2 em otherwise) or from pdfium's generated spaces."""
     cs = line["chars"]
     size = line["size"]
     ink = [c for c in cs if c.ch != " "]
@@ -394,6 +402,20 @@ def line_tokens(line):
             toks.append((c.ch, c.italic, c.bold))
             prev = c
         return toks
+    # some PDFs emit a space glyph after every fi/fl ligature that takes the second half of the ligature's own
+    # advance (the space starts ~0.14 em per letter after the ligature's origin, the next letter right after it): no
+    # word break. A real space after "ff" starts a full ligature advance later. A ligature is chars on one glyph box
+    # (same left and right edge; an overhanging f only shares its neighbour's left edge).
+    def fake_space(i):
+        c = cs[i]
+        if not (c.ch == " " and 1 < i < len(cs) - 1 and cs[i - 1].ch.isalpha()):
+            return False
+        k = i - 1
+        while k > 0 and abs(cs[k - 1].x0 - cs[i - 1].x0) < 0.05 * size and abs(cs[k - 1].x1 - cs[i - 1].x1) < 0.05 * size:
+            k -= 1
+        n = i - k
+        return n >= 2 and c.ox - cs[i - 1].ox < 0.2 * n * size and cs[i + 1].ox - cs[i - 1].lr < 0.08 * size
+    cs = [c for i, c in enumerate(cs) if not fake_space(i)]
     has_space = any(c.ch == " " for c in cs)
     letters = [c for c in cs if c.ch.isalpha()]
     caps = sum(c.ch.isupper() for c in letters) / max(1, len(letters))
@@ -401,10 +423,18 @@ def line_tokens(line):
         thr = 0.5 * size
     else:
         thr = 0.2 * size
+    # pdfium's own generated space is a second opinion where a clipped glyph box (an "f" in some fonts, kerned
+    # capitals) hides the gap; it also fires inside lightly tracked titles, so the gap must still stand out from
+    # the line's usual letter gap
+    lgaps = sorted(b.ox - a.lr for a, b in zip(cs, cs[1:]) if not a.ch.isspace() and not b.ch.isspace())
+    lmed = lgaps[len(lgaps) // 2] if lgaps else 0.0
     toks, prev = [], None
     for c in cs:
-        if prev is not None and c.ch != " " and prev.ch != " " and not prev.dropcap and c.ox - prev.lr > thr:
-            toks.append((" ", prev.italic, prev.bold))
+        if prev is not None and c.ch != " " and prev.ch != " " and not prev.dropcap:
+            gap = c.ox - prev.lr
+            gen = c.gsp and not c.ch.isspace() and not prev.ch.isspace() and gap - lmed >= 0.06 * size
+            if gap > thr or gen:
+                toks.append((" ", prev.italic, prev.bold))
         toks.append((c.ch, c.italic, c.bold))
         prev = c
     return toks
@@ -449,12 +479,16 @@ def _prepare_line(l):
     l["italic_share"] = sum(1 for c in ne if c.italic) / n
     l["bold_share"] = sum(1 for c in ne if c.bold) / n
     l["w0"] = l["chars"][0].weight
+    l["mix"] = collections.Counter(size_key(c.font, c.size) for c in ne)
+    l["mix_flag"] = collections.Counter(size_key(c.font, c.size) for c in ne if c.italic or c.bold)
     del l["chars"]                      # keep memory flat on long books
 
 
 def two_column_suspect(lines, W):
     left = [l for l in lines if l["x0"] < 0.4 * W]
-    right = [l for l in lines if l["x0"] > 0.5 * W and l["x1"] <= W + 1]
+    # a right-hand line with no word in it (a contents page's page numbers, roman or arabic) is no column
+    right = [l for l in lines if l["x0"] > 0.5 * W and l["x1"] <= W + 1
+             and any(len(w) >= 3 and not re.fullmatch(r"[ivxlcdm]+", w, re.I) for w in re.findall(r"[^\W\d_]+", l["plain"]))]
     rows = sum(1 for r in right if any(abs(r["base"] - l["base"]) < 2 and l["x1"] < r["x0"] for l in left))
     return rows >= 4, rows
 
@@ -574,6 +608,13 @@ def build_blocks(page_no, W, H, chars, boxes, orn_fonts=frozenset(), images=(), 
                 fig_text=fig_text)
 
 
+def _similar_key(text):
+    """the letters of a line without its page-number-like words (numbers, words with digits, roman numerals), so a
+    slug or footer that carries the page number compares equal from page to page"""
+    return re.sub(r"[\W\d_]+", "", "".join(w.lower() for w in text.split()
+                                         if not re.search(r"\d", w) and not re.fullmatch(r"[ivxlcdm]+\W*", w, re.I)))
+
+
 # ---------------------------------------------------------------------------- document level analysis
 class Doc:
     def __init__(self, pages):
@@ -598,13 +639,19 @@ class Doc:
         in the middle of a large page). In the margin a lone number is a page number, and a line whose letters
         (spaces, digits and punctuation ignored, so letter-spaced heads compare too) recur on 3+ pages and is not
         larger than body text is a running head/foot or slug. In the outer bands of the page (top 9%, bottom 14%), a
-        style at the same spot on 35%+ of the pages is a watermark or footer whatever its text."""
-        words = collections.Counter()
+        style at the same spot on 35%+ of the pages is a watermark or footer when its text (digits ignored) recurs
+        too; never the body style or a body-size line wider than half the text block, as the body often runs into the
+        band."""
+        words, swords = collections.Counter(), collections.Counter()
         for p in self.pages:
             for b in p["blocks"]:
                 for l in b["lines"]:
                     words[l["size"]] += len(l["plain"].split())
+                    swords[l["style"]] += len(l["plain"].split())
         bsize = max(words, key=words.get) if words else 10.0
+        bstyle = max(swords, key=swords.get) if swords else None
+        widths = [l["x1"] - l["x0"] for p in self.pages for b in p["blocks"] for l in b["lines"] if l["style"] == bstyle]
+        bwidth = statistics.median(widths) if widths else 0.0
         tops, bots = [], []
         for p in self.pages:
             bl = [l for b in p["blocks"] for l in b["lines"] if abs(l["size"] - bsize) <= 0.6 and len(l["plain"].split()) >= 3]
@@ -618,7 +665,7 @@ class Doc:
             if self.text_top is None:
                 return "top" if l["top"] < 0.09 * p["H"] else "bot" if l["top"] > 0.86 * p["H"] else None
             return "top" if l["bot"] <= self.text_top - 0.5 else "bot" if l["top"] >= self.text_bot + 0.5 else None
-        rep, pos = collections.defaultdict(set), collections.defaultdict(set)
+        rep, pos, same = collections.defaultdict(set), collections.defaultdict(set), collections.defaultdict(set)
         for p in self.pages:
             for b in p["blocks"]:
                 for l in b["lines"]:
@@ -627,12 +674,15 @@ class Doc:
                     if l["zone"] and l["key"]:
                         rep[(l["zone"], l["key"])].add(p["p"])
                     pos[(l["style"], round(l["top"] / 4))].add(p["p"])
+                    same[(l["style"], _similar_key(l["plain"]))].add(p["p"])
         need = max(4, 0.35 * self.NP)
         for p in self.pages:
             p["cover"] = bool(self.W0) and abs(p["W"] - self.W0) > 0.2 * self.W0
             for b in p["blocks"]:
                 for l in b["lines"]:
-                    band = l["top"] < 0.09 * p["H"] or l["top"] > 0.86 * p["H"]
+                    bodylike = l["style"] == bstyle or (abs(l["size"] - bsize) <= 0.6 and l["x1"] - l["x0"] > 0.5 * bwidth)
+                    band = ((l["top"] < 0.09 * p["H"] or l["top"] > 0.86 * p["H"]) and not bodylike
+                            and len(same[(l["style"], _similar_key(l["plain"]))]) >= 3)
                     l["sil"] = bool(
                         (l["zone"] and PAGE_NO.match(l["plain"]))
                         or (l["zone"] and l["key"] and len(rep[(l["zone"], l["key"])]) >= 3 and l["size"] <= 1.05 * bsize)
@@ -704,6 +754,7 @@ class Doc:
     def _suggest(self):
         S = self.S
         if not S:
+            self.body_keys = set()
             return {}, {}, None, set()
         body_style = max(S, key=lambda k: S[k]["words"])
         bfam, bsize = fam_of(body_style)
@@ -714,6 +765,9 @@ class Doc:
         body_styles = {k for k, s in S.items() if s["words"] >= 0.15 * S[body_style]["words"] and s["lines"] / s["blocks"] >= 3}
         body_styles.add(body_style)         # the most-worded style is body even when its paragraphs come out short
         body_keys = {fam_of(k) for k in body_styles}
+        # fonts that behave like body text are not anomalies; they do not change roles (a bold run-in font is also
+        # the font of the sub-heads)
+        self.body_keys = body_keys | {fam_of(k) for k in self._body_variants(body_styles)}
         self.variant_of_body = lambda k: fam_of(k) in body_keys and k not in body_styles
         for k, s in S.items():
             n = s["blocks"]
@@ -751,11 +805,14 @@ class Doc:
         emph = lambda k: (fam_of(k)[1] > bsize * 0.95 or S[k]["caps"] / S[k]["blocks"] > 0.5 or S[k]["weight"] >= 600 or "Bold" in k)
         # a heading is at least 0.6 of the body size (small bold sub-heads exist; 4.5pt lettering above the text block
         # is a running head); a small style that mostly sits in the margin is a running head that varied too much to
-        # be removed, not a heading
+        # be removed, not a heading. Display type (1.4x body and up) may run longer: a profile or chapter title that
+        # names a work
+        display = lambda k: fam_of(k)[1] >= 1.4 * bsize
         big_enough = lambda k: fam_of(k)[1] >= 0.6 * bsize
         marginal = lambda k: S[k]["edge"] / S[k]["blocks"] >= 0.5 and fam_of(k)[1] <= 1.05 * bsize
         cands = [k for k, s in S.items() if k not in sugg and s["blocks"] >= 5 and len(s["pages"]) >= 3
-                 and s["chars"] / s["blocks"] >= 4 and s["short"] / s["blocks"] >= 0.9 and s["words"] / s["blocks"] <= 12
+                 and s["chars"] / s["blocks"] >= 4 and s["short"] / s["blocks"] >= (0.8 if display(k) else 0.9)
+                 and s["words"] / s["blocks"] <= (20 if display(k) else 12)
                  and s["sent"] / s["blocks"] < 0.5 and emph(k) and s["inbox"] / s["blocks"] < 0.5
                  and s["words"] >= 8 and s["num"] / s["blocks"] < 0.3 and big_enough(k) and not marginal(k)]
         cands.sort(key=lambda k: -self.score(k, S[k]))
@@ -774,6 +831,41 @@ class Doc:
                 sugg[k] = ("ön sayfa" if (s["words"] <= 15 and s["last"] <= front) else "gövde", "kural eşleşmedi")
         return sugg, why, body_style, body_styles
 
+    def _body_variants(self, body_styles):
+        """Fonts are matched by behaviour, not by name (subset names like AdvP6F00/AdvP6F09 say nothing, and such
+        fonts often carry no italic/bold flag either). A body variant is
+        - a font set inside body lines, next to the body font at the body's size (ten such lines; three when the font
+          carries the italic/bold flag), or
+        - a font at the body's size and line pitch that sets paragraphs of its own: a fifth of its blocks run to
+          several lines and they end a sentence at least half as often as body paragraphs do (emphasised
+          statements, an italic body)."""
+        pitch = collections.defaultdict(list)
+        for p in self.pages:
+            for b in p["blocks"]:
+                if not b["sil"]:
+                    pitch[b["style"]] += [y["base"] - x["base"] for x, y in zip(b["lines"], b["lines"][1:])]
+        main = max(body_styles, key=lambda k: self.S[k]["words"]) if body_styles else None
+        bp = statistics.median(pitch[main] or [0]) if main else 0
+        bsz = {fam_of(k)[1] for k in body_styles}
+        own = {k for k, s in self.S.items() if k not in body_styles and bp and pitch[k]
+               and any(abs(fam_of(k)[1] - z) <= 0.25 for z in bsz) and abs(statistics.median(pitch[k]) - bp) <= 0.05 * bp
+               and s["multiline"] >= 0.2 * s["blocks"]
+               and s["sent"] / s["blocks"] >= 0.5 * self.S[main]["sent"] / self.S[main]["blocks"]}
+        inside, flagged = collections.Counter(), collections.Counter()
+        for p in self.pages:
+            for b in p["blocks"]:
+                if b["sil"]:
+                    continue
+                for l in b["lines"]:
+                    if l["style"] not in body_styles:
+                        continue
+                    mix = l.get("mix", {})
+                    for k in mix:
+                        if k != l["style"] and abs(fam_of(k)[1] - fam_of(l["style"])[1]) <= 0.25:
+                            inside[k] += 1
+                            flagged[k] += l["mix_flag"][k] >= 0.8 * mix[k]
+        return own | {k for k, n in inside.items() if n >= 10 or (n >= 3 and flagged[k] >= 0.8 * n)}
+
     def _heading_for(self, block):
         """role for a one-off heading-like block, taken from the heading style whose rank is closest"""
         S = self.S
@@ -791,12 +883,22 @@ class Doc:
 
     def _block_roles(self):
         S, sugg = self.S, self.sugg
-        for p in self.pages:
+        front = min(8, max(2, int(0.03 * self.NP)))
+        titles = set()
+        for pi, p in enumerate(self.pages):
             prev = None
             real = [b for b in p["blocks"] if not b["sil"]]
+            # a front page set in display type only (title page, author's name) is no chapter heading, and neither is
+            # a later half title that repeats it
+            title_page = False
+            if real and all(b["size"] >= 1.3 * self.bsize for b in real):
+                key = "".join(c for b in real for c in b["text"].lower() if c.isalpha())
+                title_page = pi < front or key in titles
+                if pi < front:
+                    titles.add(key)
             for b in p["blocks"]:
                 r = "sil" if b["sil"] else sugg.get(b["style"], ("gövde",))[0]
-                if p["cover"]:
+                if p["cover"] or (title_page and r != "sil"):
                     r = "ön sayfa"
                 txt = b["text"]
                 if r not in ("sil", "ön sayfa"):
@@ -857,7 +959,7 @@ class Doc:
         inside it), never the line under it (that is the next section starting); part and chapter headings - the ones a
         table of contents lists - never belong to an object. Body-styled blocks only join when they read like a
         caption ("Figure 3", "Fig. 3", "Şekil 3"). Blocks set apart from body text that join nothing are flagged."""
-        self.body_fams = {fam_of(k) for k in self.body_styles}
+        self.body_fams = set(self.body_keys)
         # the book's own secondary text styles (notes, references: 5%+ of all words) are set apart from body text but
         # are not anomalies; they are never flagged
         total = sum(s["words"] for s in self.S.values()) or 1

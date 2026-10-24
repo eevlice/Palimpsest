@@ -107,9 +107,9 @@ pgb = block_page(rows, [box])
 check("lines inside a tinted rectangle belong to the box", [b["box"] for b in pgb["blocks"]] == [0, None])
 
 check("two-column suspicion needs side-by-side rows",
-      P.two_column_suspect([dict(x0=100, x1=200, base=100 + 14 * k, size=11) for k in range(6)] +
-                           [dict(x0=300, x1=420, base=100 + 14 * k, size=11) for k in range(6)], W)[0]
-      and not P.two_column_suspect([dict(x0=100, x1=400, base=100 + 14 * k, size=11) for k in range(12)], W)[0])
+      P.two_column_suspect([dict(x0=100, x1=200, base=100 + 14 * k, size=11, plain="left words") for k in range(6)] +
+                           [dict(x0=300, x1=420, base=100 + 14 * k, size=11, plain="right words") for k in range(6)], W)[0]
+      and not P.two_column_suspect([dict(x0=100, x1=400, base=100 + 14 * k, size=11, plain="words") for k in range(12)], W)[0])
 
 
 # ---------------------------------------------------------------- hyphen dictionary
@@ -609,6 +609,150 @@ segs = [s for s in md.split("\n\n") if s.strip()]
 k = segs.index("![Görsel · s.4](gorsel-4-1)")
 check("the title printed inside the top of the picture is written before it, as a caption", "WIDE TITLE" in segs[k - 1] and segs[k - 1].startswith(":::"), segs[k - 1])
 check("object merge log: one entry per joined paragraph", d.object_merge_log == [], d.object_merge_log)
+
+# ================================================================ import round 5
+# -- 1: the body runs into the bottom band; its last line is at the same spot on every page but its text differs
+def low_page(p):
+    rows = [("Body line %d of page %d is an ordinary line of running prose %s." % (k, p, "abcdefghij"[k] * (p % 5 + 1)),
+             100, 520 + 14 * k, "Body-Regular", 11) for k in range(10)]                 # last line top 637 > 0.86 H
+    rows.append(("Same small slug", 100, 700, "Slug-Regular", 7))                       # repeated text: a slug
+    rows.append(("note %s" % "xyzwvutsrq"[p], 400, 700, "Note-Regular", 7))           # same spot, text changes
+    return rows
+d = doc_from([low_page(p) for p in range(1, 9)])
+md, st = P.build_markdown(d, 0, 7)
+check("the last body line in the bottom band is not taken for a footer", all("Body line 9 of page %d " % p in md for p in range(1, 9)), md[-300:])
+check("in the band, a short line whose text repeats goes; one whose text changes stays", "Same small slug" not in md and "note z" in md)
+
+# -- 3: a slanted (sheared) faux italic stays in the flow at its upright size; turned text still goes
+def shear_pdf(n=4):
+    pdf = pdfium.PdfDocument.new()
+    for p in range(n):
+        page = pdf.new_page(522, 738)
+        rows = [(f"Plain sentence {k} on page {p} keeps going for a while here.", 0.0) for k in range(8)]
+        rows[3] = (f"Slanted words on page {p} drawn with a sheared matrix only.", 0.21)
+        for k, (text, c) in enumerate(rows):
+            obj = raw.FPDFPageObj_NewTextObj(pdf.raw, b"Helvetica", 11)
+            buf = (ctypes.c_ushort * (len(text) + 1))(*([ord(ch) for ch in text] + [0]))
+            raw.FPDFText_SetText(obj, buf)
+            raw.FPDFPageObj_Transform(obj, 1, 0, c, 1, 72, 600 - 14 * k)
+            raw.FPDFPage_InsertObject(page.raw, obj)
+        raw.FPDFPage_GenerateContent(page.raw)
+    out = io.BytesIO()
+    pdf.save(out)
+    return out.getvalue()
+md, warns = P.convert(shear_pdf())
+check("a sheared (faux italic) line is text, not turned text", "Slanted words on page 2 drawn" in md and not any("Eğik ya da dikey" in w for w in warns), (md[:200], warns))
+sh = P._page_chars(pdfium.PdfDocument(shear_pdf(1))[0])
+check("a sheared glyph keeps its upright size", {round(c.size, 1) for c in sh if c.ch.strip()} == {11.0}, {round(c.size, 2) for c in sh})
+
+# -- 2: word spaces around ligatures and clipped glyphs
+lig = line("the ", 100, 200) + line("fi", 122, 200, idx0=4) + line(" ", 125, 200, idx0=6) + line("nal", 128, 200, idx0=7)
+lig[4].x1 = lig[5].x1 = lig[4].lr = lig[5].lr = 128.0                               # one glyph box for "fi"
+lig[5].x0, lig[5].ox = lig[4].x0, lig[4].ox
+lig[6].x0, lig[6].x1, lig[6].ox, lig[6].lr = 125.0, 127.9, 125.0, 127.9             # takes half the ligature's advance
+check("a space glyph drawn inside a ligature is no word break", lines_text(lig)[0]["plain"] == "the final", lines_text(lig)[0]["plain"])
+ff = line("of", 100, 200) + line("f", 105.5, 200, idx0=2) + line(" ", 111.0, 200, idx0=3) + line("to", 114.6, 200, idx0=4)
+ff[1].x0, ff[1].ox = ff[2].x0, ff[2].ox = 104.0, 105.5                            # "ff": one box, wide enough to cover
+ff[1].x1 = ff[2].x1 = ff[1].lr = ff[2].lr = 114.5                                  # the space glyph after it
+ff[3].x0, ff[3].x1, ff[3].ox, ff[3].lr = 111.0, 114.2, 111.0, 114.2               # a full ff advance (0.5 em) later
+check("a real space after an ff ligature (its box overlapping the space) stays", lines_text(ff)[0]["plain"] == "off to", lines_text(ff)[0]["plain"])
+over = line("of", 100, 200) + line(" ", 105, 200, idx0=2) + line("the", 107.8, 200, idx0=3)
+over[1].x1 = over[1].lr = 108.0                                                    # an f overhanging into the space
+over[2].x0, over[2].x1, over[2].ox, over[2].lr = 105.5, 108.2, 105.5, 108.2
+check("a real space under an overhanging f (no ligature) stays", lines_text(over)[0]["plain"] == "of the", lines_text(over)[0]["plain"])
+clip = line("of", 100, 200) + line("the", 112, 200, idx0=2)
+clip[1].lr = clip[1].x1 = 110.5                                                    # gap 1.5 < 0.2 em: no inferred space
+check("without pdfium's generated space a small gap is no break", lines_text(clip)[0]["plain"] == "ofthe")
+clip = line("of", 100, 200) + line("the", 112, 200, idx0=2)
+clip[1].lr = clip[1].x1 = 110.5
+clip[2].gsp = True
+check("pdfium's generated space is a word break", lines_text(clip)[0]["plain"] == "of the", lines_text(clip)[0]["plain"])
+cap = line("THEIR TRAITS AND", 100, 200, "Head-Regular", 11, adv=0.7)                 # a real space later: 0.5 em rule
+for c in cap[6:]:
+    c.ox -= 3.0                                                                    # kerned capitals close the gap
+    c.x0 -= 3.0
+    c.x1 -= 3.0
+    c.lr -= 3.0
+cap = cap[:5] + cap[6:]
+cap[5].gsp = True
+check("kerned capitals: the generated space still separates the words", lines_text(cap)[0]["plain"] == "THEIR TRAITS AND", lines_text(cap)[0]["plain"])
+gen = P._page_chars(pdfium.PdfDocument(synth_pdf([[("glued", 72, 600, 11), ("word", 110, 600, 11)]]))[0])
+check("_page_chars marks the char after a generated space", [c.ch for c in gen if c.gsp] == ["w"], [(c.ch, c.gsp) for c in gen])
+
+# -- 5: an italic body font with an unrelated name, found by where it is set
+def mixed_page(p, mixed=True):
+    chars, i = [], 0
+    for k in range(10):
+        base = 180 + 14 * k
+        head = "Body line %d of page %d has some " % (k, p)
+        chars += line(head, 100, base, idx0=i)
+        i += len(head)
+        if mixed:
+            chars += line("emphasis", 100 + len(head) * 5.5, base, "AdvQ7F09", 11, idx0=i, italic=True)
+            i += 8
+        tail_ = " in it and runs on as prose here."
+        chars += line(tail_, 100 + (len(head) + 8) * 5.5, base, idx0=i)
+        i += len(tail_)
+    if p == 4:
+        chars += line("An italic line of quoted words standing alone", 100, 360, "AdvQ7F09", 11, idx0=i, italic=True)
+    return P.build_blocks(p, W, H, chars, [])
+d = P.Doc([mixed_page(p) for p in range(1, 9)])
+md, st = P.build_markdown(d, 0, 7)
+check("a font set inside body lines at body size is a body variant whatever its name", ("AdvQ7F09", 11.0) in d.body_fams and st["style_flags"] == 0, (d.body_fams, st["style_flags"]))
+d = P.Doc([mixed_page(p, False) for p in range(1, 9)])
+md, st = P.build_markdown(d, 0, 7)
+check("...the same lone line in a font never seen in the body is flagged", st["style_flags"] == 1, st["style_flags"])
+
+# an emphasised statement font never mixed into body lines, but set as body-size paragraphs at the body's pitch
+def statement_page(p):
+    rows = body_rows(p, top=120, n=6)
+    if p in (3, 6):                                                                  # under 5% of the words
+        rows += [("An emphasised statement on page %d runs over two lines" % p, 100, 220, "AdvQ7F0C", 11),
+                 ("of the page and ends as a sentence does.", 100, 234, "AdvQ7F0C", 11)]
+    rows += [(t.replace("Body line", "More body"), x, b + 140, f, sz) for t, x, b, f, sz in body_rows(p, top=120, n=4)]
+    return rows
+d = doc_from([statement_page(p) for p in range(1, 9)])
+md, st = P.build_markdown(d, 0, 7)
+check("a font setting body-size paragraphs at the body's line pitch is a body variant, not flagged",
+      ("AdvQ7F0C", 11.0) in d.body_fams and st["style_flags"] == 0 and "emphasised statement on page 3" in md, (d.body_fams, st["style_flags"]))
+
+# a display-size title that names a work runs past twelve words and is still a heading
+def long_title_page(p):
+    return [("Profile %d: A Person in the Novel With" % p, 60, 150, "Disp-Regular", 16),
+            ("a Rather Long Title by Some Author and Friends", 60, 169, "Disp-Regular", 16)] + body_rows(p, top=210, n=10)
+d = doc_from([long_title_page(p) for p in range(1, 9)])
+md, st = P.build_markdown(d, 0, 7)
+check("a long display-size title is a heading", sum(1 for l in md.split("\n") if l.startswith("#") and "Profile" in l) == 8,
+      [l for l in md.split("\n") if "Profile" in l][:2])
+
+# -- false two-column warnings: contents page numbers; a title on a page with little small text
+toc = [("Chapter %d title words" % k, 60, 130 + 14 * k, "Body-Regular", 11) for k in range(8)]
+toc += [("%s" % ["ix", "xi", "1", "23", "45", "67", "89", "101"][k], 440, 130 + 14 * k, "Body-Regular", 11) for k in range(8)]
+toc_lines = lines_text(sum((line(t, x, b, f, sz, idx0=40 * n) for n, (t, x, b, f, sz) in enumerate(toc)), []))
+check("a contents page (titles left, page numbers right) is not two columns", not P.two_column_suspect(toc_lines, W)[0]
+      and len(toc_lines) == 16)
+title = line("The Paper Garden", 110, 120, "Title-Regular", 16) + line("slug 01/04/2020", 40, 600, "Slug-Regular", 6, idx0=40)
+L = lines_text(title)
+check("big letters side by side are a title, not drop caps", [l["plain"] for l in L][0] == "The Paper Garden", [l["plain"] for l in L])
+
+check("a slug's page number (arabic, roman, inside a word) does not make its text differ",
+      P._similar_key("90000 The Book (12x) - 2nd pass.indd iii") == P._similar_key("0000 The Book (12x) - 2nd pass.indd xii")
+      == "thebookpassindd")
+
+# -- a title page, and a half title repeating it later, are front matter; a part opener is a heading
+def display_page(p):
+    if p == 1:
+        return [("The Synthetic Title", 100, 200, "Display-Regular", 24)]
+    if p == 9:
+        return [("The Synthetic Title", 100, 200, "Display-Regular", 24)]
+    if p == 10:
+        return [("PART ONE", 100, 200, "Display-Regular", 24)]
+    return [("Chapter Head %d" % p, 100, 100, "Display-Regular", 24)] + body_rows(p, top=150, n=10)
+d = doc_from([display_page(p) for p in range(1, 41)])
+md, st = P.build_markdown(d, 0, 39)
+heads = [l for l in md.split("\n") if l.startswith("#")]
+check("title page and the half title repeating it are not headings; the part opener is", not any("Synthetic Title" in h for h in heads)
+      and any("PART ONE" in h for h in heads), heads[:4])
 
 print("FAILED %d" % failed if failed else "ALL PASS")
 sys.exit(1 if failed else 0)
