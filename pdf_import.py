@@ -2,19 +2,28 @@
 PDF -> markdown for the new-project screen. pypdfium2 only (BSD/Apache; no model, no OCR).
 
     convert(pdf_bytes, first_page=None, last_page=None) -> (markdown, warnings)
+    convert_with_meta(...)                                -> (markdown, warnings, seg_meta)
 
-The page range is 1-based, as printed by a PDF viewer. The whole document is always analysed (style
-statistics, repeated-text detection and the hyphen lexicon need many pages); only the requested pages
-are written out. Text layer required: scanned PDFs raise PdfImportError.
+The page range is 1-based, as printed by a PDF viewer. The whole document is always analysed (style statistics,
+repeated text and the hyphen lexicon need many pages); only the requested pages are written out. A text layer is
+required: a PDF without one raises PdfImportError.
 
-Pipeline: characters (font, size, weight, italic, advance box) -> rows by baseline, content-stream
-order -> blocks (style change, indent, vertical gap, numbered item, tinted box) -> styles -> roles by
-rules -> markdown in the conventions the app understands today: '#' headings (part/chapter '#',
-sub-heading 1 '##', sub-heading 2 '###'), box title as bold paragraph, poem lines kept in one
-segment with trailing double-space breaks, attribution as its own paragraph, one segment per list item.
+The importer runs in stages; each section of this file is one stage, its input and output stated at its head:
+  1. reading     pdfium page -> Ch glyph records (+ tinted boxes, images, rules, scan signals)
+  2. lines       glyphs -> lines (rows by baseline, segments, word spaces, inline emphasis)
+  3. blocks      lines -> blocks per page (paragraph breaks, two columns, figures and ruled tables cut out)
+  4. margins     every page -> margin text marked "sil" (running heads, folios, slugs, watermarks), the text block
+  5. objects     ruled grids -> tables; blocks around figures/tables -> their captions
+  6. roles       style statistics -> heading tiers, body, lists, boxes, index, epigraph/quote/verse/attribution
+  7. merges      the hyphen lexicon; line and paragraph joins (page breaks, same page, hyphens)
+  8. writing     blocks -> markdown in the app's conventions + warnings + seg_meta
+Stages 4-7 work on the whole document: class Doc runs them in order (see Doc.__init__).
 
-Everything here is derived from the document itself; no per-book constants.
+Every tuned number lives in THRESHOLDS, with its reason and the round/book that set it. Everything is derived from
+the document itself; there are no per-book constants. Design notes: docs/pdf_import.md.
 """
+
+
 import re
 import math
 import ctypes
@@ -25,12 +34,238 @@ import pypdfium2 as pdfium
 import pypdfium2.raw as raw
 
 
+# Every tuned number of the importer, with why it is what it is and the round (and test book) that set it.
+# Sizes in points (pt), multiples of a font size (em), shares of a page/column/style, counts.
+THRESHOLDS = {
+    "rotated_b": 0.1,             # matrix b above this share of a+d: the glyph is turned (watermark, edge tab); c alone is a faux-italic shear - round 5, Characters
+    "bold_weight": 600,           # font weight from which a glyph counts as bold - round 0 (first version)
+    "hidden_text_pt": 3,          # glyphs under this size are hidden text (running-head variables on chapter openers) - round 8, Attachment
+    "layer_repeat_pt": 0.3,       # same glyph within this distance = drawn twice (second text layer over a watermark) - round 8, John Reveal
+    "layer_repeat_gap": 3,        # ...only when this far on in the stream; ligature letters (ff) follow each other - round 8, NEI/Lonely (ff)
+    "tint_lum_min": 150,          # fill luminance range of a tinted box: darker is a picture - round 0
+    "tint_lum_max": 248,          # ...lighter is the page itself - round 0
+    "tint_min_area": 1500,        # smallest tinted box (pt^2) - round 0
+    "tint_max_share": 0.9,        # a fill wider/taller than this share of the page is a background - round 0
+    "tint_max_chroma": 30,        # grey-ish fills only (max-min of RGB) - round 0
+    "fullpage_image_share": 0.8,  # an image covering this share of the page is a scan or background, not a figure - round 1
+    "image_min_side": 25,         # smaller images are ornaments, not figures - round 2
+    "rule_straight": 0.6,         # a path piece within this much of a line is a straight rule - round 2
+    "hrule_min_len": 10,          # shortest horizontal rule - round 2
+    "vrule_min_len": 6,           # shortest vertical rule - round 2
+    "scan_invisible_ratio": 9,    # invisible text objects at least this many times the visible ones under a full-page image: a scanned page - round 1, Trauma
+    "scan_page_share": 0.5,       # share of text pages that look scanned for the whole book to count as scanned - round 1, Trauma
+    "ornament_glyphs": 30,        # an ornament-named font with fewer glyphs in the book is decoration - round 1
+    "min_chars_page": 20,         # fewer characters per selected page: no text layer - round 0
+    "min_chars_total": 400,       # ...and fewer in total - round 0
+    "min_md_words": 20,           # fewer words written: the pages hold only furniture - round 0
+    "default_body_pt": 10.0,      # body size when a page or book has no text to measure - round 0
+    "dropcap_min": 2.5,           # a letter this many times the page's median size is an initial - round 0
+    "dropcap_max": 12,            # ...up to this many times (an ornamental initial can be 8x; beyond 12 it is art) - round 8, John Reveal
+    "dropcap_alone_base": 0.3,    # big letters closer than this (x size) on the baseline are a title, not an initial - round 5, Girl
+    "dropcap_alone_x": 2,         # ...within this many sizes sideways - round 5, Girl
+    "dropcap_x_slack": 1,         # a line may start this far left of the initial - round 0
+    "dropcap_top_em": 0.2,        # lines whose top is within this share of the initial's size (+ dropcap_top_pt) sit beside it - round 0
+    "dropcap_top_pt": 3,          # ...plus this many points - round 0
+    "dropcap_line_top": 0.5,      # the line beside the initial's top: within this share of its size - round 8, John Reveal
+    "row_base_pt": 1.2,           # glyphs within this many points (or row_base_em) of a baseline share a row - round 0
+    "row_base_em": 0.18,          # ...or this share of their size - round 0
+    "script_size": 0.8,           # a row smaller than this share of a neighbour can be its super/subscript - round 0
+    "script_slack": 1,            # horizontal slack for a script row inside its base row - round 0
+    "script_reach": 0.9,          # a script row within this many base sizes of its base row folds into it - round 0
+    "script_reach_tiny": 1.1,     # ...this many for rows of superscript digits only - round 0
+    "ligature_box_em": 0.05,      # chars whose box edges agree within this share of the size are one ligature glyph - round 5, Girl
+    "seg_gap_em": 2.5,            # a forward jump wider than this many sizes (and seg_gap_pt) splits a row into segments - round 0
+    "seg_gap_pt": 18,             # ...and wider than this many points - round 0
+    "seg_back_em": 0.9,           # a backward jump of this many sizes splits a row (content-stream order) - round 0
+    "tracked_min_glyphs": 4,      # fewest glyphs to judge letter-spacing - round 1
+    "tracked_gap_em": 0.08,       # median letter gap above this share of the size: a tracked (letter-spaced) line - round 1
+    "tracked_split_em": 0.15,     # word and letter gap clusters this far apart (x size) - round 1
+    "tracked_ratio": 1.8,         # ...and the word gaps this many times the letter gaps - round 1
+    "tracked_floor_em": 0.02,     # floor for the letter gap in that ratio - round 1
+    "fake_space_em": 0.2,         # a space glyph starting within this many sizes per ligature letter after the ligature is no word break - round 5, Girl/Lonely
+    "fake_space_gap_em": 0.08,    # ...when the next letter follows the ligature within this share of the size - round 5, Girl
+    "caps_share": 0.8,            # letters at least this share upper case: an ALL-CAPS line/block - round 0
+    "space_caps_em": 0.5,         # inferred word space in ALL-CAPS lines with real spaces - round 0
+    "space_em": 0.2,              # inferred word space otherwise - round 0
+    "gen_space_em": 0.06,         # pdfium's generated space counts when the gap stands this far out of the line's usual gap - round 5, fourth_trimester
+    "page_slack": 2,              # text this far outside the page box still belongs to it - round 2
+    "box_slack": 1,               # slack for a line or glyph inside a box, figure or table - round 0
+    "col_left": 0.4,              # two columns: a left-column line starts left of this share of the width - round 2
+    "col_right": 0.5,             # ...a right-column line starts right of this share - round 2
+    "col_slack": 1,               # a right-column line may end this far past the page edge - round 2
+    "col_word_len": 3,            # a right-hand line needs a word this long (page numbers are no column) - round 5, Characters
+    "col_base_pt": 2,             # left and right lines on the same baseline within this many points - round 2
+    "col_min_rows": 4,            # fewest side-by-side rows for a two-column page - round 2
+    "col_max_size": 20,           # lines from this size up (titles) are left out of the two-column test - round 2
+    "gutter_lo": 0.3,             # the gutter is searched from this share of the width (to 0.7) - round 2
+    "gutter_slack": 1,            # a line crossing the gutter by less than this does not cross it - round 2
+    "fig_title_width": 0.35,      # a line this wide (share of the figure) along its edge is a title, not a label - round 2
+    "fig_title_band": 0.15,       # ...within this share of the figure's height from its top or bottom - round 2
+    "fig_label_words": 40,        # more words inside a picture is text set on a background, not labels - round 2
+    "pitch_max_em": 2.2,          # line pitch is measured between lines closer than this many sizes - round 0
+    "default_pitch_em": 1.3,      # line pitch when a style has none measured - round 0
+    "para_gap": 1.45,             # a gap over this many line pitches starts a new block - round 0
+    "overlap_em": 0.3,            # a line closer than this (x size) above-left overlaps: new block - round 0
+    "item_min_chars": 3,          # a list number needs this much text after it to start an item - round 0
+    "indent_em": 0.7,             # a first-line indent of this many sizes starts a paragraph - round 0
+    "list_slack": 1,              # a list item's continuation may start this far left of the item - round 0
+    "full_line_words": 6,         # lines with this many words define the column's right edge - round 6, Characters
+    "full_line_em": 1.5,          # a line ending within this many sizes of the right edge is full - round 6, Characters
+    "inline_size_pt": 0.25,       # an inline run (italic title, bold lead-in) is this close in size - round 6, fourth_trimester
+    "indent_same_pt": 1,          # two lines with the same indent within this many points - round 7, Characters (Angelou)
+    "indented_full_em": 3,        # an indented line reaching within this many sizes of the right edge runs on - round 7, Characters
+    "body_size_pt": 0.6,          # a size within this many points of the body size counts as body size - round 1
+    "body_line_words": 3,         # a body line for the text block has this many words - round 1
+    "page_body_lines": 3,         # a page needs this many body lines to mark the text block - round 1
+    "repeat_pages": 3,            # text recurring on this many pages is a running head / slug - round 1
+    "full_measure": 0.9,          # a recurring line shorter than this share of the measure is a head, not body - round 8, Attachment
+    "half_measure": 0.5,          # lines narrower than this share of the measure do not mark the top edge; wider body-size lines are body - round 5/8, Characters/Attachment
+    "zone_slack": 0.5,            # a line this far outside the text block is in the margin - round 1
+    "band_top": 0.09,             # top band of the page (share of its height) - round 1
+    "band_bot": 0.86,             # bottom band starts here - round 1
+    "pos_cell_pt": 4,             # spot (top position) grid for the band rule - round 1
+    "band_min_pages": 4,          # a style at one spot on this many pages (and band_share) is a watermark/footer - round 1
+    "band_share": 0.35,           # ...or this share of the pages - round 1
+    "margin_size": 1.05,          # margin text is at most this many times the body size - round 1
+    "folio_words": 9,             # a running head with a page number has at most this many words - round 6, Characters
+    "cover_width": 0.2,           # a page this much wider or narrower than the median is a cover/spread - round 1
+    "box_min_words": 15,          # a tinted shape with fewer words is a figure panel, not a box - round 1
+    "title_head_pages": 2,        # a margin line repeating a heading on this many pages is a running head - round 6, Characters
+    "grid_slack": 2,              # rule ends and crossings meet within this many points - round 2
+    "grid_merge_pos": 3,          # rule positions closer than this are one rule - round 2
+    "grid_min_rules": 3,          # a table has at least this many rules each way (2 x 2 cells) - round 2
+    "grid_frame_span": 0.9,       # the outer frame must cover this share of each side - round B, NEI (badge)
+    "grid_cell_pad": 1,           # a cell border is looked for this far inside the cell - round 2
+    "rule_collinear": 1.2,        # rule pieces this close in position are collinear - round 2
+    "rule_join": 2.5,             # collinear pieces this close end to end are one rule - round 2
+    "text_fam_share": 0.05,       # a font family with this share of all words is a text style, never flagged - round A
+    "object_gap_em": 2.5,         # blocks within this many body sizes of a figure/table belong to it - round A
+    "caption_max_words": 80,      # a caption block has at most this many words - round A
+    "caption_max_lines": 6,       # ...and this many lines - round A
+    "object_slack": 1,            # horizontal overlap slack between a block and an object - round A
+    "flag_band_top": 0.12,        # a set-apart block ending above this share of the page is in the margin band - round 6
+    "italic_share": 0.6,          # a block/line this much italic is an italic block - round 0
+    "short_lines": 3,             # a short block: at most this many lines - round 0
+    "short_chars": 120,           # ...and this many characters - round 0
+    "score_caps": 2.0,            # heading rank bonus for ALL CAPS - round 0
+    "score_bold": 0.3,            # heading rank bonus for bold - round 0
+    "front_max": 8,               # front matter: at most this many first pages - round 1
+    "front_min": 2,               # ...at least this many - round 1
+    "front_share": 0.03,          # ...this share of the book - round 1
+    "body_style_share": 0.15,     # a style with this share of the main style's words is a body style - round A
+    "body_style_lines": 3,        # ...when its blocks run to this many lines - round A
+    "poem_ml": 0.6,               # poem-like style: this share of lines in multi-line blocks - round 0
+    "poem_avgl": 1.5,             # ...this many lines per block - round 0
+    "poem_size_lo": 0.9,          # ...size from this share of the body - round 0
+    "poem_size_hi": 1.3,          # ...to this share - round 0
+    "poem_ital": 0.5,             # ...this share of italic blocks - round 0
+    "poem_sent": 0.95,            # ...fewer than this share ending a sentence - round 0
+    "ornament_num_size": 1.5,     # a letterless style this many times the body size is an ornamental numeral - round 0
+    "variant_blocks": 0.2,        # a body variant style with at most this share of the body's blocks stays body - round 0
+    "style_rule_share": 0.6,      # dash/box/number styles: this share of the style's blocks - round 0
+    "short_share": 0.9,           # ...and this share of short blocks - round 0
+    "front_style_words": 150,     # a front-pages-only style has at most this many words - round 1
+    "front_para_blocks": 2,       # ...unless it sets paragraphs (this many blocks - round 1
+    "front_para_lines": 3,        # ...of this many lines - round 1
+    "front_para_words": 100,      # ...and this many words) - round 1
+    "front_leftover_words": 15,   # an unmatched front-page style with at most this many words is front matter - round 1
+    "emph_size": 0.95,            # a style at least this share of the body size is emphatic enough for a heading - round 0
+    "emph_caps": 0.5,             # ...or this share of ALL-CAPS blocks - round 0
+    "display_size": 1.4,          # display type (this many times the body) may run longer as a heading - round 5, Characters (profiles)
+    "heading_min_size": 0.6,      # a heading is at least this share of the body size - round 1
+    "marginal_share": 0.5,        # a small style mostly (this share) in the margin is a running head, not a heading - round 1
+    "head_min_blocks": 5,         # a heading style has at least this many blocks - round 0
+    "head_min_pages": 3,          # ...on this many pages - round 0
+    "head_min_chars": 4,          # ...this many characters per block - round 0
+    "head_short_display": 0.8,    # ...this share of short blocks for display type - round 5, Characters
+    "head_words": 12,             # ...at most this many words per block - round 0
+    "head_words_display": 20,     # ...this many for display type - round 5, Characters
+    "head_sent": 0.5,             # ...fewer than this share ending a sentence - round 0
+    "head_inbox": 0.5,            # ...fewer than this share inside boxes - round 0
+    "head_min_words": 8,          # ...at least this many words in all - round 0
+    "head_num": 0.3,              # ...fewer than this share of numbered blocks - round 0
+    "tier_gap": 0.5,              # heading styles whose ranks differ by at most this share a level - round 0
+    "variant_size_pt": 0.25,      # a body variant font is this close to the body size - round 5, Characters
+    "variant_pitch": 0.05,        # ...its own paragraphs at the body pitch within this share - round 5, Characters
+    "variant_multiline": 0.2,     # ...this share of its blocks multi-line - round 5, Characters
+    "variant_sent": 0.5,          # ...ending a sentence at least this share as often as body - round 5, Characters
+    "variant_flagged": 0.8,       # a run is italic/bold-flagged when this share of its glyphs are - round 5
+    "variant_lines": 10,          # a font set inside this many body lines is a body variant - round 5, Characters
+    "variant_lines_flagged": 3,   # ...this many when flagged italic/bold - round 5
+    "title_page_size": 1.3,       # a front page whose blocks are all this many times the body is a title page - round 5, fourth_trimester/Girl
+    "runs_para_lines": 3,         # a heading-style block longer than this many lines - round 6, Characters
+    "runs_para_words": 30,        # ...and this many words - round 6, Characters
+    "runs_body_share": 0.15,      # ...with this share of body glyphs is a paragraph, not a heading - round 6, Characters
+    "poem_one_line_words": 8,     # a one-line poem-style block this short may be a heading - round 0
+    "epigraph_lines": 4,          # a poem-style block up to this many lines is an epigraph (style rule) - round 0
+    "attrib_lines": 2,            # an attribution (dash line) has at most this many lines - round 0
+    "oneoff_lines": 2,            # a one-off heading has at most this many lines - round 1
+    "oneoff_words": 10,           # ...and this many words - round 1
+    "oneoff_caps_size": 0.75,     # an ALL-CAPS one-off heading may be this small (share of body) - round 1
+    "box_title_lines": 2,         # a box title has at most this many lines - round 0
+    "net_col_em": 2,              # heading net: a heading within this many body sizes of the open block's left edge - round 6, Characters
+    "net_overlay_pt": 1,          # ...starting below it (overlap up to this many points) - round 6, fourth_trimester
+    "net_gap_em": 0.6,            # ...with less than this many body sizes of space above - round 6, Characters
+    "index_start": 0.75,          # an index sits in the last quarter of the book - round 2
+    "index_min_lines": 15,        # an index page has this many lines - round 2
+    "index_num_share": 0.5,       # ...this share ending in page numbers - round 2
+    "index_entry_len": 50,        # ...median entry length at most this - round 2
+    "index_min_alpha": 5,         # ...this many alphabetical entry starts - round 2
+    "index_order": 0.7,           # ...this share in alphabetical order - round 2
+    "index_grow_lines": 3,        # a neighbouring index page needs this many entry lines - round 2
+    "column_min_lines": 3,        # a page's body column needs this many measured lines - round 7
+    "column_fallback_l": 0.12,    # column left edge when nothing is measured (share of width) - round 7
+    "column_fallback_r": 0.88,    # ...right edge - round 7
+    "align_em": 0.8,              # centered/flush-right/justified alignment within this many sizes - round 7
+    "center_min_em": 1.5,         # a centered line is indented at least this many sizes - round 7
+    "right_min_share": 0.3,       # a flush-right line starts right of this share of the column - round 7
+    "indent_shape_em": 0.6,       # an indented block's lines sit this many body sizes in (body lines are flush) - round 7, Characters (Angelou)
+    "first_indent_em": 1.2,       # a one-line block indented this much beyond the usual first-line indent - round 7
+    "right_indent_em": 2.5,       # a right indent of this many body sizes alone sets a block apart - round 7
+    "narrow": 0.75,               # a multi-line block narrower than this share of the column - round 7
+    "ragged": 0.2,                # line-length spread (stdev/mean) above this: ragged lines - round 7
+    "body_italic_max": 0.3,       # italic blocks set apart only when body text is less italic than this - round 7
+    "epigraph_blocks": 4,         # an epigraph run has at most this many blocks - round 7, fourth_trimester
+    "epigraph_block_words": 60,   # ...each at most this many words - round 7, fourth_trimester
+    "epigraph_words": 150,        # ...this many in all - round 7
+    "attrib_max_lines": 3,        # an attribution has at most this many lines - round 7
+    "attrib_max_words": 25,       # ...and this many words - round 7
+    "attrib_italic_words": 6,     # a few italic words after a quote ("Female, 16-17") are its source - round 7, Lonely
+    "attrib_head_lines": 2,       # a heading-style attribution has at most this many lines - round 8, Attachment
+    "attrib_head_words": 20,      # ...and this many words - round 8, Attachment
+    "attrib_edge_pt": 1.5,        # the work's title line ends within this many points of the attribution - round 7, Characters (Angelou)
+    "attrib_gap_em": 1.5,         # ...and follows within this many sizes - round 7, Characters
+    "verse_min_lines": 3,         # verse has at least this many lines - round 7
+    "verse_short_line": 0.9,      # an epigraph line shorter than this share of the longest - round 7, fourth_trimester
+    "verse_short_share": 0.5,     # ...in this share of its lines keeps its line breaks - round 7, fourth_trimester
+    "continue_x_pt": 1.5,         # a quote/verse goes on at the same left edge within this many points - round 7, Far Calls
+    "continue_size_pt": 0.3,      # ...and this close in size - round 7, Far Calls
+    "overlap_pt": 1,              # blocks overlapping by more than this are drawn over each other - round 8, John Reveal
+    "item_order_pt": 1,           # a figure/table above a block by more than this is written before it - round 2
+    "stray_chars": 2,             # a block or heading of this few letters is stray lettering - round 1
+    "stray_tokens": 6,            # ...or up to this many one-letter tokens - round 1
+    "head_wrap_em": 2.6,          # a heading continues on the next line within this many sizes - round 1
+    "rotated_warn": 20,           # warn about turned text from this many glyphs - round 1
+}
+
+
+T = THRESHOLDS
+
+
+def _front(n_pages):
+    """how many first pages count as front matter: a share of the book, within bounds"""
+    return min(T["front_max"], max(T["front_min"], int(T["front_share"] * n_pages)))
+
+
 class PdfImportError(Exception):
     """Message is shown to the user as is (Turkish)."""
 
 
-ROLES = ["kısım", "bölüm", "alt başlık 1", "alt başlık 2", "gövde", "kutu", "kutu-başlık",
-         "şiir", "epigraf", "alıntı", "atıf", "liste", "ön sayfa", "sil"]
+# ====================================================================================================================
+# SHARED: patterns and small helpers used by several stages
+# ====================================================================================================================
+
+
 HEAD = {"kısım": 1, "bölüm": 2, "alt başlık 1": 3, "alt başlık 2": 4}   # internal depth
 MD_LEVEL = {1: 1, 2: 1, 3: 2, 4: 3}                                    # '#' count written to the markdown
 NUM = re.compile(r"^\s*\d+\.\s")
@@ -43,7 +278,41 @@ OCR_PRODUCER = re.compile(r"abbyy|finereader|tesseract|omnipage|readiris|paper c
 SCANNED_WARNING = "Bu PDF taranmış görünüyor, metin güvenilir olmayabilir."
 CAPTION = re.compile(r"^\s*(figure|fig\.|şekil|resim|görsel|plate|illustration|photo)\s*[\dIVX]", re.I)
 
-# ---------------------------------------------------------------------------- characters
+
+def size_key(font, size):
+    return f"{font}|{round(size * 2) / 2:g}"
+
+
+def fam_of(style):
+    f, s = style.split("|")
+    return re.sub(r"-(BoldItalic|LightItalic|RegularItalic|Italic|Bold|Regular|Light|Medium|Semibold|ExtraBold|Roman|SmallCaps)$", "", f), float(s)
+
+
+def terminal(s):
+    return bool(re.search(r"[.!?…:;\"”’)\]»][*_]*\s*$", s))
+
+
+def _similar_key(text):
+    """the letters of a line without its page-number-like words (numbers, words with digits, roman numerals), so a
+    slug or footer that carries the page number compares equal from page to page"""
+    return re.sub(r"[\W\d_]+", "", "".join(w.lower() for w in text.split()
+                                         if not re.search(r"\d", w) and not re.fullmatch(r"[ivxlcdm]+\W*", w, re.I)))
+
+
+def _roman(s):
+    v = dict(i=1, v=5, x=10, l=50, c=100, d=500, m=1000)
+    n = [v[c] for c in s.lower()]
+    return sum(-a if a < b else a for a, b in zip(n, n[1:] + [0]))
+
+
+# ====================================================================================================================
+# 1. READING (pdfium)
+#   in:  a pdfium page
+#   out: [Ch] one record per glyph (top-left origin, effective size, advance box, flags);
+#        tinted boxes, images, horizontal/vertical rules and scan signals of the page
+# ====================================================================================================================
+
+
 class Ch:
     __slots__ = ("idx", "ch", "ox", "lr", "x0", "x1", "top", "bot", "base", "font", "size", "weight",
                  "italic", "bold", "dropcap", "rot", "gsp")
@@ -57,15 +326,6 @@ class Ch:
         self.dropcap = False
         self.rot = rot                              # set at an angle (diagonal watermark, vertical edge tab)
         self.gsp = False                            # pdfium generated a space right before this char
-
-
-def size_key(font, size):
-    return f"{font}|{round(size * 2) / 2:g}"
-
-
-def fam_of(style):
-    f, s = style.split("|")
-    return re.sub(r"-(BoldItalic|LightItalic|RegularItalic|Italic|Bold|Regular|Light|Medium|Semibold|ExtraBold|Roman|SmallCaps)$", "", f), float(s)
 
 
 def _page_chars(page):
@@ -95,11 +355,11 @@ def _page_chars(page):
         fn = buf.value.decode("latin-1")
         w = raw.FPDFText_GetFontWeight(tp, i)
         # turned text has b != 0; c alone is a shear (faux italic), which stays in the flow
-        rot = abs(m.b) > 0.1 * (abs(m.a) + abs(m.d))
+        rot = abs(m.b) > T["rotated_b"] * (abs(m.a) + abs(m.d))
         out.append(Ch(chr(u), l.value, r.value, H - t.value, H - b.value, H - oy.value, fn,
                       raw.FPDFText_GetFontSize(tp, i) * (abs(m.a * m.d - m.b * m.c) / math.hypot(m.a, m.b) if m.a or m.b else 1.0), w,
                       bool(fl.value & 0x40) or bool(re.search(r"italic|oblique", fn, re.I)),
-                      w >= 600 or bool(re.search(r"bold|black|heavy", fn, re.I)),
+                      w >= T["bold_weight"] or bool(re.search(r"bold|black|heavy", fn, re.I)),
                       idx=i, ox=ox.value, lr=loose.right, rot=rot))
         out[-1].gsp, gsp = gsp, False
     return _dedupe(out)
@@ -115,10 +375,10 @@ def _dedupe(chars):
         if not c.ch.strip():
             keep.append(c)
             continue
-        if c.size < 3:
+        if c.size < T["hidden_text_pt"]:
             continue
         gx, gy = round(c.x0), round(c.base)
-        if any(abs(x - c.x0) < 0.3 and abs(y - c.base) < 0.3 and c.idx - i > 3
+        if any(abs(x - c.x0) < T["layer_repeat_pt"] and abs(y - c.base) < T["layer_repeat_pt"] and c.idx - i > T["layer_repeat_gap"]
                for dx in (-1, 0, 1) for dy in (-1, 0, 1)
                for x, y, i in seen[(c.ch, c.font, round(c.size), gx + dx, gy + dy)]):
             continue
@@ -141,8 +401,8 @@ def _tint_boxes(page):
         l, b, r, t = o.get_bounds()
         w, h = r - l, t - b
         lum = (R.value + G.value + B.value) / 3
-        if (A.value == 255 and 150 <= lum <= 248 and w * h >= 1500 and w < W * 0.9 and h < H * 0.9
-                and max(R.value, G.value, B.value) - min(R.value, G.value, B.value) < 30):
+        if (A.value == 255 and T["tint_lum_min"] <= lum <= T["tint_lum_max"] and w * h >= T["tint_min_area"] and w < W * T["tint_max_share"]
+                and h < H * T["tint_max_share"] and max(R.value, G.value, B.value) - min(R.value, G.value, B.value) < T["tint_max_chroma"]):
             res.append((l, H - t, r, H - b))
     return res
 
@@ -163,9 +423,9 @@ def _page_graphics(page):
             continue
         if o.type == raw.FPDF_PAGEOBJ_IMAGE:
             l, b, r, t = o.get_bounds()
-            if (r - l) * (t - b) >= 0.8 * W * H:
+            if (r - l) * (t - b) >= T["fullpage_image_share"] * W * H:
                 big = True                  # a scanned page or a full-page background: not a figure
-            elif r - l >= 25 and t - b >= 25:
+            elif r - l >= T["image_min_side"] and t - b >= T["image_min_side"]:
                 images.append((l, H - t, r, H - b))
             continue
         raw.FPDFPageObj_GetMatrix(o.raw, m)
@@ -177,153 +437,46 @@ def _page_graphics(page):
             kind = raw.FPDFPathSegment_GetType(s)
             if kind == raw.FPDF_SEGMENT_LINETO and prev:
                 (x0, y0), (x1, y1) = prev, pt
-                if abs(y1 - y0) < 0.6 and abs(x1 - x0) >= 10:
+                if abs(y1 - y0) < T["rule_straight"] and abs(x1 - x0) >= T["hrule_min_len"]:
                     hl.append((y0, min(x0, x1), max(x0, x1)))
-                elif abs(x1 - x0) < 0.6 and abs(y1 - y0) >= 6:
+                elif abs(x1 - x0) < T["rule_straight"] and abs(y1 - y0) >= T["vrule_min_len"]:
                     vl.append((x0, min(y0, y1), max(y0, y1)))
             prev = pt if kind != raw.FPDF_SEGMENT_BEZIERTO else None
     return dict(images=images, hl=hl, vl=vl, signals=(big, inv, vis))
 
 
-def _merge_rules(segs, tol=1.2, gap=2.5):
-    """collinear rule pieces -> {position: [(a, b), ...]} with touching pieces joined"""
-    out = {}
-    for pos, a, b in sorted(segs):
-        key = next((k for k in out if abs(k - pos) <= tol), None)
-        if key is None:
-            out[pos] = [(a, b)]
-            continue
-        iv = out[key]
-        if a <= iv[-1][1] + gap:
-            iv[-1] = (iv[-1][0], max(iv[-1][1], b))
-        else:
-            iv.append((a, b))
-        iv.sort()
-    return out
+def is_scanned(producer, signals):
+    """A scanned book with an OCR text layer: made by OCR software, or most text-bearing pages are a full-page image
+    under invisible text. The text of such a layer can be wrong in ways the importer cannot repair (pdfium drops the
+    last letter of most words in some ABBYY layers)."""
+    text_pages = [s for s in signals if s[1] + s[2]]
+    scan_pages = [s for s in text_pages if s[0] and s[1] and s[1] >= T["scan_invisible_ratio"] * s[2]]
+    return bool(OCR_PRODUCER.search(producer or "")) or (bool(text_pages) and len(scan_pages) >= T["scan_page_share"] * len(text_pages))
 
 
-def find_grids(hl, vl):
-    """Ruled tables: horizontal and vertical rules that cross each other. A grid needs at least 3 horizontal and 3
-    vertical rule positions (2 x 2 cells; a framed figure is 1 x 1). A cell border that is missing inside the grid means
-    merged cells: the grid is marked complex."""
-    H_ = _merge_rules(hl)
-    V_ = _merge_rules(vl)
-    covers = lambda ivs, a, b: any(s - 2 <= a and b <= e + 2 for s, e in ivs)
-    hs = [(y, s, e) for y, ivs in H_.items() for s, e in ivs]
-    vs = [(x, s, e) for x, ivs in V_.items() for s, e in ivs]
-    parent = list(range(len(hs) + len(vs)))
-
-    def find(i):
-        while parent[i] != i:
-            parent[i] = parent[parent[i]]
-            i = parent[i]
-        return i
-    for i, (y, x0, x1) in enumerate(hs):
-        for j, (x, y0, y1) in enumerate(vs):
-            if x0 - 2 <= x <= x1 + 2 and y0 - 2 <= y <= y1 + 2:
-                parent[find(i)] = find(len(hs) + j)
-    groups = collections.defaultdict(lambda: ([], []))
-    for i in range(len(hs)):
-        groups[find(i)][0].append(hs[i])
-    for j in range(len(vs)):
-        groups[find(len(hs) + j)][1].append(vs[j])
-    grids = []
-    for gh, gv in groups.values():
-        ys = sorted({round(y, 1) for y, _, _ in gh})
-        xs = sorted({round(x, 1) for x, _, _ in gv})
-        ys = [y for k, y in enumerate(ys) if k == 0 or y - ys[k - 1] > 3]
-        xs = [x for k, x in enumerate(xs) if k == 0 or x - xs[k - 1] > 3]
-        if len(ys) < 3 or len(xs) < 3:
-            continue
-        # a table has a full outer frame; a decorative frame with a tab on top (a chapter-number badge) does not
-        span = lambda ivs, a, b: sum(max(0, min(e, b) - max(s, a)) for s, e in ivs) >= 0.9 * (b - a)
-        edge_h = lambda y: [(s, e) for yy, s, e in gh if abs(yy - y) <= 3]
-        edge_v = lambda x: [(s, e) for xx, s, e in gv if abs(xx - x) <= 3]
-        if not (span(edge_h(ys[0]), xs[0], xs[-1]) and span(edge_h(ys[-1]), xs[0], xs[-1])
-                and span(edge_v(xs[0]), ys[0], ys[-1]) and span(edge_v(xs[-1]), ys[0], ys[-1])):
-            continue
-        complex_ = False
-        for x in xs[1:-1]:
-            ivs = [(s, e) for xx, s, e in gv if abs(xx - x) <= 3]
-            complex_ |= any(not covers(ivs, ys[k] + 1, ys[k + 1] - 1) for k in range(len(ys) - 1))
-        for y in ys[1:-1]:
-            ivs = [(s, e) for yy, s, e in gh if abs(yy - y) <= 3]
-            complex_ |= any(not covers(ivs, xs[k] + 1, xs[k + 1] - 1) for k in range(len(xs) - 1))
-        grids.append(dict(xs=xs, ys=ys, complex=complex_))
-    return grids
+# ====================================================================================================================
+# 2. LINES
+#   in:  [Ch] of a page
+#   out: line dicts (x0, x1, top, bot, base, style, size; after _prepare_line: md, plain, mix, shares)
+# ====================================================================================================================
 
 
-def _word_count(chars, page_no):
-    ls = build_lines(chars, page_no)
-    for l in ls:
-        _prepare_line(l)
-    return sum(len(l["plain"].split()) for l in ls)
-
-
-def _cell_text(chars, page_no):
-    ls = build_lines(chars, page_no)
-    for l in ls:
-        _prepare_line(l)
-    return join_lines([l["md"].strip() for l in ls], set(), collections.Counter()).replace("|", "\\|") if ls else ""
-
-
-def grid_markdown(grid, chars, page_no):
-    """the grid's text as a markdown table (first row = header), or None when it holds no text"""
-    xs, ys = grid["xs"], grid["ys"]
-    cells = [[[] for _ in range(len(xs) - 1)] for _ in range(len(ys) - 1)]
-    for c in chars:
-        cx, cy = (c.x0 + c.x1) / 2, (c.top + c.bot) / 2
-        r = next((k for k in range(len(ys) - 1) if ys[k] <= cy <= ys[k + 1]), None)
-        q = next((k for k in range(len(xs) - 1) if xs[k] <= cx <= xs[k + 1]), None)
-        if r is not None and q is not None:
-            cells[r][q].append(c)
-    rows = [[_cell_text(cell, page_no) for cell in row] for row in cells]
-    if not any(any(x.strip() for x in row) for row in rows):
-        return None
-    out = ["| " + " | ".join(rows[0]) + " |", "|" + "---|" * len(rows[0])]
-    out += ["| " + " | ".join(r) + " |" for r in rows[1:]]
-    return "\n".join(out)
-
-
-def _two_column_order(lines, W):
-    """Two columns on a page: read the left column, then the right, between lines that span the gutter (a heading
-    over both columns). The gutter is the x in the middle band of the page crossed by the fewest lines."""
-    cands = [W * (0.3 + 0.01 * k) for k in range(41)]
-    cross = lambda g: sum(1 for l in lines if l["x0"] < g - 1 and l["x1"] > g + 1)
-    g = min(cands, key=lambda g: (cross(g), abs(g - W / 2)))
-    out, run = [], []
-
-    def flush():
-        out.extend(sorted((l for l in run if l["x1"] <= g + 1), key=lambda l: (round(l["base"]), l["x0"])))
-        out.extend(sorted((l for l in run if l["x1"] > g + 1), key=lambda l: (round(l["base"]), l["x0"])))
-        run.clear()
-    for l in sorted(lines, key=lambda l: (round(l["base"]), l["x0"])):
-        if l["x0"] < g - 1 and l["x1"] > g + 1:
-            flush()
-            out.append(l)
-        else:
-            run.append(l)
-    flush()
-    return out
-
-
-# ---------------------------------------------------------------------------- rows, lines
 def build_lines(chars, page_no, orn_fonts=frozenset()):
     """chars -> rows (baseline clustering, content-stream order inside a row) -> segments split at big gaps /
     backward jumps. Small super/subscript rows fold into the row they overlap; drop caps attach to the
     first line they sit next to."""
     chars = [c for c in chars if c.font not in orn_fonts]
-    body = statistics.median([c.size for c in chars if c.ch.strip()] or [10.0])
+    body = statistics.median([c.size for c in chars if c.ch.strip()] or [T["default_body_pt"]])
     # (an ornamental initial may be eight times the body size; a letter beyond twelve is art, not text)
-    caps = [c for c in chars if c.size >= 2.5 * body and c.ch.isalpha() and c.size < 12 * body]
+    caps = [c for c in chars if c.size >= T["dropcap_min"] * body and c.ch.isalpha() and c.size < T["dropcap_max"] * body]
     # a drop cap stands alone: big letters next to each other are a title on a page with little small text
-    caps = [c for c in caps if not any(d is not c and abs(d.base - c.base) < 0.3 * c.size and abs(d.x0 - c.x0) < 2 * c.size
+    caps = [c for c in caps if not any(d is not c and abs(d.base - c.base) < T["dropcap_alone_base"] * c.size and abs(d.x0 - c.x0) < T["dropcap_alone_x"] * c.size
                                        for d in caps)]
     capset = {id(c) for c in caps}
     chars = [c for c in chars if id(c) not in capset]
     rows = []
     for c in sorted(chars, key=lambda c: (c.base, c.idx)):
-        if rows and abs(c.base - rows[-1][0].base) <= max(1.2, 0.18 * c.size):
+        if rows and abs(c.base - rows[-1][0].base) <= max(T["row_base_pt"], T["row_base_em"] * c.size):
             rows[-1].append(c)
         else:
             rows.append([c])
@@ -340,10 +493,11 @@ def build_lines(chars, page_no, orn_fonts=frozenset()):
         tiny = all(c.ch in "¹²³⁴⁵⁶⁷⁸⁹⁰₀₁₂₃₄₅₆₇₈₉⁄/ " for c in r)
         best = None
         for j, n in enumerate(rows):
-            if j == i or j in merged or sizes[j] <= 0 or (sizes[i] > 0.8 * sizes[j] and not tiny):
+            if j == i or j in merged or sizes[j] <= 0 or (sizes[i] > T["script_size"] * sizes[j] and not tiny):
                 continue
             nx0, nx1 = min(c.x0 for c in n), max(c.x1 for c in n)
-            if nx0 - 1 <= rx0 and rx1 <= nx1 + 1 and abs(r[0].base - n[0].base) <= (1.1 if tiny else 0.9) * sizes[j]:
+            if (nx0 - T["script_slack"] <= rx0 and rx1 <= nx1 + T["script_slack"]
+                    and abs(r[0].base - n[0].base) <= (T["script_reach_tiny"] if tiny else T["script_reach"]) * sizes[j]):
                 d = abs(r[0].base - n[0].base)
                 if best is None or d < best[0]:
                     best = (d, j)
@@ -358,9 +512,9 @@ def build_lines(chars, page_no, orn_fonts=frozenset()):
         for a, b in zip(r, r[1:]):
             # a ligature (Th, fi, ffl ...) comes out as several chars on ONE glyph box: the second starts where the
             # first did, which is not a jump back to an earlier part of the line
-            same_box = abs(b.x0 - a.x0) < 0.05 * max(b.size, 1.0)
+            same_box = abs(b.x0 - a.x0) < T["ligature_box_em"] * max(b.size, 1.0)
             fwd, back = b.x0 - a.x1, (0.0 if same_box else a.x1 - b.x0)
-            if (fwd > max(2.5 * b.size, 18) or back > 0.9 * b.size) and b.ch.strip() and a.ch.strip():
+            if (fwd > max(T["seg_gap_em"] * b.size, T["seg_gap_pt"]) or back > T["seg_back_em"] * b.size) and b.ch.strip() and a.ch.strip():
                 segs.append(seg)
                 seg = [b]
             else:
@@ -378,11 +532,11 @@ def build_lines(chars, page_no, orn_fonts=frozenset()):
     out.sort(key=lambda l: (round(l["base"]), l["x0"]))
     for dc in caps:
         dc.dropcap = True
-        cands = [l for l in out if l["x0"] >= dc.x0 - 1 and abs(l["top"] - dc.top) <= 0.2 * dc.size + 3]
+        cands = [l for l in out if l["x0"] >= dc.x0 - T["dropcap_x_slack"] and abs(l["top"] - dc.top) <= T["dropcap_top_em"] * dc.size + T["dropcap_top_pt"]]
         if cands:
             # the line beside the initial's top (a tall initial reaches several lines; their left edges differ by
             # hairs, so the top decides)
-            l = min(cands, key=lambda l: (abs(l["top"] - dc.top) > 0.5 * l["size"], abs(l["top"] - dc.top), l["x0"]))
+            l = min(cands, key=lambda l: (abs(l["top"] - dc.top) > T["dropcap_line_top"] * l["size"], abs(l["top"] - dc.top), l["x0"]))
             # the initial is the first letter of the word, not a styled run of its own ("**O**ne" -> "One")
             dc.italic, dc.bold = l["chars"][0].italic, l["chars"][0].bold
             l["chars"].insert(0, dc)
@@ -420,9 +574,9 @@ def line_tokens(line):
     ink = [c for c in cs if c.ch != " "]
     gaps = [b.ox - a.lr for a, b in zip(ink, ink[1:])]
     med = sorted(gaps)[len(gaps) // 2] if gaps else 0.0
-    if len(ink) >= 4 and med > 0.08 * size:
+    if len(ink) >= T["tracked_min_glyphs"] and med > T["tracked_gap_em"] * size:
         thr, m1, m2 = _two_clusters(gaps)
-        if not (m2 - m1 > 0.15 * size and m2 > 1.8 * max(m1, 0.02 * size)):
+        if not (m2 - m1 > T["tracked_split_em"] * size and m2 > T["tracked_ratio"] * max(m1, T["tracked_floor_em"] * size)):
             thr = float("inf")
         toks, prev = [], None
         for c in ink:
@@ -440,18 +594,19 @@ def line_tokens(line):
         if not (c.ch == " " and 1 < i < len(cs) - 1 and cs[i - 1].ch.isalpha()):
             return False
         k = i - 1
-        while k > 0 and abs(cs[k - 1].x0 - cs[i - 1].x0) < 0.05 * size and abs(cs[k - 1].x1 - cs[i - 1].x1) < 0.05 * size:
+        while (k > 0 and abs(cs[k - 1].x0 - cs[i - 1].x0) < T["ligature_box_em"] * size
+               and abs(cs[k - 1].x1 - cs[i - 1].x1) < T["ligature_box_em"] * size):
             k -= 1
         n = i - k
-        return n >= 2 and c.ox - cs[i - 1].ox < 0.2 * n * size and cs[i + 1].ox - cs[i - 1].lr < 0.08 * size
+        return n >= 2 and c.ox - cs[i - 1].ox < T["fake_space_em"] * n * size and cs[i + 1].ox - cs[i - 1].lr < T["fake_space_gap_em"] * size
     cs = [c for i, c in enumerate(cs) if not fake_space(i)]
     has_space = any(c.ch == " " for c in cs)
     letters = [c for c in cs if c.ch.isalpha()]
     caps = sum(c.ch.isupper() for c in letters) / max(1, len(letters))
-    if has_space and caps > 0.8:
-        thr = 0.5 * size
+    if has_space and caps > T["caps_share"]:
+        thr = T["space_caps_em"] * size
     else:
-        thr = 0.2 * size
+        thr = T["space_em"] * size
     # pdfium's own generated space is a second opinion where a clipped glyph box (an "f" in some fonts, kerned
     # capitals) hides the gap; it also fires inside lightly tracked titles, so the gap must still stand out from
     # the line's usual letter gap
@@ -461,7 +616,7 @@ def line_tokens(line):
     for c in cs:
         if prev is not None and c.ch != " " and prev.ch != " " and not prev.dropcap:
             gap = c.ox - prev.lr
-            gen = c.gsp and not c.ch.isspace() and not prev.ch.isspace() and gap - lmed >= 0.06 * size
+            gen = c.gsp and not c.ch.isspace() and not prev.ch.isspace() and gap - lmed >= T["gen_space_em"] * size
             if gap > thr or gen:
                 toks.append((" ", prev.italic, prev.bold))
         toks.append((c.ch, c.italic, c.bold))
@@ -513,20 +668,49 @@ def _prepare_line(l):
     del l["chars"]                      # keep memory flat on long books
 
 
+# ====================================================================================================================
+# 3. BLOCKS
+#   in:  [Ch], tinted boxes, images and rules of a page
+#   out: page dict {p, W, H, blocks, boxes, items (figures/tables), rotated, fig_words, fig_text};
+#        a block: lines + style (dominant), box, list flag, geometry, text
+# ====================================================================================================================
+
+
 def two_column_suspect(lines, W):
-    left = [l for l in lines if l["x0"] < 0.4 * W]
+    left = [l for l in lines if l["x0"] < T["col_left"] * W]
     # a right-hand line with no word in it (a contents page's page numbers, roman or arabic) is no column
-    right = [l for l in lines if l["x0"] > 0.5 * W and l["x1"] <= W + 1
-             and any(len(w) >= 3 and not re.fullmatch(r"[ivxlcdm]+", w, re.I) for w in re.findall(r"[^\W\d_]+", l["plain"]))]
-    rows = sum(1 for r in right if any(abs(r["base"] - l["base"]) < 2 and l["x1"] < r["x0"] for l in left))
-    return rows >= 4, rows
+    right = [l for l in lines if l["x0"] > T["col_right"] * W and l["x1"] <= W + T["col_slack"]
+             and any(len(w) >= T["col_word_len"] and not re.fullmatch(r"[ivxlcdm]+", w, re.I) for w in re.findall(r"[^\W\d_]+", l["plain"]))]
+    rows = sum(1 for r in right if any(abs(r["base"] - l["base"]) < T["col_base_pt"] and l["x1"] < r["x0"] for l in left))
+    return rows >= T["col_min_rows"], rows
 
 
-# ---------------------------------------------------------------------------- blocks
+def _two_column_order(lines, W):
+    """Two columns on a page: read the left column, then the right, between lines that span the gutter (a heading
+    over both columns). The gutter is the x in the middle band of the page crossed by the fewest lines."""
+    cands = [W * (T["gutter_lo"] + 0.01 * k) for k in range(41)]
+    cross = lambda g: sum(1 for l in lines if l["x0"] < g - T["gutter_slack"] and l["x1"] > g + T["gutter_slack"])
+    g = min(cands, key=lambda g: (cross(g), abs(g - W / 2)))
+    out, run = [], []
+
+    def flush():
+        out.extend(sorted((l for l in run if l["x1"] <= g + T["gutter_slack"]), key=lambda l: (round(l["base"]), l["x0"])))
+        out.extend(sorted((l for l in run if l["x1"] > g + T["gutter_slack"]), key=lambda l: (round(l["base"]), l["x0"])))
+        run.clear()
+    for l in sorted(lines, key=lambda l: (round(l["base"]), l["x0"])):
+        if l["x0"] < g - T["gutter_slack"] and l["x1"] > g + T["gutter_slack"]:
+            flush()
+            out.append(l)
+        else:
+            run.append(l)
+    flush()
+    return out
+
+
 def _in_box(l, boxes):
     cx, cy = (l["x0"] + l["x1"]) / 2, (l["top"] + l["bot"]) / 2
     for i, (a, b, c, d) in enumerate(boxes):
-        if a - 1 <= cx <= c + 1 and b - 1 <= cy <= d + 1:
+        if a - T["box_slack"] <= cx <= c + T["box_slack"] and b - T["box_slack"] <= cy <= d + T["box_slack"]:
             return i
     return None
 
@@ -544,11 +728,13 @@ def _finish_block(b):
 
 def build_blocks(page_no, W, H, chars, boxes, orn_fonts=frozenset(), images=(), hl=(), vl=()):
     # text outside the page box (facing-page copies in spreads) is not part of this page
-    chars = [c for c in chars if -2 <= (c.x0 + c.x1) / 2 <= W + 2 and -2 <= (c.top + c.bot) / 2 <= H + 2]
+    sl = T["page_slack"]
+    chars = [c for c in chars if -sl <= (c.x0 + c.x1) / 2 <= W + sl and -sl <= (c.top + c.bot) / 2 <= H + sl]
     # text set at an angle is a watermark or an edge tab, never part of the reading flow
     rotated = sum(1 for c in chars if c.rot and c.ch.strip())
     chars = [c for c in chars if not c.rot]
-    inside = lambda c, b: b[0] - 1 <= (c.x0 + c.x1) / 2 <= b[2] + 1 and b[1] - 1 <= (c.top + c.bot) / 2 <= b[3] + 1
+    bs = T["box_slack"]
+    inside = lambda c, b: b[0] - bs <= (c.x0 + c.x1) / 2 <= b[2] + bs and b[1] - bs <= (c.top + c.bot) / 2 <= b[3] + bs
     items, fig_words, fig_text = [], 0, []
     # a figure: its place in the flow, and the lettering inside it (diagram labels) belongs to the figure. Judged line
     # by line: only a line wholly inside the picture goes, and never a title or caption printed inside the picture's
@@ -563,13 +749,13 @@ def build_blocks(page_no, W, H, chars, boxes, orn_fonts=frozenset(), images=(), 
             caption, or a wide line (35%+ of the picture) in the top or bottom 15% of it, stays in the text"""
             if CAPTION.match("".join(c.ch for c in l["chars"]).replace("*", "")):
                 return False
-            wide = l["x1"] - l["x0"] >= 0.35 * w
-            edge = l["bot"] <= im[1] + 0.15 * h or l["top"] >= im[3] - 0.15 * h
+            wide = l["x1"] - l["x0"] >= T["fig_title_width"] * w
+            edge = l["bot"] <= im[1] + T["fig_title_band"] * h or l["top"] >= im[3] - T["fig_title_band"] * h
             return not (wide and edge)
         own_lines = [l for l in page_lines if l["chars"] and all(inside(c, im) for c in l["chars"]) and label(l)]
         own = [c for l in own_lines for c in l["chars"]]
         words = sum(len("".join(c.ch for c in l["chars"]).split()) for l in own_lines)
-        if own and words <= 40:
+        if own and words <= T["fig_label_words"]:
             ids = {id(c) for c in own}
             chars = [c for c in chars if id(c) not in ids]
             fig_words += words
@@ -591,7 +777,7 @@ def build_blocks(page_no, W, H, chars, boxes, orn_fonts=frozenset(), images=(), 
     for l in lines:
         _prepare_line(l)
         l["box"] = _in_box(l, boxes)
-    if two_column_suspect([l for l in lines if l["size"] < 20], W)[0]:
+    if two_column_suspect([l for l in lines if l["size"] < T["col_max_size"]], W)[0]:
         lines = _two_column_order(lines, W)
     margin_c = collections.defaultdict(collections.Counter)
     for l in lines:
@@ -599,7 +785,7 @@ def build_blocks(page_no, W, H, chars, boxes, orn_fonts=frozenset(), images=(), 
     margin = {k: min(v, key=lambda x: (-v[x], x)) for k, v in margin_c.items()}
     pitch = collections.defaultdict(list)
     for a, b in zip(lines, lines[1:]):
-        if a["style"] == b["style"] and 0 < b["base"] - a["base"] < 2.2 * a["size"]:
+        if a["style"] == b["style"] and 0 < b["base"] - a["base"] < T["pitch_max_em"] * a["size"]:
             pitch[a["style"]].append(b["base"] - a["base"])
     pit = {k: statistics.median(v) for k, v in pitch.items()}
     blocks, cur = [], None
@@ -608,7 +794,7 @@ def build_blocks(page_no, W, H, chars, boxes, orn_fonts=frozenset(), images=(), 
         return dict(lines=[l], style=l["style"], box=l["box"], page=page_no, list=bool(ITEM.match(l["plain"])),
                     mix=collections.Counter(l["mix"]))
 
-    full = [l["x1"] for l in lines if len(l["plain"].split()) >= 6]
+    full = [l["x1"] for l in lines if len(l["plain"].split()) >= T["full_line_words"]]
     right = statistics.median(full) if full else W
 
     def inline_run(l, a):
@@ -616,14 +802,15 @@ def build_blocks(page_no, W, H, chars, boxes, orn_fonts=frozenset(), images=(), 
         inline run (an italic title, a bold lead-in, another font): the same size, the previous line runs to the
         right edge (a short line is a heading or a paragraph's end), and either one of the two lines mixes both styles
         or the line goes on with the previous line's open sentence in lowercase (a heading starts with a capital)"""
-        if abs(l["size"] - a["size"]) > 0.25 or a["x1"] < right - 1.5 * a["size"]:
+        if abs(l["size"] - a["size"]) > T["inline_size_pt"] or a["x1"] < right - T["full_line_em"] * a["size"]:
             return False
         return (cur["style"] in l["mix"] or l["style"] in a["mix"]
                 or (not terminal(a["plain"]) and bool(re.match(r"[\W\d_]*[a-z]", l["plain"]))))
     def indented_run(l, a, mg):
         """an indented line under a line with the same indent is no first-line indent but an indented block (a quote,
         an epigraph) going on: the line above ran to the right edge without ending its sentence"""
-        return (abs(l["x0"] - a["x0"]) < 1 and a["x0"] - mg > 0.7 * l["size"] and a["x1"] >= right - 3 * a["size"]
+        return (abs(l["x0"] - a["x0"]) < T["indent_same_pt"] and a["x0"] - mg > T["indent_em"] * l["size"]
+                and a["x1"] >= right - T["indented_full_em"] * a["size"]
                 and not terminal(a["plain"]))
     for l in lines:
         if cur is None:
@@ -633,15 +820,15 @@ def build_blocks(page_no, W, H, chars, boxes, orn_fonts=frozenset(), images=(), 
         gap = l["base"] - a["base"]
         restyled = l["style"] != cur["style"] and not (l["box"] == cur["box"] and inline_run(l, a))
         st = cur["style"] if not restyled else l["style"]
-        ref = pit.get(st, pit.get(l["style"], 1.3 * l["size"]))
+        ref = pit.get(st, pit.get(l["style"], T["default_pitch_em"] * l["size"]))
         mg = margin.get((st, l["box"] is not None), margin[(l["style"], l["box"] is not None)])
         if restyled or l["box"] != cur["box"]:
             brk = True
-        elif gap > 1.45 * ref or (gap < 0.3 * l["size"] and l["x0"] < a["x1"]):
+        elif gap > T["para_gap"] * ref or (gap < T["overlap_em"] * l["size"] and l["x0"] < a["x1"]):
             brk = True
-        elif ITEM.match(l["plain"]) and len(l["plain"].strip()) > 3:
+        elif ITEM.match(l["plain"]) and len(l["plain"].strip()) > T["item_min_chars"]:
             brk = True
-        elif (l["x0"] - mg > 0.7 * l["size"] and not (cur["list"] and l["x0"] >= cur["lines"][0]["x0"] - 1)
+        elif (l["x0"] - mg > T["indent_em"] * l["size"] and not (cur["list"] and l["x0"] >= cur["lines"][0]["x0"] - T["list_slack"])
               and not indented_run(l, a, mg)):
             brk = True
         else:
@@ -661,37 +848,16 @@ def build_blocks(page_no, W, H, chars, boxes, orn_fonts=frozenset(), images=(), 
                 fig_text=fig_text)
 
 
-def _roman(s):
-    v = dict(i=1, v=5, x=10, l=50, c=100, d=500, m=1000)
-    n = [v[c] for c in s.lower()]
-    return sum(-a if a < b else a for a, b in zip(n, n[1:] + [0]))
+# ====================================================================================================================
+# 4. MARGINS AND FURNITURE
+#   in:  every page's blocks
+#   out: line['sil'], line['zone'], block['sil'], block['edge'], page['cover'],
+#        page['running_removed'], Doc.text_top / text_bot; boxes too small to be boxes dropped
+# ====================================================================================================================
 
 
-def _similar_key(text):
-    """the letters of a line without its page-number-like words (numbers, words with digits, roman numerals), so a
-    slug or footer that carries the page number compares equal from page to page"""
-    return re.sub(r"[\W\d_]+", "", "".join(w.lower() for w in text.split()
-                                         if not re.search(r"\d", w) and not re.fullmatch(r"[ivxlcdm]+\W*", w, re.I)))
-
-
-# ---------------------------------------------------------------------------- document level analysis
-class Doc:
-    def __init__(self, pages):
-        self.pages = pages
-        self.NP = len(pages)
-        widths = [p["W"] for p in pages]
-        self.W0 = statistics.median(widths) if widths else 0
-        self._mark_cover_and_repeats()
-        self._filter_boxes()
-        self._recheck_two_col()
-        self.S = self._style_stats()
-        self.sugg, self.why, self.body_style, self.body_styles = self._suggest()
-        self._block_roles()
-        self._title_running_heads()
-        self._index_pages()
-        self._object_groups()
-        self._shape_roles()
-        self.lex = self._hyphen_lexicon()
+class _Margins:
+    """Stage 4 (Doc mixin): what lies outside the text block or repeats on page after page."""
 
     # -- margin text: running heads/feet, page numbers, slug, watermark ------------------------------
     def _mark_cover_and_repeats(self):
@@ -709,7 +875,7 @@ class Doc:
                 for l in b["lines"]:
                     words[l["size"]] += len(l["plain"].split())
                     swords[l["style"]] += len(l["plain"].split())
-        bsize = max(words, key=words.get) if words else 10.0
+        bsize = max(words, key=words.get) if words else T["default_body_pt"]
         bstyle = max(swords, key=swords.get) if swords else None
         widths = [l["x1"] - l["x0"] for p in self.pages for b in p["blocks"] for l in b["lines"] if l["style"] == bstyle]
         bwidth = statistics.median(widths) if widths else 0.0
@@ -723,11 +889,12 @@ class Doc:
                     recur[_similar_key(l["plain"])].add(p["p"])
         tops, bots = [], []
         for p in self.pages:
-            bl = [l for b in p["blocks"] for l in b["lines"] if abs(l["size"] - bsize) <= 0.6 and len(l["plain"].split()) >= 3
-                  and not (len(recur[_similar_key(l["plain"])]) >= 3 and l["x1"] - l["x0"] < 0.9 * bwidth)]
+            bl = [l for b in p["blocks"] for l in b["lines"] if abs(l["size"] - bsize) <= T["body_size_pt"]
+                  and len(l["plain"].split()) >= T["body_line_words"]
+                  and not (len(recur[_similar_key(l["plain"])]) >= T["repeat_pages"] and l["x1"] - l["x0"] < T["full_measure"] * bwidth)]
             # (narrow lines only say nothing about the top: at the bottom a paragraph's short last line is body text)
-            wide = [l for l in bl if l["x1"] - l["x0"] >= 0.5 * bwidth]
-            if len(bl) >= 3 and wide:
+            wide = [l for l in bl if l["x1"] - l["x0"] >= T["half_measure"] * bwidth]
+            if len(bl) >= T["page_body_lines"] and wide:
                 tops.append(min(l["top"] for l in wide))
                 bots.append(max(l["bot"] for l in bl))
         self.text_top = statistics.median(tops) if tops else None
@@ -735,8 +902,9 @@ class Doc:
 
         def zone(p, l):
             if self.text_top is None:
-                return "top" if l["top"] < 0.09 * p["H"] else "bot" if l["top"] > 0.86 * p["H"] else None
-            return "top" if l["bot"] <= self.text_top - 0.5 else "bot" if l["top"] >= self.text_bot + 0.5 else None
+                return "top" if l["top"] < T["band_top"] * p["H"] else "bot" if l["top"] > T["band_bot"] * p["H"] else None
+            return ("top" if l["bot"] <= self.text_top - T["zone_slack"] else "bot" if l["top"] >= self.text_bot + T["zone_slack"]
+                    else None)
         rep, pos, same = collections.defaultdict(set), collections.defaultdict(set), collections.defaultdict(set)
         for p in self.pages:
             for b in p["blocks"]:
@@ -745,14 +913,14 @@ class Doc:
                     l["key"] = "".join(ch for ch in l["plain"].lower() if ch.isalpha())
                     if l["zone"] and l["key"]:
                         rep[(l["zone"], l["key"])].add(p["p"])
-                    pos[(l["style"], round(l["top"] / 4))].add(p["p"])
+                    pos[(l["style"], round(l["top"] / T["pos_cell_pt"]))].add(p["p"])
                     same[(l["style"], _similar_key(l["plain"]))].add(p["p"])
         # a running head carries the page number: a margin line of number + a few words whose number is the page's
         # (the same offset from the PDF page as most such lines; roman and arabic counted apart) goes whatever its
         # text, so heads that change from chapter to chapter go too
         def folio(l):
-            m = l["zone"] and l["size"] <= 1.05 * bsize and FOLIO.match(l["plain"])
-            if not m or len(l["plain"].split()) > 9:
+            m = l["zone"] and l["size"] <= T["margin_size"] * bsize and FOLIO.match(l["plain"])
+            if not m or len(l["plain"].split()) > T["folio_words"]:
                 return None
             n = m.group(1) or m.group(2)
             return ("a", int(n)) if n.isdigit() else ("r", _roman(n))
@@ -764,22 +932,22 @@ class Doc:
                     if f and f[1]:
                         offs[(f[0], f[1] - p["p"])] += 1
         best = {k: max((o for o in offs if o[0] == k), key=offs.get, default=None) for k in ("a", "r")}
-        need = max(4, 0.35 * self.NP)
+        need = max(T["band_min_pages"], T["band_share"] * self.NP)
         for p in self.pages:
-            p["cover"] = bool(self.W0) and abs(p["W"] - self.W0) > 0.2 * self.W0
+            p["cover"] = bool(self.W0) and abs(p["W"] - self.W0) > T["cover_width"] * self.W0
             p["running_removed"] = 0
             for b in p["blocks"]:
                 for l in b["lines"]:
                     f = folio(l)
-                    head = bool(f and f[1] and best[f[0]] and offs[best[f[0]]] >= 3 and f[1] - p["p"] == best[f[0]][1])
-                    bodylike = l["style"] == bstyle or (abs(l["size"] - bsize) <= 0.6 and l["x1"] - l["x0"] > 0.5 * bwidth)
-                    band = ((l["top"] < 0.09 * p["H"] or l["top"] > 0.86 * p["H"]) and not bodylike
-                            and len(same[(l["style"], _similar_key(l["plain"]))]) >= 3)
+                    head = bool(f and f[1] and best[f[0]] and offs[best[f[0]]] >= T["repeat_pages"] and f[1] - p["p"] == best[f[0]][1])
+                    bodylike = l["style"] == bstyle or (abs(l["size"] - bsize) <= T["body_size_pt"] and l["x1"] - l["x0"] > T["half_measure"] * bwidth)
+                    band = ((l["top"] < T["band_top"] * p["H"] or l["top"] > T["band_bot"] * p["H"]) and not bodylike
+                            and len(same[(l["style"], _similar_key(l["plain"]))]) >= T["repeat_pages"])
                     l["sil"] = bool(
                         (l["zone"] and PAGE_NO.match(l["plain"]))
-                        or (l["zone"] and l["key"] and len(rep[(l["zone"], l["key"])]) >= 3 and l["size"] <= 1.05 * bsize)
+                        or (l["zone"] and l["key"] and len(rep[(l["zone"], l["key"])]) >= T["repeat_pages"] and l["size"] <= T["margin_size"] * bsize)
                         or head
-                        or (band and len(pos[(l["style"], round(l["top"] / 4))]) >= need))
+                        or (band and len(pos[(l["style"], round(l["top"] / T["pos_cell_pt"]))]) >= need))
                     p["running_removed"] += l["sil"] and not PAGE_NO.match(l["plain"])
                 kept = [l for l in b["lines"] if not l["sil"]]
                 b["sil"] = not kept
@@ -788,7 +956,7 @@ class Doc:
                     _finish_block(b)
                 b["edge"] = all(l["zone"] for l in b["lines"])
 
-    def _filter_boxes(self, min_words=15):
+    def _filter_boxes(self, min_words=T["box_min_words"]):
         """tinted shapes holding fewer than min_words words are figure panels, not boxes"""
         for p in self.pages:
             wc = collections.Counter()
@@ -801,267 +969,13 @@ class Doc:
 
     def _recheck_two_col(self):
         for p in self.pages:
-            ls = [l for b in p["blocks"] if not b["sil"] for l in b["lines"] if l["size"] < 20]
+            ls = [l for b in p["blocks"] if not b["sil"] for l in b["lines"] if l["size"] < T["col_max_size"]]
             p["two_col"], p["two_rows"] = two_column_suspect(ls, p["W"])
-
-    def _style_stats(self):
-        S = collections.OrderedDict()
-        for p in self.pages:
-            if p["cover"]:
-                continue
-            for b in p["blocks"]:
-                if b["sil"]:
-                    continue
-                s = S.setdefault(b["style"], dict(words=0, pages=set(), first=p["p"], last=p["p"], blocks=0, lines=0,
-                                                  chars=0, inbox=0, caps=0, short=0, ital=0, num=0, dash=0, letters=0,
-                                                  multiline=0, mlines=0, sent=0, wts=[], edge=0))
-                txt = b["text"]
-                letters = [c for c in txt if c.isalpha()]
-                s["words"] += b["nwords"]
-                s["pages"].add(p["p"])
-                s["last"] = p["p"]
-                s["blocks"] += 1
-                s["lines"] += len(b["lines"])
-                s["chars"] += len(txt)
-                s["inbox"] += b["box"] is not None
-                s["caps"] += (sum(c.isupper() for c in letters) / max(1, len(letters)) > 0.8)
-                s["letters"] += len(letters)
-                s["short"] += (len(b["lines"]) <= 3 and len(txt) <= 120)
-                s["ital"] += b["italic_share"] > 0.6
-                s["num"] += bool(NUM.match(b["lines"][0]["plain"]))
-                s["dash"] += bool(DASH.match(txt))
-                s["multiline"] += len(b["lines"]) >= 2
-                s["mlines"] += len(b["lines"]) if len(b["lines"]) >= 2 else 0
-                s["sent"] += bool(re.search(r"[.!?]\s*$", txt))
-                s["edge"] += b.get("edge", False)
-                s["wts"] += [l["w0"] for l in b["lines"]]
-        for s in S.values():
-            s["weight"] = statistics.median(s["wts"]) if s["wts"] else 400
-        return S
-
-    @staticmethod
-    def score(style, s):
-        """heading rank: size, +2 for ALL CAPS (a caps section title outranks a mixed-case sub-title of similar size),
-        +0.3 for bold"""
-        return fam_of(style)[1] + (2.0 if s["caps"] / s["blocks"] > 0.8 else 0) + (0.3 if s["weight"] >= 600 or "Bold" in style else 0)
-
-    def _suggest(self):
-        S = self.S
-        if not S:
-            self.body_keys = set()
-            return {}, {}, None, set()
-        body_style = max(S, key=lambda k: S[k]["words"])
-        bfam, bsize = fam_of(body_style)
-        # decorative front-matter styles live on the first pages; in a short document "first pages" is just a couple
-        front = min(8, max(2, int(0.03 * self.NP)))
-        self.bfam, self.bsize = bfam, bsize
-        sugg, why = {}, {}
-        body_styles = {k for k, s in S.items() if s["words"] >= 0.15 * S[body_style]["words"] and s["lines"] / s["blocks"] >= 3}
-        body_styles.add(body_style)         # the most-worded style is body even when its paragraphs come out short
-        body_keys = {fam_of(k) for k in body_styles}
-        # fonts that behave like body text are not anomalies; they do not change roles (a bold run-in font is also
-        # the font of the sub-heads)
-        self.body_keys = body_keys | {fam_of(k) for k in self._body_variants(body_styles)}
-        self.variant_of_body = lambda k: fam_of(k) in body_keys and k not in body_styles
-        for k, s in S.items():
-            n = s["blocks"]
-            f, sz = fam_of(k)
-            avgl = s["lines"] / n
-            poemlike = (f != bfam and s["mlines"] / s["lines"] >= 0.6 and avgl >= 1.5 and 0.9 * bsize <= sz <= 1.3 * bsize
-                        and s["ital"] / n >= 0.5 and s["sent"] / n < 0.95)
-            if s["letters"] == 0 and sz >= 1.5 * bsize:
-                sugg[k] = ("sil", why.setdefault(k, "harf yok, büyük boy: süs rakamı"))
-                continue
-            if s["letters"] == 0:
-                sugg[k] = ("gövde", "harf yok, küçük boy: rakam/kesir")
-                continue
-            if k in body_styles:
-                sugg[k] = ("gövde", "en çok kelimeli stil")
-                continue
-            if self.variant_of_body(k) and n <= 0.2 * max(1, S[body_style]["blocks"]):
-                sugg[k] = ("gövde", "gövde ailesi/boyutunun italik-kalın varyantı")
-                continue
-            if s["dash"] / n >= 0.6:
-                sugg[k] = ("atıf", "—'yle başlıyor")
-                continue
-            if s["inbox"] / n >= 0.6 and s["short"] / n >= 0.9:
-                sugg[k] = ("kutu-başlık", "kutu içinde, kısa")
-                continue
-            if s["num"] / n >= 0.6:
-                sugg[k] = ("liste", "numarayla başlıyor")
-                continue
-            if poemlike:
-                sugg[k] = ("şiir/epigraf", "farklı aileden, çok satırlı, kısa satırlar")
-                continue
-            if s["last"] <= front and s["words"] <= 150 and not (n >= 2 and avgl >= 3 and s["words"] >= 100):
-                sugg[k] = ("ön sayfa", "yalnızca ilk sayfalarda")
-                continue
-        emph = lambda k: (fam_of(k)[1] > bsize * 0.95 or S[k]["caps"] / S[k]["blocks"] > 0.5 or S[k]["weight"] >= 600 or "Bold" in k)
-        # a heading is at least 0.6 of the body size (small bold sub-heads exist; 4.5pt lettering above the text block
-        # is a running head); a small style that mostly sits in the margin is a running head that varied too much to
-        # be removed, not a heading. Display type (1.4x body and up) may run longer: a profile or chapter title that
-        # names a work
-        display = lambda k: fam_of(k)[1] >= 1.4 * bsize
-        big_enough = lambda k: fam_of(k)[1] >= 0.6 * bsize
-        marginal = lambda k: S[k]["edge"] / S[k]["blocks"] >= 0.5 and fam_of(k)[1] <= 1.05 * bsize
-        cands = [k for k, s in S.items() if k not in sugg and s["blocks"] >= 5 and len(s["pages"]) >= 3
-                 and s["chars"] / s["blocks"] >= 4 and s["short"] / s["blocks"] >= (0.8 if display(k) else 0.9)
-                 and s["words"] / s["blocks"] <= (20 if display(k) else 12)
-                 and s["sent"] / s["blocks"] < 0.5 and emph(k) and s["inbox"] / s["blocks"] < 0.5
-                 and s["words"] >= 8 and s["num"] / s["blocks"] < 0.3 and big_enough(k) and not marginal(k)]
-        cands.sort(key=lambda k: -self.score(k, S[k]))
-        tiers = []
-        for k in cands:
-            if tiers and abs(self.score(tiers[-1][0], S[tiers[-1][0]]) - self.score(k, S[k])) <= 0.5:
-                tiers[-1].append(k)
-            else:
-                tiers.append([k])
-        for ti, tier in enumerate(tiers):
-            role = ["kısım", "bölüm", "alt başlık 1", "alt başlık 1", "alt başlık 2"][ti] if ti < 5 else "alt başlık 2"
-            for k in tier:
-                sugg[k] = (role, f"başlık kademesi {ti + 1}/{len(tiers)}")
-        for k, s in S.items():
-            if k not in sugg:
-                sugg[k] = ("ön sayfa" if (s["words"] <= 15 and s["last"] <= front) else "gövde", "kural eşleşmedi")
-        return sugg, why, body_style, body_styles
-
-    def _body_variants(self, body_styles):
-        """Fonts are matched by behaviour, not by name (subset names like AdvP6F00/AdvP6F09 say nothing, and such
-        fonts often carry no italic/bold flag either). A body variant is
-        - a font set inside body lines, next to the body font at the body's size (ten such lines; three when the font
-          carries the italic/bold flag), or
-        - a font at the body's size and line pitch that sets paragraphs of its own: a fifth of its blocks run to
-          several lines and they end a sentence at least half as often as body paragraphs do (emphasised
-          statements, an italic body)."""
-        pitch = collections.defaultdict(list)
-        for p in self.pages:
-            for b in p["blocks"]:
-                if not b["sil"]:
-                    pitch[b["style"]] += [y["base"] - x["base"] for x, y in zip(b["lines"], b["lines"][1:])]
-        main = max(body_styles, key=lambda k: self.S[k]["words"]) if body_styles else None
-        bp = statistics.median(pitch[main] or [0]) if main else 0
-        bsz = {fam_of(k)[1] for k in body_styles}
-        own = {k for k, s in self.S.items() if k not in body_styles and bp and pitch[k]
-               and any(abs(fam_of(k)[1] - z) <= 0.25 for z in bsz) and abs(statistics.median(pitch[k]) - bp) <= 0.05 * bp
-               and s["multiline"] >= 0.2 * s["blocks"]
-               and s["sent"] / s["blocks"] >= 0.5 * self.S[main]["sent"] / self.S[main]["blocks"]}
-        inside, flagged = collections.Counter(), collections.Counter()
-        for p in self.pages:
-            for b in p["blocks"]:
-                if b["sil"]:
-                    continue
-                for l in b["lines"]:
-                    if l["style"] not in body_styles:
-                        continue
-                    mix = l.get("mix", {})
-                    for k in mix:
-                        if k != l["style"] and abs(fam_of(k)[1] - fam_of(l["style"])[1]) <= 0.25:
-                            inside[k] += 1
-                            flagged[k] += l["mix_flag"][k] >= 0.8 * mix[k]
-        return own | {k for k, n in inside.items() if n >= 10 or (n >= 3 and flagged[k] >= 0.8 * n)}
-
-    def _heading_for(self, block):
-        """role for a one-off heading-like block, taken from the heading style whose rank is closest"""
-        S = self.S
-        letters = [c for c in block["text"] if c.isalpha()]
-        caps = sum(c.isupper() for c in letters) / max(1, len(letters)) > 0.8
-        w = block["lines"][0]["w0"]
-        sc = block["size"] + (2.0 if caps else 0) + (0.3 if w >= 600 else 0)
-        best = None
-        for k, (r, _) in self.sugg.items():
-            if r in HEAD and S[k]["blocks"] >= 5:
-                d = abs(self.score(k, S[k]) - sc)
-                if best is None or d < best[0]:
-                    best = (d, r)
-        return best[1] if best else None
-
-    def _block_roles(self):
-        S, sugg = self.S, self.sugg
-        front = min(8, max(2, int(0.03 * self.NP)))
-        titles = set()
-        for pi, p in enumerate(self.pages):
-            prev = None
-            real = [b for b in p["blocks"] if not b["sil"]]
-            # a front page set in display type only (title page, author's name) is no chapter heading, and neither is
-            # a later half title that repeats it
-            title_page = False
-            if real and all(b["size"] >= 1.3 * self.bsize for b in real):
-                key = "".join(c for b in real for c in b["text"].lower() if c.isalpha())
-                title_page = pi < front or key in titles
-                if pi < front:
-                    titles.add(key)
-            for b in p["blocks"]:
-                r = "sil" if b["sil"] else sugg.get(b["style"], ("gövde",))[0]
-                if p["cover"] or (title_page and r != "sil"):
-                    r = "ön sayfa"
-                # a paragraph whose dominant style is a heading style only through its runs (long italic titles
-                # among body text) is no heading; a long title set wholly in its style still is
-                mix = b.get("mix") or {}
-                if (r in HEAD and len(b["lines"]) > 3 and b["nwords"] > 30
-                        and sum(n for k, n in mix.items() if k in self.body_styles) >= 0.15 * sum(mix.values())):
-                    r = "gövde"
-                txt = b["text"]
-                if r not in ("sil", "ön sayfa"):
-                    if r == "şiir/epigraf":
-                        if len(b["lines"]) == 1 and b["nwords"] <= 8:
-                            r = self._heading_for(b) or "gövde"
-                        else:
-                            r = "epigraf" if len(b["lines"]) <= 4 else "şiir"
-                    if r != "kutu-başlık" and DASH.match(txt) and len(b["lines"]) <= 2 and prev in ("şiir", "epigraf"):
-                        r = "atıf"
-                    if NUM.match(b["lines"][0]["plain"]) and r in ("gövde", "liste"):
-                        r = "liste"
-                    if b["box"] is not None and r == "gövde":
-                        r = "kutu"
-                b["role"] = r
-                if r != "sil":
-                    prev = r
-            # one-off headings: a short single line in a non-body style, between body paragraphs
-            for i, b in enumerate(real):
-                if b["role"] != "gövde" or b["box"] is not None or p["cover"]:
-                    continue
-                st = b["style"]
-                if st in self.body_styles or self.variant_of_body(st) or len(b["lines"]) > 2 or b["nwords"] > 10:
-                    continue
-                txt = b["text"].strip()
-                if not txt or re.search(r"[.,;!?]\s*$", txt) or NUM.match(txt):
-                    continue
-                letters = [c for c in txt if c.isalpha()]
-                caps = sum(c.isupper() for c in letters) / max(1, len(letters)) > 0.8
-                if not (b["size"] >= 0.95 * self.bsize or (caps and b["size"] >= 0.75 * self.bsize)):
-                    continue
-                if i > 0 and real[i - 1]["style"] == st:
-                    continue
-                if i + 1 >= len(real) or real[i + 1]["role"] not in ("gövde", "kutu", "şiir", "epigraf", "liste"):
-                    continue
-                role = self._heading_for(b)
-                if role:
-                    b["role"] = role
-            # first block of a box whose style differs from the box majority (and short) is its title
-            byb = collections.defaultdict(list)
-            for b in p["blocks"]:
-                if b["box"] is not None and b["role"] in ("kutu", "gövde", "kutu-başlık"):
-                    byb[b["box"]].append(b)
-            for bl in byb.values():
-                maj = collections.Counter(b["style"] for b in bl).most_common(1)[0][0]
-                if bl[0]["style"] != maj and len(bl[0]["lines"]) <= 2:
-                    bl[0]["role"] = "kutu-başlık"
-            # a heading follows a block that ended: one in the same column, size and flow (below it, not overlaid) after
-            # a sentence left open with no extra space above, or starting in lowercase, is the paragraph going on
-            prev = None
-            for b in real:
-                if (b["role"] in HEAD and prev is not None and prev["role"] in ("gövde", "kutu", "liste")
-                        and not terminal(prev["text"]) and prev["box"] == b["box"] and abs(b["x0"] - prev["x0"]) < 2 * self.bsize
-                        and abs(b["size"] - prev["size"]) <= 0.25 and b["top"] >= prev["bot"] - 1
-                        and (b["top"] - prev["bot"] < 0.6 * self.bsize or re.match(r"[*_\W]*[a-z]", b["text"]))):
-                    b["role"], b["cont"] = prev["role"] if prev["role"] != "liste" else "gövde", True
-                if b["role"] != "sil":
-                    prev = b
 
     def _title_running_heads(self):
         """a margin line that repeats a heading of the book on two or more pages is a running head (the chapter or
         section title printed in the head or foot) even when it is not on 3+ pages or carries no page number"""
-        small = lambda b: b.get("edge") and b["size"] <= 1.05 * self.bsize
+        small = lambda b: b.get("edge") and b["size"] <= T["margin_size"] * self.bsize
         heads = {_similar_key(b["text"]) for p in self.pages for b in p["blocks"] if b["role"] in HEAD and not small(b)}
         heads.discard("")
         seen = collections.defaultdict(list)
@@ -1071,10 +985,123 @@ class Doc:
                 if small(b) and b["role"] not in HEAD and b["role"] != "sil" and _similar_key(b["text"]) in heads:
                     seen[_similar_key(b["text"])].append((p, b))
         for hits in seen.values():
-            if len({p["p"] for p, _ in hits}) >= 2:
+            if len({p["p"] for p, _ in hits}) >= T["title_head_pages"]:
                 for p, b in hits:
                     b["role"] = "sil"
                     p["running_removed"] += len(b["lines"])
+
+
+# ====================================================================================================================
+# 5. OBJECTS (figures, tables, groups)
+#   in:  rules and glyphs of a page (grids, called by build_blocks); items + roles (groups)
+#   out: table items with markdown or a placeholder; blocks around an object -> role 'altyazı'
+# ====================================================================================================================
+
+
+def _merge_rules(segs, tol=T["rule_collinear"], gap=T["rule_join"]):
+    """collinear rule pieces -> {position: [(a, b), ...]} with touching pieces joined"""
+    out = {}
+    for pos, a, b in sorted(segs):
+        key = next((k for k in out if abs(k - pos) <= tol), None)
+        if key is None:
+            out[pos] = [(a, b)]
+            continue
+        iv = out[key]
+        if a <= iv[-1][1] + gap:
+            iv[-1] = (iv[-1][0], max(iv[-1][1], b))
+        else:
+            iv.append((a, b))
+        iv.sort()
+    return out
+
+
+def find_grids(hl, vl):
+    """Ruled tables: horizontal and vertical rules that cross each other. A grid needs at least 3 horizontal and 3
+    vertical rule positions (2 x 2 cells; a framed figure is 1 x 1). A cell border that is missing inside the grid means
+    merged cells: the grid is marked complex."""
+    H_ = _merge_rules(hl)
+    V_ = _merge_rules(vl)
+    sl = T["grid_slack"]
+    covers = lambda ivs, a, b: any(s - sl <= a and b <= e + sl for s, e in ivs)
+    hs = [(y, s, e) for y, ivs in H_.items() for s, e in ivs]
+    vs = [(x, s, e) for x, ivs in V_.items() for s, e in ivs]
+    parent = list(range(len(hs) + len(vs)))
+
+    def find(i):
+        while parent[i] != i:
+            parent[i] = parent[parent[i]]
+            i = parent[i]
+        return i
+    for i, (y, x0, x1) in enumerate(hs):
+        for j, (x, y0, y1) in enumerate(vs):
+            if x0 - sl <= x <= x1 + sl and y0 - sl <= y <= y1 + sl:
+                parent[find(i)] = find(len(hs) + j)
+    groups = collections.defaultdict(lambda: ([], []))
+    for i in range(len(hs)):
+        groups[find(i)][0].append(hs[i])
+    for j in range(len(vs)):
+        groups[find(len(hs) + j)][1].append(vs[j])
+    grids = []
+    for gh, gv in groups.values():
+        ys = sorted({round(y, 1) for y, _, _ in gh})
+        xs = sorted({round(x, 1) for x, _, _ in gv})
+        mp = T["grid_merge_pos"]
+        ys = [y for k, y in enumerate(ys) if k == 0 or y - ys[k - 1] > mp]
+        xs = [x for k, x in enumerate(xs) if k == 0 or x - xs[k - 1] > mp]
+        if len(ys) < T["grid_min_rules"] or len(xs) < T["grid_min_rules"]:
+            continue
+        # a table has a full outer frame; a decorative frame with a tab on top (a chapter-number badge) does not
+        span = lambda ivs, a, b: sum(max(0, min(e, b) - max(s, a)) for s, e in ivs) >= T["grid_frame_span"] * (b - a)
+        edge_h = lambda y: [(s, e) for yy, s, e in gh if abs(yy - y) <= mp]
+        edge_v = lambda x: [(s, e) for xx, s, e in gv if abs(xx - x) <= mp]
+        if not (span(edge_h(ys[0]), xs[0], xs[-1]) and span(edge_h(ys[-1]), xs[0], xs[-1])
+                and span(edge_v(xs[0]), ys[0], ys[-1]) and span(edge_v(xs[-1]), ys[0], ys[-1])):
+            continue
+        complex_ = False
+        for x in xs[1:-1]:
+            ivs = [(s, e) for xx, s, e in gv if abs(xx - x) <= mp]
+            complex_ |= any(not covers(ivs, ys[k] + T["grid_cell_pad"], ys[k + 1] - T["grid_cell_pad"]) for k in range(len(ys) - 1))
+        for y in ys[1:-1]:
+            ivs = [(s, e) for yy, s, e in gh if abs(yy - y) <= mp]
+            complex_ |= any(not covers(ivs, xs[k] + T["grid_cell_pad"], xs[k + 1] - T["grid_cell_pad"]) for k in range(len(xs) - 1))
+        grids.append(dict(xs=xs, ys=ys, complex=complex_))
+    return grids
+
+
+def _word_count(chars, page_no):
+    ls = build_lines(chars, page_no)
+    for l in ls:
+        _prepare_line(l)
+    return sum(len(l["plain"].split()) for l in ls)
+
+
+def _cell_text(chars, page_no):
+    ls = build_lines(chars, page_no)
+    for l in ls:
+        _prepare_line(l)
+    return join_lines([l["md"].strip() for l in ls], set(), collections.Counter()).replace("|", "\\|") if ls else ""
+
+
+def grid_markdown(grid, chars, page_no):
+    """the grid's text as a markdown table (first row = header), or None when it holds no text"""
+    xs, ys = grid["xs"], grid["ys"]
+    cells = [[[] for _ in range(len(xs) - 1)] for _ in range(len(ys) - 1)]
+    for c in chars:
+        cx, cy = (c.x0 + c.x1) / 2, (c.top + c.bot) / 2
+        r = next((k for k in range(len(ys) - 1) if ys[k] <= cy <= ys[k + 1]), None)
+        q = next((k for k in range(len(xs) - 1) if xs[k] <= cx <= xs[k + 1]), None)
+        if r is not None and q is not None:
+            cells[r][q].append(c)
+    rows = [[_cell_text(cell, page_no) for cell in row] for row in cells]
+    if not any(any(x.strip() for x in row) for row in rows):
+        return None
+    out = ["| " + " | ".join(rows[0]) + " |", "|" + "---|" * len(rows[0])]
+    out += ["| " + " | ".join(r) + " |" for r in rows[1:]]
+    return "\n".join(out)
+
+
+class _Objects:
+    """Stage 5 (Doc mixin): the captions, titles and credits that belong to a figure or table."""
 
     def deviates(self, b):
         """set apart from body text: a family/size the book's body styles do not use (italic and bold variants of a
@@ -1095,9 +1122,9 @@ class Doc:
         fam_words = collections.Counter()
         for k, s in self.S.items():
             fam_words[fam_of(k)] += s["words"]
-        self.text_fams = self.body_fams | {f for f, w in fam_words.items() if w >= 0.05 * total}
-        gap = 2.5 * self.bsize
-        front = min(8, max(2, int(0.03 * self.NP)))
+        self.text_fams = self.body_fams | {f for f, w in fam_words.items() if w >= T["text_fam_share"] * total}
+        gap = T["object_gap_em"] * self.bsize
+        front = _front(self.NP)
 
         def fits(b, where):
             cap = bool(CAPTION.match(b["text"].replace("*", "")))
@@ -1105,7 +1132,7 @@ class Doc:
                 return False
             if b["role"] in HEAD and where == "below" and not cap:
                 return False
-            if b["nwords"] > 80 or len(b["lines"]) > 6:
+            if b["nwords"] > T["caption_max_words"] or len(b["lines"]) > T["caption_max_lines"]:
                 return False
             return cap or b["deviates"]
         for p in self.pages:
@@ -1116,7 +1143,7 @@ class Doc:
             blocks = [b for b in p["blocks"] if b["role"] not in ("sil", "ön sayfa", "dizin")]
             cy = lambda b: (b["top"] + b["bot"]) / 2      # a title may overlap the frame's edge by a few points
             for it in sorted(p.get("items", []), key=lambda it: (round(it["top"]), it["x0"])):
-                side = [b for b in blocks if b["x1"] > it["x0"] + 1 and b["x0"] < it["x1"] - 1]
+                side = [b for b in blocks if b["x1"] > it["x0"] + T["object_slack"] and b["x0"] < it["x1"] - T["object_slack"]]
                 inside = [b for b in side if it["top"] <= cy(b) <= it["bot"] and fits(b, "inside")]
                 mid = (it["top"] + it["bot"]) / 2
                 before = [b for b in inside if cy(b) < mid]           # printed in the top half: written before it
@@ -1141,11 +1168,331 @@ class Doc:
                 if b["role"] in ("gövde", "kutu") and fam_of(b["style"]) not in self.text_fams and not b.get("obj"):
                     # set apart and joining nothing: in the margin band or a bare number/folio it is page furniture
                     # and goes; anything else stays, flagged for review
-                    band = b.get("edge") and (b["bot"] < 0.12 * p["H"] or b["top"] > 0.86 * p["H"])
+                    band = b.get("edge") and (b["bot"] < T["flag_band_top"] * p["H"] or b["top"] > T["band_bot"] * p["H"])
                     if band or PAGE_NO.match(b["text"]) or re.fullmatch(r"[\W\d_]*", b["text"]):
                         b["role"], b["flag_removed"] = "sil", True
                     else:
                         b["font_dev"] = True            # a deviation reason; _shape_roles names it or flags it
+
+
+# ====================================================================================================================
+# 6. ROLES
+#   in:  blocks with margins marked
+#   out: Doc.S (style statistics), Doc.sugg (role per style), block['role'] (heading levels, gövde, kutu,
+#        kutu-başlık, liste, ön sayfa, dizin, sil; epigraf, alıntı, şiir, atıf), block['flags'], block['conf']
+# ====================================================================================================================
+
+
+class _Styles:
+    """Stage 6a (Doc mixin): style statistics and the role each style suggests."""
+
+    def _style_stats(self):
+        S = collections.OrderedDict()
+        for p in self.pages:
+            if p["cover"]:
+                continue
+            for b in p["blocks"]:
+                if b["sil"]:
+                    continue
+                s = S.setdefault(b["style"], dict(words=0, pages=set(), first=p["p"], last=p["p"], blocks=0, lines=0,
+                                                  chars=0, inbox=0, caps=0, short=0, ital=0, num=0, dash=0, letters=0,
+                                                  multiline=0, mlines=0, sent=0, wts=[], edge=0))
+                txt = b["text"]
+                letters = [c for c in txt if c.isalpha()]
+                s["words"] += b["nwords"]
+                s["pages"].add(p["p"])
+                s["last"] = p["p"]
+                s["blocks"] += 1
+                s["lines"] += len(b["lines"])
+                s["chars"] += len(txt)
+                s["inbox"] += b["box"] is not None
+                s["caps"] += (sum(c.isupper() for c in letters) / max(1, len(letters)) > T["caps_share"])
+                s["letters"] += len(letters)
+                s["short"] += (len(b["lines"]) <= T["short_lines"] and len(txt) <= T["short_chars"])
+                s["ital"] += b["italic_share"] > T["italic_share"]
+                s["num"] += bool(NUM.match(b["lines"][0]["plain"]))
+                s["dash"] += bool(DASH.match(txt))
+                s["multiline"] += len(b["lines"]) >= 2
+                s["mlines"] += len(b["lines"]) if len(b["lines"]) >= 2 else 0
+                s["sent"] += bool(re.search(r"[.!?]\s*$", txt))
+                s["edge"] += b.get("edge", False)
+                s["wts"] += [l["w0"] for l in b["lines"]]
+        for s in S.values():
+            s["weight"] = statistics.median(s["wts"]) if s["wts"] else 400
+        return S
+
+    @staticmethod
+    def score(style, s):
+        """heading rank: size, +2 for ALL CAPS (a caps section title outranks a mixed-case sub-title of similar size),
+        +0.3 for bold"""
+        return (fam_of(style)[1] + (T["score_caps"] if s["caps"] / s["blocks"] > T["caps_share"] else 0)
+                + (T["score_bold"] if s["weight"] >= T["bold_weight"] or "Bold" in style else 0))
+
+    def _suggest(self):
+        S = self.S
+        if not S:
+            self.body_keys = set()
+            return {}, {}, None, set()
+        body_style = max(S, key=lambda k: S[k]["words"])
+        bfam, bsize = fam_of(body_style)
+        # decorative front-matter styles live on the first pages; in a short document "first pages" is just a couple
+        front = _front(self.NP)
+        self.bfam, self.bsize = bfam, bsize
+        sugg, why = {}, {}
+        body_styles = {k for k, s in S.items() if s["words"] >= T["body_style_share"] * S[body_style]["words"]
+                       and s["lines"] / s["blocks"] >= T["body_style_lines"]}
+        body_styles.add(body_style)         # the most-worded style is body even when its paragraphs come out short
+        body_keys = {fam_of(k) for k in body_styles}
+        # fonts that behave like body text are not anomalies; they do not change roles (a bold run-in font is also
+        # the font of the sub-heads)
+        self.body_keys = body_keys | {fam_of(k) for k in self._body_variants(body_styles)}
+        self.variant_of_body = lambda k: fam_of(k) in body_keys and k not in body_styles
+        for k, s in S.items():
+            n = s["blocks"]
+            f, sz = fam_of(k)
+            avgl = s["lines"] / n
+            poemlike = (f != bfam and s["mlines"] / s["lines"] >= T["poem_ml"] and avgl >= T["poem_avgl"]
+                        and T["poem_size_lo"] * bsize <= sz <= T["poem_size_hi"] * bsize
+                        and s["ital"] / n >= T["poem_ital"] and s["sent"] / n < T["poem_sent"])
+            if s["letters"] == 0 and sz >= T["ornament_num_size"] * bsize:
+                sugg[k] = ("sil", why.setdefault(k, "harf yok, büyük boy: süs rakamı"))
+                continue
+            if s["letters"] == 0:
+                sugg[k] = ("gövde", "harf yok, küçük boy: rakam/kesir")
+                continue
+            if k in body_styles:
+                sugg[k] = ("gövde", "en çok kelimeli stil")
+                continue
+            if self.variant_of_body(k) and n <= T["variant_blocks"] * max(1, S[body_style]["blocks"]):
+                sugg[k] = ("gövde", "gövde ailesi/boyutunun italik-kalın varyantı")
+                continue
+            if s["dash"] / n >= T["style_rule_share"]:
+                sugg[k] = ("atıf", "—'yle başlıyor")
+                continue
+            if s["inbox"] / n >= T["style_rule_share"] and s["short"] / n >= T["short_share"]:
+                sugg[k] = ("kutu-başlık", "kutu içinde, kısa")
+                continue
+            if s["num"] / n >= T["style_rule_share"]:
+                sugg[k] = ("liste", "numarayla başlıyor")
+                continue
+            if poemlike:
+                sugg[k] = ("şiir/epigraf", "farklı aileden, çok satırlı, kısa satırlar")
+                continue
+            if s["last"] <= front and s["words"] <= T["front_style_words"] and not (
+                    n >= T["front_para_blocks"] and avgl >= T["front_para_lines"] and s["words"] >= T["front_para_words"]):
+                sugg[k] = ("ön sayfa", "yalnızca ilk sayfalarda")
+                continue
+        emph = lambda k: (fam_of(k)[1] > bsize * T["emph_size"] or S[k]["caps"] / S[k]["blocks"] > T["emph_caps"]
+                          or S[k]["weight"] >= T["bold_weight"] or "Bold" in k)
+        # a heading is at least 0.6 of the body size (small bold sub-heads exist; 4.5pt lettering above the text block
+        # is a running head); a small style that mostly sits in the margin is a running head that varied too much to
+        # be removed, not a heading. Display type (1.4x body and up) may run longer: a profile or chapter title that
+        # names a work
+        display = lambda k: fam_of(k)[1] >= T["display_size"] * bsize
+        big_enough = lambda k: fam_of(k)[1] >= T["heading_min_size"] * bsize
+        marginal = lambda k: S[k]["edge"] / S[k]["blocks"] >= T["marginal_share"] and fam_of(k)[1] <= T["margin_size"] * bsize
+        cands = [k for k, s in S.items() if k not in sugg and s["blocks"] >= T["head_min_blocks"] and len(s["pages"]) >= T["head_min_pages"]
+                 and s["chars"] / s["blocks"] >= T["head_min_chars"]
+                 and s["short"] / s["blocks"] >= (T["head_short_display"] if display(k) else T["short_share"])
+                 and s["words"] / s["blocks"] <= (T["head_words_display"] if display(k) else T["head_words"])
+                 and s["sent"] / s["blocks"] < T["head_sent"] and emph(k) and s["inbox"] / s["blocks"] < T["head_inbox"]
+                 and s["words"] >= T["head_min_words"] and s["num"] / s["blocks"] < T["head_num"] and big_enough(k)
+                 and not marginal(k)]
+        cands.sort(key=lambda k: -self.score(k, S[k]))
+        tiers = []
+        for k in cands:
+            if tiers and abs(self.score(tiers[-1][0], S[tiers[-1][0]]) - self.score(k, S[k])) <= T["tier_gap"]:
+                tiers[-1].append(k)
+            else:
+                tiers.append([k])
+        for ti, tier in enumerate(tiers):
+            role = ["kısım", "bölüm", "alt başlık 1", "alt başlık 1", "alt başlık 2"][ti] if ti < 5 else "alt başlık 2"
+            for k in tier:
+                sugg[k] = (role, f"başlık kademesi {ti + 1}/{len(tiers)}")
+        for k, s in S.items():
+            if k not in sugg:
+                sugg[k] = ("ön sayfa" if (s["words"] <= T["front_leftover_words"] and s["last"] <= front) else "gövde", "kural eşleşmedi")
+        return sugg, why, body_style, body_styles
+
+    def _body_variants(self, body_styles):
+        """Fonts are matched by behaviour, not by name (subset names like AdvP6F00/AdvP6F09 say nothing, and such
+        fonts often carry no italic/bold flag either). A body variant is
+        - a font set inside body lines, next to the body font at the body's size (ten such lines; three when the font
+          carries the italic/bold flag), or
+        - a font at the body's size and line pitch that sets paragraphs of its own: a fifth of its blocks run to
+          several lines and they end a sentence at least half as often as body paragraphs do (emphasised
+          statements, an italic body)."""
+        pitch = collections.defaultdict(list)
+        for p in self.pages:
+            for b in p["blocks"]:
+                if not b["sil"]:
+                    pitch[b["style"]] += [y["base"] - x["base"] for x, y in zip(b["lines"], b["lines"][1:])]
+        main = max(body_styles, key=lambda k: self.S[k]["words"]) if body_styles else None
+        bp = statistics.median(pitch[main] or [0]) if main else 0
+        bsz = {fam_of(k)[1] for k in body_styles}
+        own = {k for k, s in self.S.items() if k not in body_styles and bp and pitch[k]
+               and any(abs(fam_of(k)[1] - z) <= T["variant_size_pt"] for z in bsz)
+               and abs(statistics.median(pitch[k]) - bp) <= T["variant_pitch"] * bp
+               and s["multiline"] >= T["variant_multiline"] * s["blocks"]
+               and s["sent"] / s["blocks"] >= T["variant_sent"] * self.S[main]["sent"] / self.S[main]["blocks"]}
+        inside, flagged = collections.Counter(), collections.Counter()
+        for p in self.pages:
+            for b in p["blocks"]:
+                if b["sil"]:
+                    continue
+                for l in b["lines"]:
+                    if l["style"] not in body_styles:
+                        continue
+                    mix = l.get("mix", {})
+                    for k in mix:
+                        if k != l["style"] and abs(fam_of(k)[1] - fam_of(l["style"])[1]) <= T["variant_size_pt"]:
+                            inside[k] += 1
+                            flagged[k] += l["mix_flag"][k] >= T["variant_flagged"] * mix[k]
+        return own | {k for k, n in inside.items()
+                      if n >= T["variant_lines"] or (n >= T["variant_lines_flagged"] and flagged[k] >= T["variant_flagged"] * n)}
+
+
+class _Roles:
+    """Stage 6b (Doc mixin): block roles from the style suggestions, one-off headings, the index."""
+
+    def _heading_for(self, block):
+        """role for a one-off heading-like block, taken from the heading style whose rank is closest"""
+        S = self.S
+        letters = [c for c in block["text"] if c.isalpha()]
+        caps = sum(c.isupper() for c in letters) / max(1, len(letters)) > T["caps_share"]
+        w = block["lines"][0]["w0"]
+        sc = block["size"] + (T["score_caps"] if caps else 0) + (T["score_bold"] if w >= T["bold_weight"] else 0)
+        best = None
+        for k, (r, _) in self.sugg.items():
+            if r in HEAD and S[k]["blocks"] >= T["head_min_blocks"]:
+                d = abs(self.score(k, S[k]) - sc)
+                if best is None or d < best[0]:
+                    best = (d, r)
+        return best[1] if best else None
+
+    def _block_roles(self):
+        sugg = self.sugg
+        front = _front(self.NP)
+        titles = set()
+        for pi, p in enumerate(self.pages):
+            prev = None
+            real = [b for b in p["blocks"] if not b["sil"]]
+            # a front page set in display type only (title page, author's name) is no chapter heading, and neither is
+            # a later half title that repeats it
+            title_page = False
+            if real and all(b["size"] >= T["title_page_size"] * self.bsize for b in real):
+                key = "".join(c for b in real for c in b["text"].lower() if c.isalpha())
+                title_page = pi < front or key in titles
+                if pi < front:
+                    titles.add(key)
+            for b in p["blocks"]:
+                r = "sil" if b["sil"] else sugg.get(b["style"], ("gövde",))[0]
+                if p["cover"] or (title_page and r != "sil"):
+                    r = "ön sayfa"
+                # a paragraph whose dominant style is a heading style only through its runs (long italic titles
+                # among body text) is no heading; a long title set wholly in its style still is
+                mix = b.get("mix") or {}
+                if (r in HEAD and len(b["lines"]) > T["runs_para_lines"] and b["nwords"] > T["runs_para_words"]
+                        and sum(n for k, n in mix.items() if k in self.body_styles) >= T["runs_body_share"] * sum(mix.values())):
+                    r = "gövde"
+                txt = b["text"]
+                if r not in ("sil", "ön sayfa"):
+                    if r == "şiir/epigraf":
+                        if len(b["lines"]) == 1 and b["nwords"] <= T["poem_one_line_words"]:
+                            r = self._heading_for(b) or "gövde"
+                        else:
+                            r = "epigraf" if len(b["lines"]) <= T["epigraph_lines"] else "şiir"
+                    if r != "kutu-başlık" and DASH.match(txt) and len(b["lines"]) <= T["attrib_lines"] and prev in ("şiir", "epigraf"):
+                        r = "atıf"
+                    if NUM.match(b["lines"][0]["plain"]) and r in ("gövde", "liste"):
+                        r = "liste"
+                    if b["box"] is not None and r == "gövde":
+                        r = "kutu"
+                b["role"] = r
+                if r != "sil":
+                    prev = r
+            # one-off headings: a short single line in a non-body style, between body paragraphs
+            for i, b in enumerate(real):
+                if b["role"] != "gövde" or b["box"] is not None or p["cover"]:
+                    continue
+                st = b["style"]
+                if (st in self.body_styles or self.variant_of_body(st) or len(b["lines"]) > T["oneoff_lines"]
+                        or b["nwords"] > T["oneoff_words"]):
+                    continue
+                txt = b["text"].strip()
+                if not txt or re.search(r"[.,;!?]\s*$", txt) or NUM.match(txt):
+                    continue
+                letters = [c for c in txt if c.isalpha()]
+                caps = sum(c.isupper() for c in letters) / max(1, len(letters)) > T["caps_share"]
+                if not (b["size"] >= T["emph_size"] * self.bsize or (caps and b["size"] >= T["oneoff_caps_size"] * self.bsize)):
+                    continue
+                if i > 0 and real[i - 1]["style"] == st:
+                    continue
+                if i + 1 >= len(real) or real[i + 1]["role"] not in ("gövde", "kutu", "şiir", "epigraf", "liste"):
+                    continue
+                role = self._heading_for(b)
+                if role:
+                    b["role"] = role
+            # first block of a box whose style differs from the box majority (and short) is its title
+            byb = collections.defaultdict(list)
+            for b in p["blocks"]:
+                if b["box"] is not None and b["role"] in ("kutu", "gövde", "kutu-başlık"):
+                    byb[b["box"]].append(b)
+            for bl in byb.values():
+                maj = collections.Counter(b["style"] for b in bl).most_common(1)[0][0]
+                if bl[0]["style"] != maj and len(bl[0]["lines"]) <= T["box_title_lines"]:
+                    bl[0]["role"] = "kutu-başlık"
+            # a heading follows a block that ended: one in the same column, size and flow (below it, not overlaid) after
+            # a sentence left open with no extra space above, or starting in lowercase, is the paragraph going on
+            prev = None
+            for b in real:
+                if (b["role"] in HEAD and prev is not None and prev["role"] in ("gövde", "kutu", "liste")
+                        and not terminal(prev["text"]) and prev["box"] == b["box"] and abs(b["x0"] - prev["x0"]) < T["net_col_em"] * self.bsize
+                        and abs(b["size"] - prev["size"]) <= T["inline_size_pt"] and b["top"] >= prev["bot"] - T["net_overlay_pt"]
+                        and (b["top"] - prev["bot"] < T["net_gap_em"] * self.bsize or re.match(r"[*_\W]*[a-z]", b["text"]))):
+                    b["role"], b["cont"] = prev["role"] if prev["role"] != "liste" else "gövde", True
+                if b["role"] != "sil":
+                    prev = b
+
+    def _index_pages(self):
+        """A back-of-book index: pages in the last quarter of the book whose lines are mostly short entries ending in
+        page numbers, in alphabetical order. Its blocks (not its heading) leave the flow."""
+        self.index_pages = []
+        for p in self.pages:
+            if p["p"] < T["index_start"] * self.NP:
+                continue
+            ls = [l["plain"].strip() for b in p["blocks"] if not b["sil"] for l in b["lines"]]
+            ls = [x for x in ls if x]
+            if len(ls) < T["index_min_lines"]:
+                continue
+            num = sum(1 for x in ls if re.search(r"\d+(?:[–-]\d+)?[.,;)]?$", x) or re.search(r",\s*\d", x))
+            first = [x[0].lower() for x in ls if x[:1].isalpha() and x[:1].isupper()]
+            order = sum(1 for a, b in zip(first, first[1:]) if a <= b) / max(1, len(first) - 1)
+            if (num >= T["index_num_share"] * len(ls) and statistics.median(len(x) for x in ls) <= T["index_entry_len"]
+                    and len(first) >= T["index_min_alpha"] and order >= T["index_order"]):
+                self.index_pages.append(p["p"])
+        # the first and last index page can be short: grow the run while the neighbours still look like entries
+        def entries(p):
+            ls = [l["plain"].strip() for b in p["blocks"] if not b["sil"] for l in b["lines"]]
+            ls = [x for x in ls if x]
+            return len(ls) >= T["index_grow_lines"] and statistics.median(len(x) for x in ls) <= T["index_entry_len"] and sum(
+                1 for x in ls if re.search(r"\d+(?:[–-]\d+)?[.,;)]?$", x) or re.search(r",\s*\d", x)) >= T["index_num_share"] * len(ls)
+        if self.index_pages:
+            lo, hi = self.index_pages[0], self.index_pages[-1]
+            while lo > 1 and entries(self.pages[lo - 2]):
+                lo -= 1
+            while hi < self.NP and entries(self.pages[hi]):
+                hi += 1
+            self.index_pages = list(range(lo, hi + 1))
+        for p in self.pages:
+            if p["p"] in self.index_pages:
+                for b in p["blocks"]:
+                    if b["role"] not in HEAD and b["role"] != "sil":
+                        b["role"] = "dizin"
+
+
+class _ShapeRoles:
+    """Stage 6c (Doc mixin): named block roles from shape: epigraph, block quote, verse, attribution."""
 
     # -- named block roles from shape: epigraph, block quote, verse, attribution, box -------------------------------
     def _columns(self):
@@ -1159,7 +1506,7 @@ class Doc:
                 if b["role"] == "gövde" and b["style"] in self.body_styles and b["box"] is None and len(b["lines"]) >= 2:
                     xs += [l["x0"] for l in b["lines"][1:]]
                     rs += [l["x1"] for l in b["lines"][:-1]]
-            if len(xs) >= 3:
+            if len(xs) >= T["column_min_lines"]:
                 col[p["p"]] = (statistics.median(xs), statistics.median(rs))
                 par[p["p"] % 2][0].append(col[p["p"]][0])
                 par[p["p"] % 2][1].append(col[p["p"]][1])
@@ -1167,7 +1514,7 @@ class Doc:
         for p in self.pages:
             if p["p"] not in col:
                 L, R = par[p["p"] % 2] if par[p["p"] % 2][0] else every
-                col[p["p"]] = (statistics.median(L), statistics.median(R)) if L else (0.12 * p["W"], 0.88 * p["W"])
+                col[p["p"]] = (statistics.median(L), statistics.median(R)) if L else (T["column_fallback_l"] * p["W"], T["column_fallback_r"] * p["W"])
         return col
 
     def _geometry(self, b, L, R):
@@ -1177,11 +1524,11 @@ class Doc:
         n, colw = len(ls), max(1.0, R - L)
         g = dict(n=n, first=x0s[0] - L, left=(statistics.median(x0s[1:]) if n > 1 else x0s[0]) - L,
                  right=R - (statistics.median(x1s[:-1]) if n > 1 else x1s[0]), width=max(l["x1"] - l["x0"] for l in ls) / colw)
-        g["centered"] = all(abs((l["x0"] - L) - (R - l["x1"])) < 0.8 * z and l["x0"] - L > 1.5 * z for l in ls)
-        g["flush_right"] = all(abs(R - l["x1"]) < 0.8 * z for l in ls) and x0s[0] - L > 0.3 * colw
+        g["centered"] = all(abs((l["x0"] - L) - (R - l["x1"])) < T["align_em"] * z and l["x0"] - L > T["center_min_em"] * z for l in ls)
+        g["flush_right"] = all(abs(R - l["x1"]) < T["align_em"] * z for l in ls) and x0s[0] - L > T["right_min_share"] * colw
         widths = [l["x1"] - l["x0"] for l in ls]
         top = max(x1s)
-        g["justified"] = n >= 2 and all(abs(top - x) < 0.8 * z for x in x1s[:-1])
+        g["justified"] = n >= 2 and all(abs(top - x) < T["align_em"] * z for x in x1s[:-1])
         # spread of the line lengths, a paragraph's short last line left out
         g["spread"] = statistics.pstdev(widths[:-1]) / statistics.mean(widths[:-1]) if n >= 3 else 0.0
         g["hyphenated"] = any(re.search(r"[A-Za-z][\x02-]$", l["plain"].rstrip()) for l in ls[:-1])
@@ -1200,19 +1547,20 @@ class Doc:
             r.append("right")
         else:
             # a body paragraph's lines after the first sit flush (within a point or two); an indented block's do not
-            if (g["left"] > 0.6 * z) if g["n"] > 1 else (g["first"] - pr["first"] > 1.2 * z):
+            if (g["left"] > T["indent_shape_em"] * z) if g["n"] > 1 else (g["first"] - pr["first"] > T["first_indent_em"] * z):
                 r.append("indent")
-            if g["n"] > 1 and (g["right"] > 2.5 * z or (g["right"] > 0.6 * z and g["left"] > 0.6 * z)):
+            if g["n"] > 1 and (g["right"] > T["right_indent_em"] * z
+                                or (g["right"] > T["indent_shape_em"] * z and g["left"] > T["indent_shape_em"] * z)):
                 r.append("indent-right")
-        if g["n"] >= 2 and g["width"] < 0.75:
+        if g["n"] >= 2 and g["width"] < T["narrow"]:
             r.append("narrow")
-        if g["n"] >= 3 and g["spread"] > 0.2 and not g["justified"]:
+        if g["n"] >= 3 and g["spread"] > T["ragged"] and not g["justified"]:
             r.append("ragged")
-        if b["italic_share"] > 0.6 and pr["italic"] < 0.3:
+        if b["italic_share"] > T["italic_share"] and pr["italic"] < T["body_italic_max"]:
             r.append("italic-block")
-        if b["size"] < z - 0.6:
+        if b["size"] < z - T["body_size_pt"]:
             r.append("smaller")
-        if g["n"] > 1 and g["left"] - g["first"] > 0.6 * z:
+        if g["n"] > 1 and g["left"] - g["first"] > T["indent_shape_em"] * z:
             r.append("hanging")             # a reference or list entry: first line out, the rest indented
         return r
 
@@ -1246,7 +1594,7 @@ class Doc:
                 b["geo"] = self._geometry(b, *col[p["p"]])
                 b["why"] = self._reasons(b, b["geo"])
         named = ("epigraf", "alıntı", "şiir")
-        front = {p["p"] for p in self.pages[:min(8, max(2, int(0.03 * self.NP)))]}
+        front = {p["p"] for p in self.pages[:_front(self.NP)]}
         # epigraphs first: right after a heading of the top two levels (a sub-section's own title starts none), a run
         # of at most four short set-apart blocks (60 words each, 150 in all), an attribution possibly among them, and
         # then the body resumes with a normal paragraph or a sub-heading
@@ -1254,21 +1602,23 @@ class Doc:
             if b["role"] not in ("kısım", "bölüm", "alt başlık 1"):
                 continue
             run, words, j = [], 0, k + 1
-            while (j < len(flow) and len(run) < 4 and flow[j][1].get("why") and flow[j][1]["role"] not in HEAD
-                   and flow[j][1]["nwords"] <= 60 and self._nameable(flow[j][1])):
+            while (j < len(flow) and len(run) < T["epigraph_blocks"] and flow[j][1].get("why") and flow[j][1]["role"] not in HEAD
+                   and flow[j][1]["nwords"] <= T["epigraph_block_words"] and self._nameable(flow[j][1])):
                 run.append(flow[j][1])
                 words += flow[j][1]["nwords"]
                 j += 1
             nb = flow[j][1] if j < len(flow) else None
-            if run and words <= 150 and nb is not None and ((nb["role"] == "gövde" and nb.get("why") == []) or nb["role"] in HEAD):
+            if run and words <= T["epigraph_words"] and nb is not None and ((nb["role"] == "gövde" and nb.get("why") == []) or nb["role"] in HEAD):
                 for x in run:
-                    if x is not run[0] and len(x["lines"]) <= 3 and x["nwords"] <= 25 and (DASH.match(x["text"]) or "right" in x["why"]):
+                    if (x is not run[0] and len(x["lines"]) <= T["attrib_max_lines"] and x["nwords"] <= T["attrib_max_words"]
+                            and (DASH.match(x["text"]) or "right" in x["why"])):
                         x["role"] = "atıf"      # named in the main pass below, with its title line
                     else:
                         x["role"], x["conf"], x["start"] = "epigraf", 0.9 if {"indent", "italic-block"} & set(x["why"]) else 0.7, True
                         # an epigraph set in lines (a poem): most lines stop well short of the longest one
                         ws = [l["x1"] - l["x0"] for l in x["lines"]]
-                        x["breaks"] = len(ws) >= 3 and sum(w < 0.9 * max(ws) for w in ws[:-1]) >= 0.5 * (len(ws) - 1)
+                        x["breaks"] = (len(ws) >= T["verse_min_lines"]
+                                       and sum(w < T["verse_short_line"] * max(ws) for w in ws[:-1]) >= T["verse_short_share"] * (len(ws) - 1))
         k = 0
         while k < len(flow):
             p, b = flow[k]
@@ -1280,22 +1630,23 @@ class Doc:
                 continue
             # a source line set in a heading style ("—A NAME (1988, p. 140)" in small caps) is still the attribution
             if (b["role"] in HEAD and prev is not None and prev["role"] in named and DASH.match(b["text"].strip("* "))
-                    and len(b["lines"]) <= 2 and b["nwords"] <= 20):
+                    and len(b["lines"]) <= T["attrib_head_lines"] and b["nwords"] <= T["attrib_head_words"]):
                 b["role"], b["conf"] = "atıf", 0.8
                 continue
             if "why" not in b:
                 continue
             why, g = b["why"], b["geo"]
             shape = set(why) - {"ragged"}
-            short = len(b["lines"]) <= 3 and b["nwords"] <= 25
+            short = len(b["lines"]) <= T["attrib_max_lines"] and b["nwords"] <= T["attrib_max_words"]
             # a source line: dash, flush right, a name in parentheses, or a few italic words ("Female, 16-17")
             source = (DASH.match(b["text"]) or "right" in why or re.fullmatch(r"\(.{2,80}\)", b["text"].strip("* "))
-                      or (b["nwords"] <= 6 and "italic-block" in why))
+                      or (b["nwords"] <= T["attrib_italic_words"] and "italic-block" in why))
             if prev is not None and prev["role"] in named and short and source:
                 b["role"], b["conf"] = "atıf", 0.9 if DASH.match(b["text"]) else 0.7
                 # the work's title on its own line, right edge on the attribution's, belongs to the attribution
-                while (nxt is not None and abs(nxt["x1"] - b["x1"]) < 1.5 and len(nxt["lines"]) <= 2 and nxt["size"] <= b["size"] + 0.6
-                       and nxt["page"] == b["page"] and 0 <= nxt["top"] - b["bot"] < 1.5 * b["size"]):
+                while (nxt is not None and abs(nxt["x1"] - b["x1"]) < T["attrib_edge_pt"] and len(nxt["lines"]) <= T["attrib_lines"]
+                       and nxt["size"] <= b["size"] + T["body_size_pt"] and nxt["page"] == b["page"]
+                       and 0 <= nxt["top"] - b["bot"] < T["attrib_gap_em"] * b["size"]):
                     b["lines"] += nxt["lines"]
                     _finish_block(b)
                     p["blocks"].remove(nxt)
@@ -1312,8 +1663,8 @@ class Doc:
                 continue
             # a quote or poem cut by a page break (or by a note number between its parts) goes on at the same left edge
             # and size
-            if (prev is not None and prev["role"] in ("alıntı", "şiir") and abs(b["x0"] - prev["x0"]) < 1.5
-                    and abs(b["size"] - prev["size"]) < 0.3
+            if (prev is not None and prev["role"] in ("alıntı", "şiir") and abs(b["x0"] - prev["x0"]) < T["continue_x_pt"]
+                    and abs(b["size"] - prev["size"]) < T["continue_size_pt"]
                     and (prev["page"] != b["page"] or (not terminal(prev["text"]) and re.match(r"[*_]*[a-z]", b["text"])))):
                 b["role"], b["conf"], b["flags"] = prev["role"], prev.get("conf"), why
                 continue
@@ -1322,12 +1673,13 @@ class Doc:
                 continue
             body_next = nxt is not None and nxt["role"] in ("gövde", "kutu", "liste", "atıf") + tuple(HEAD)
             # a block drawn over another block's lines (stray pieces of a second text layer) is no quote or verse
-            over = any(o is not b and o["role"] != "sil" and o["top"] < b["bot"] - 1 and o["bot"] > b["top"] + 1
-                       and o["x0"] < b["x1"] - 1 and o["x1"] > b["x0"] + 1 for o in p["blocks"])
+            ov = T["overlap_pt"]
+            over = any(o is not b and o["role"] != "sil" and o["top"] < b["bot"] - ov and o["bot"] > b["top"] + ov
+                       and o["x0"] < b["x1"] - ov and o["x1"] > b["x0"] + ov for o in p["blocks"])
             layout = shape & {"indent", "indent-right", "narrow", "centered", "italic-block"}
             # verse: short irregular lines of words set apart by layout (a list of web addresses is not verse)
             # (prose broken over lines splits words at line ends; verse lines end with whole words)
-            verse = (len(b["lines"]) >= 3 and "ragged" in why and not g["justified"] and bool(layout) and not g["hyphenated"]
+            verse = (len(b["lines"]) >= T["verse_min_lines"] and "ragged" in why and not g["justified"] and bool(layout) and not g["hyphenated"]
                      and not re.search(r"://|www\.", b["text"]))
             if not over and (verse or (b["role"] in ("şiir", "epigraf") and shape and not g["hyphenated"])):
                 # (the style rule names short-lined multi-line blocks şiir/epigraf; away from a chapter start: verse)
@@ -1344,40 +1696,16 @@ class Doc:
                 continue
             b["flags"] = why
 
-    def _index_pages(self):
-        """A back-of-book index: pages in the last quarter of the book whose lines are mostly short entries ending in
-        page numbers, in alphabetical order. Its blocks (not its heading) leave the flow."""
-        self.index_pages = []
-        for p in self.pages:
-            if p["p"] < 0.75 * self.NP:
-                continue
-            ls = [l["plain"].strip() for b in p["blocks"] if not b["sil"] for l in b["lines"]]
-            ls = [x for x in ls if x]
-            if len(ls) < 15:
-                continue
-            num = sum(1 for x in ls if re.search(r"\d+(?:[–-]\d+)?[.,;)]?$", x) or re.search(r",\s*\d", x))
-            first = [x[0].lower() for x in ls if x[:1].isalpha() and x[:1].isupper()]
-            order = sum(1 for a, b in zip(first, first[1:]) if a <= b) / max(1, len(first) - 1)
-            if num >= 0.5 * len(ls) and statistics.median(len(x) for x in ls) <= 50 and len(first) >= 5 and order >= 0.7:
-                self.index_pages.append(p["p"])
-        # the first and last index page can be short: grow the run while the neighbours still look like entries
-        def entries(p):
-            ls = [l["plain"].strip() for b in p["blocks"] if not b["sil"] for l in b["lines"]]
-            ls = [x for x in ls if x]
-            return len(ls) >= 3 and statistics.median(len(x) for x in ls) <= 50 and sum(
-                1 for x in ls if re.search(r"\d+(?:[–-]\d+)?[.,;)]?$", x) or re.search(r",\s*\d", x)) >= 0.5 * len(ls)
-        if self.index_pages:
-            lo, hi = self.index_pages[0], self.index_pages[-1]
-            while lo > 1 and entries(self.pages[lo - 2]):
-                lo -= 1
-            while hi < self.NP and entries(self.pages[hi]):
-                hi += 1
-            self.index_pages = list(range(lo, hi + 1))
-        for p in self.pages:
-            if p["p"] in self.index_pages:
-                for b in p["blocks"]:
-                    if b["role"] not in HEAD and b["role"] != "sil":
-                        b["role"] = "dizin"
+
+# ====================================================================================================================
+# 7. MERGES
+#   in:  every line of the book (lexicon); line texts of a block or two paragraph parts (joins)
+#   out: Doc.lex / Doc.words; joined text (hyphens kept only when the book writes the compound)
+# ====================================================================================================================
+
+
+class _Merges:
+    """Stage 7 (Doc mixin): the hyphen lexicon of the book."""
 
     def _hyphen_lexicon(self):
         """compounds the book writes with a hyphen mid-line; and how often each word occurs, for counting the
@@ -1413,27 +1741,6 @@ class Doc:
         return (a + b) not in self.words and a in self.words and b in self.words
 
 
-# ---------------------------------------------------------------------------- markdown writer
-CAPTION_OPEN, CAPTION_CLOSE = '::: {custom-style="Caption"}', ":::"
-# named block roles -> the segment type segtypes derives from the markdown, and its Word style (Pandoc custom-style)
-ROLE_TYPE = {"epigraf": "epigraph", "alıntı": "blockquote", "şiir": "verse", "atıf": "attribution", "kutu": "box",
-             "kutu-başlık": "box"}
-FENCE = {"epigraf": "Epigraph", "şiir": "Verse", "atıf": "Attribution", "kutu": "Box", "kutu-başlık": "Box"}
-
-
-def fenced(role, text):
-    return '::: {custom-style="%s"}\n%s\n:::' % (FENCE[role], text)
-
-
-def verse_lines(texts):
-    """lines kept as written: a Pandoc hard break (backslash at the line end) after every line but the last"""
-    return "\\\n".join(t.replace("\x02", "-") for t in texts)
-
-
-def terminal(s):
-    return bool(re.search(r"[.!?…:;\"”’)\]»][*_]*\s*$", s))
-
-
 def join_hyphen(left, right, hy, stats, mark="\x02", amb=None):
     """left ends with a line-end hyphen (`mark`, possibly followed by emphasis markers): the joined text, or None.
     A real hyphen stays, a soft one goes. Emphasis that closes before the hyphen and reopens after it is one
@@ -1463,6 +1770,67 @@ def join_lines(texts, hy, stats, amb=None):
         j = join_hyphen(out, nxt, hy, stats, amb=amb)
         out = j if j is not None else out + " " + nxt
     return out.replace("\x02", "-")
+
+
+# ====================================================================================================================
+# THE DOCUMENT: stages 4-7 in order
+#   in:  page dicts from build_blocks
+#   out: the same pages, every block with its role; Doc keeps the book-level findings
+# ====================================================================================================================
+
+
+class Doc(_Margins, _Objects, _Styles, _Roles, _ShapeRoles, _Merges):
+    """The book-level stages over every page, in this order. One step runs out of its section's order: running heads
+    that repeat a heading (stage 4) need the heading roles of stage 6 first."""
+    def __init__(self, pages):
+        self.pages = pages
+        self.NP = len(pages)
+        widths = [p["W"] for p in pages]
+        self.W0 = statistics.median(widths) if widths else 0
+        # 4. margins: text block, running heads/feet, folios, slugs, watermarks; box and two-column checks
+        self._mark_cover_and_repeats()
+        self._filter_boxes()
+        self._recheck_two_col()
+        # 6a. style statistics and the role each style suggests
+        self.S = self._style_stats()
+        self.sugg, self.why, self.body_style, self.body_styles = self._suggest()
+        # 6b. block roles; then the margin lines that repeat a heading (4), the index (6b)
+        self._block_roles()
+        self._title_running_heads()
+        self._index_pages()
+        # 5. what belongs to figures and tables
+        self._object_groups()
+        # 6c. epigraph, block quote, verse, attribution, box from shape
+        self._shape_roles()
+        # 7. the hyphen lexicon for the joins written in stage 8
+        self.lex = self._hyphen_lexicon()
+
+
+# ====================================================================================================================
+# 8. WRITING: markdown, warnings, seg_meta
+#   in:  Doc and the requested page range
+#   out: markdown in the app's conventions, warnings (Turkish), seg_meta (one entry per segment)
+# ====================================================================================================================
+
+
+CAPTION_OPEN, CAPTION_CLOSE = '::: {custom-style="Caption"}', ":::"
+
+
+# named block roles -> the segment type segtypes derives from the markdown, and its Word style (Pandoc custom-style)
+ROLE_TYPE = {"epigraf": "epigraph", "alıntı": "blockquote", "şiir": "verse", "atıf": "attribution", "kutu": "box",
+             "kutu-başlık": "box"}
+
+
+FENCE = {"epigraf": "Epigraph", "şiir": "Verse", "atıf": "Attribution", "kutu": "Box", "kutu-başlık": "Box"}
+
+
+def fenced(role, text):
+    return '::: {custom-style="%s"}\n%s\n:::' % (FENCE[role], text)
+
+
+def verse_lines(texts):
+    """lines kept as written: a Pandoc hard break (backslash at the line end) after every line but the last"""
+    return "\\\n".join(t.replace("\x02", "-") for t in texts)
 
 
 def _style_name(style):
@@ -1549,7 +1917,7 @@ def build_markdown(doc, first_idx, last_idx):
     for p in doc.pages[first_idx:last_idx + 1]:
         items = [] if p["p"] in doc.index_pages else sorted(p.get("items", []), key=lambda it: (round(it["top"]), it["x0"]))
         for b in p["blocks"]:
-            while items and items[0]["top"] < b["top"] - 1:
+            while items and items[0]["top"] < b["top"] - T["item_order_pt"]:
                 place(items.pop(0))
             role, ls = b["role"], b["lines"]
             if role == "altyazı":
@@ -1568,7 +1936,8 @@ def build_markdown(doc, first_idx, last_idx):
                 stats["flag_removed"] += bool(b.get("flag_removed"))
                 continue
             toks_ = [t.strip("*") for t in b["text"].split()]
-            if role in ("gövde", "kutu") and (len(re.sub(r"[\s*]", "", b["text"])) <= 2 or (len(toks_) <= 6 and all(len(t) == 1 for t in toks_))):
+            if role in ("gövde", "kutu") and (len(re.sub(r"[\s*]", "", b["text"])) <= T["stray_chars"]
+                                              or (len(toks_) <= T["stray_tokens"] and all(len(t) == 1 for t in toks_))):
                 stats["dropped_words"] += b["nwords"]       # single stray letters: ornate lettering, not text
                 continue
             if "stil-farkli" in b.get("flags", ()):
@@ -1612,12 +1981,12 @@ def build_markdown(doc, first_idx, last_idx):
             flush()
             if role in HEAD:
                 t = join_lines([re.sub(r"(?<!\*)\*\*(?!\*)", "", x) for x in texts], lex, stats, amb)
-                if len(re.sub(r"[\s*]", "", t)) <= 2:
+                if len(re.sub(r"[\s*]", "", t)) <= T["stray_chars"]:
                     stats["dropped_words"] += b["nwords"]
                     continue
                 lvl = HEAD[role]
                 prev = md[-1][1] if md and md[-1][0] == "head" else None
-                near = prev is not None and prev["page"] == p["p"] and 0 < b["lines"][0]["base"] - prev["base"] < 2.6 * max(b["size"], prev["size"])
+                near = prev is not None and prev["page"] == p["p"] and 0 < b["lines"][0]["base"] - prev["base"] < T["head_wrap_em"] * max(b["size"], prev["size"])
                 if near and prev["lvl"] == lvl:                       # a heading that wrapped
                     prev["text"] += " " + t
                     prev["base"] = b["lines"][-1]["base"]
@@ -1670,7 +2039,6 @@ def build_markdown(doc, first_idx, last_idx):
     return "\n\n".join(out) + "\n", stats
 
 
-# ---------------------------------------------------------------------------- public entry point
 def _page_ranges(first_page, last_page, n):
     first = 1 if first_page in (None, "") else int(first_page)
     last = n if last_page in (None, "") else int(last_page)
@@ -1679,17 +2047,16 @@ def _page_ranges(first_page, last_page, n):
     return first, min(last, n)
 
 
-def _pages_text(pages, first_idx, last_idx):
-    return sum(len(b["text"].strip()) for p in pages[first_idx:last_idx + 1] for b in p["blocks"])
-
-
-def is_scanned(producer, signals):
-    """A scanned book with an OCR text layer: made by OCR software, or most text-bearing pages are a full-page image
-    under invisible text. The text of such a layer can be wrong in ways the importer cannot repair (pdfium drops the
-    last letter of most words in some ABBYY layers)."""
-    text_pages = [s for s in signals if s[1] + s[2]]
-    scan_pages = [s for s in text_pages if s[0] and s[1] and s[1] >= 9 * s[2]]
-    return bool(OCR_PRODUCER.search(producer or "")) or (bool(text_pages) and len(scan_pages) >= 0.5 * len(text_pages))
+def _fmt_pages(nums):
+    """[3,4,5,9] -> '3–5, 9'"""
+    out, i = [], 0
+    while i < len(nums):
+        j = i
+        while j + 1 < len(nums) and nums[j + 1] == nums[j] + 1:
+            j += 1
+        out.append(str(nums[i]) if i == j else f"{nums[i]}–{nums[j]}")
+        i = j + 1
+    return ", ".join(out)
 
 
 def _analyse(pdf_bytes, first_page=None, last_page=None):
@@ -1719,10 +2086,10 @@ def _analyse(pdf_bytes, first_page=None, last_page=None):
         raw_pages.append((page.get_width(), page.get_height(), chars, _tint_boxes(page), gfx))
         signals.append(gfx["signals"])
     total_chars = sum(len(rp[2]) for rp in raw_pages[first - 1:last])
-    if total_chars < 20 * (last - first + 1) and total_chars < 400:
+    if total_chars < T["min_chars_page"] * (last - first + 1) and total_chars < T["min_chars_total"]:
         raise PdfImportError("Bu PDF'te (seçilen sayfalarda) metin katmanı yok ya da çok az. Taranmış bir PDF olabilir; "
                              "önce OCR ile metin katmanı eklenmeli.")
-    orn = frozenset(f for f, c in font_count.items() if c < 30 and ORNAMENT_FONT.search(f))
+    orn = frozenset(f for f, c in font_count.items() if c < T["ornament_glyphs"] and ORNAMENT_FONT.search(f))
     tint = {i + 1: rp[3] for i, rp in enumerate(raw_pages)}
     pages = []
     for i, (W, H, chars, boxes, gfx) in enumerate(raw_pages):
@@ -1730,7 +2097,7 @@ def _analyse(pdf_bytes, first_page=None, last_page=None):
     raw_pages = None
     d = Doc(pages)
     md, stats = build_markdown(d, first - 1, last - 1)
-    if len(md.split()) < 20:
+    if len(md.split()) < T["min_md_words"]:
         raise PdfImportError("Seçilen sayfalardan okunabilir metin çıkmadı (yalnızca filigran/üst-alt bilgi olabilir). "
                              "Sayfa aralığını kontrol et.")
     meta = doc.get_metadata_dict()
@@ -1773,14 +2140,14 @@ def _analyse(pdf_bytes, first_page=None, last_page=None):
     if stats["style_flags"]:
         warnings.append(f"{stats['style_flags']} blok gövdeden farklı stilde ama hiçbir başlığa ya da görsel/tabloya "
                         "bağlanamadı; \"stil-farkli\" olarak gözden geçirmeye işaretlendi.")
-    if rotated >= 20:
+    if rotated >= T["rotated_warn"]:
         warnings.append(f"Eğik ya da dikey yazılmış {rotated} karakter (filigran, kenar yazısı) metne alınmadı.")
     skipped = [p["p"] for p in d.pages[first - 1:last] if p["cover"]]
     if skipped:
         warnings.append("Kapak/açık yayılım sayfası atlandı: " + _fmt_pages(skipped) + ".")
     return dict(md=md, warnings=warnings, doc=d, stats=stats, tint=tint, orn=orn, meta=d.seg_meta,
                 info=dict(scanned=scanned, producer=producer, rotated_chars=rotated,
-                          scan_pages=sum(1 for s in signals if s[0] and s[1] and s[1] >= 9 * s[2])))
+                          scan_pages=sum(1 for s in signals if s[0] and s[1] and s[1] >= T["scan_invisible_ratio"] * s[2])))
 
 
 def convert(pdf_bytes, first_page=None, last_page=None):
@@ -1792,15 +2159,3 @@ def convert_with_meta(pdf_bytes, first_page=None, last_page=None):
     """convert() plus the source of every segment (see build_markdown): (markdown, warnings, seg_meta)"""
     a = _analyse(pdf_bytes, first_page, last_page)
     return a["md"], a["warnings"], a["meta"]
-
-
-def _fmt_pages(nums):
-    """[3,4,5,9] -> '3–5, 9'"""
-    out, i = [], 0
-    while i < len(nums):
-        j = i
-        while j + 1 < len(nums) and nums[j + 1] == nums[j] + 1:
-            j += 1
-        out.append(str(nums[i]) if i == j else f"{nums[i]}–{nums[j]}")
-        i = j + 1
-    return ", ".join(out)
