@@ -267,14 +267,14 @@ def body_rows(p, top=300, n=10, last=None):
 
 # -- 1. margin text is found relative to the text block, not by a fixed share of the page height
 def mid_page(p):
-    rows = [("F A R  C A L L S" if p % 2 else "FAR CALLS", 200, 270, "Head-Track", 6),     # running head, spaced or not
+    rows = [("T H E  B O O K" if p % 2 else "THE BOOK", 200, 270, "Head-Track", 6),     # running head, spaced or not
             (str(p + 40), 260, 470, "Body-Regular", 10)]                                  # page number below the block
     if p in (2, 4, 6):
         rows.append(("Chapter %d" % p, 100, 270, "Head-Bold", 20))                          # chapter label, also above
     return rows + body_rows(p)
 d = doc_from([mid_page(p) for p in range(1, 9)])
 md, st = P.build_markdown(d, 0, 7)
-check("running head above a mid-page text block is removed (spaced and unspaced alike)", "FAR" not in md and "C A L" not in md, md[:160])
+check("running head above a mid-page text block is removed (spaced and unspaced alike)", "BOOK" not in md and "B O O" not in md, md[:160])
 check("a lone number below the text block is a page number and goes", not any(re.fullmatch(r"\d+", s.strip()) for s in md.split("\n\n")))
 check("a large chapter label above the block is not mistaken for a running head", "Chapter 2" in md and "Chapter 6" in md, md[:200])
 check("the text block is measured from body lines", d.text_top == 300 - 11 * 0.8 and abs(d.text_bot - (300 + 9 * 14 + 11 * 0.2)) < 0.01, (d.text_top, d.text_bot))
@@ -309,8 +309,8 @@ def tracked(text, x, size, letter_gap, word_gap, with_spaces=False):
             cx += w + letter_gap
             k += 1
     return out
-check("letter-spaced heading splits at word gaps only", lines_text(tracked("FAR CALLS", 100, 4.5, 1.2, 4.1))[0]["plain"] == "FAR CALLS",
-      lines_text(tracked("FAR CALLS", 100, 4.5, 1.2, 4.1))[0]["plain"])
+check("letter-spaced heading splits at word gaps only", lines_text(tracked("THE BOOK", 100, 4.5, 1.2, 4.1))[0]["plain"] == "THE BOOK",
+      lines_text(tracked("THE BOOK", 100, 4.5, 1.2, 4.1))[0]["plain"])
 check("one tracked word stays one word", lines_text(tracked("CONTENTS", 100, 12.5, 1.8, 1.8))[0]["plain"] == "CONTENTS")
 sp = tracked("THE INTERVAL", 100, 12.5, 1.9, 6.1, with_spaces=True)
 check("tracked words with real spaces between them", lines_text(sp)[0]["plain"] == "THE INTERVAL", lines_text(sp)[0]["plain"])
@@ -1010,12 +1010,12 @@ md, warns = P.convert(synth_pdf([layered_page(p)[:8] + [("Hidden %s Variable" % 
 check("text under 3 pt is not read", "Variable" not in md and "Plain sentence 4 on page 2" in md, md[:200])
 
 # -- 3. an ornamental initial far larger than 40 pt is still the drop cap
-dc = [P.Ch("O", 60, 140, 191, 271, 268, "Body-Regular", 100.0, idx=0)] + line("ne of the first things people ask", 145, 200, idx0=1)
+dc = [P.Ch("O", 60, 140, 191, 271, 268, "Body-Regular", 100.0, idx=0)] + line("ne quiet sample line of plain words", 145, 200, idx0=1)
 L = lines_text(dc)
-check("a 100 pt initial joins its line", len(L) == 1 and L[0]["plain"].startswith("One of the first"), [l["plain"] for l in L])
-dcb = [P.Ch("O", 60, 140, 191, 271, 268, "Display-Bold", 100.0, 700, False, True, idx=0)] + line("ne of the first things people ask", 145, 200, idx0=1)
+check("a 100 pt initial joins its line", len(L) == 1 and L[0]["plain"].startswith("One quiet sample line"), [l["plain"] for l in L])
+dcb = [P.Ch("O", 60, 140, 191, 271, 268, "Display-Bold", 100.0, 700, False, True, idx=0)] + line("ne quiet sample line of plain words", 145, 200, idx0=1)
 L = lines_text(dcb)
-check("a bold (or italic) initial carries no style of its own into the word", L[0]["md"].startswith("One of the first"), L[0]["md"][:30])
+check("a bold (or italic) initial carries no style of its own into the word", L[0]["md"].startswith("One quiet sample line"), L[0]["md"][:30])
 tall = ([P.Ch("O", 60, 120, 191, 271, 268, "Body-Regular", 100.0, idx=0)] + line("ne grey morning the sample begins", 130.1, 200, idx0=1)
         + line("its second line runs on from here", 130.0, 214, idx0=40) + line("and a third line follows it", 130.0, 228, idx0=80))
 L = lines_text(tall)

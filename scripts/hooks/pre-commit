@@ -1,0 +1,5 @@
+#!/bin/sh
+# Palimpsest pre-commit: no book text in the repo (see scripts/check_book_text.py). The interpreter with pypdfium2
+# (python3.13 on this machine) also reads books that have no gt.json.
+PY=$(command -v python3.13 || command -v python3)
+exec "$PY" "$(git rev-parse --show-toplevel)/scripts/check_book_text.py"
