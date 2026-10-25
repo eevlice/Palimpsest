@@ -92,6 +92,21 @@ check("review copy: inline italics and footnote refs as runs", any(r_.italic and
       and any(r_.font.superscript and r_.text == "1" for r_ in t.cell(2, 1).paragraphs[0].runs))
 check("review copy: placeholders as text, untranslated marked", t.cell(3, 0).text == "[Görsel · s.4]" and t.cell(4, 1).text.startswith("[UNTRANSLATED]"))
 
+# ---------------------------------------------------------------- a role changed in the editor reaches Word
+# (the export of a paragraph turned epigraph and a translated one turned quote, as exportText writes them)
+md = ('::: {custom-style="Epigraph"}\nBir paragraf epigraf oldu.\n:::\n\n> Çevrilmiş paragraf alıntı oldu.\n\n## Başlık oldu')
+r = c.post("/export_docx", json={"mode": "word", "name": "rol", "markdown": md})
+d = docx.Document(io.BytesIO(r.data))
+st = {p_.text: p_.style.name for p_ in d.paragraphs if p_.text.strip()}
+check("role change: Word styles follow the new roles (Epigraph, Block Text, Heading 2)",
+      st.get("Bir paragraf epigraf oldu.") == "Epigraph" and st.get("Çevrilmiş paragraf alıntı oldu.") == "Block Text"
+      and st.get("Başlık oldu") == "Heading 2", st)
+r = c.post("/export_docx", json={"mode": "redaksiyon", "name": "rol", "rows": [
+    {"src": '::: {custom-style="Epigraph"}\nA paragraph turned epigraph.\n:::', "tgt": '::: {custom-style="Epigraph"}\nBir paragraf epigraf oldu.\n:::'}]})
+t = docx.Document(io.BytesIO(r.data)).tables[0]
+check("role change: the review copy styles both cells by the new role", t.cell(1, 0).paragraphs[0].style.name == "Epigraph"
+      and t.cell(1, 1).paragraphs[0].style.name == "Epigraph")
+
 # ---------------------------------------------------------------- in-book page references as Word comments; note labels
 NOTE = "Sayfa göndermesi: Türkçe baskıda sayfa numarası değişecek."
 rows = [{"src": "As shown on p. 42, the end.[^b2-13]", "tgt": "s. 42'de gösterildiği gibi son.[^b2-13]", "comment": NOTE},

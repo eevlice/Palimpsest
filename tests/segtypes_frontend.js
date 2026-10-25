@@ -32,15 +32,15 @@ function line(prefix) {           // a one-line top-level statement
   return src.slice(at, src.indexOf('\n', at));
 }
 const code = [
-  line('const esc='), line('const SEG_H='), line('const SEG_REF='), line('const SEG_IMG='), line('const SEG_CAP='), line('const SEG_TAB='), line('const CAP_OPEN='), line('const SEG_FENCE='), line('const FENCE_TYPE='), line('const SEG_BQ='), line('const FENCE_STYLE_OF='), line('const NAMED='), line("const MASK="), line('const PARSE_CACHE='), line('const WIN='), line('const RAIL_PER_ROW='), line('const STATE_CLS='), line('const PAGE_REF_NOTE='),
+  line('const esc='), line('const SEG_H='), line('const SEG_REF='), line('const SEG_IMG='), line('const SEG_CAP='), line('const SEG_TAB='), line('const CAP_OPEN='), line('const SEG_FENCE='), line('const FENCE_TYPE='), line('const SEG_BQ='), line('const FENCE_STYLE_OF='), line('const NAMED='), line("const MASK="), line('const PARSE_CACHE='), line('const WIN='), line('const RAIL_PER_ROW='), line('const STATE_CLS='), line('const PAGE_REF_NOTE='), src.slice(src.indexOf('const ROLE_CHOICES='), src.indexOf('function roleOf(')),
   ...['foldCase', 'segType', 'segMarkerLen', 'segTailLen', 'wrapSeg', 'fnNumber', 'typeOf', 'refLabels', 'maskRefs',
       'inlineParse', 'isWordChar', 'findSpans', 'parseTerms', 'glossHitsForText',
-      'searchSpans', 'renderSource', 'refMismatch', 'neighborText', 'canMerge', 'exportText', 'exportSeg', 'suspectSpans', 'mdFileName', 'mdBlob', 'hasPageRef', 'pageRefFlag', 'docxComment',
+      'searchSpans', 'renderSource', 'refMismatch', 'neighborText', 'canMerge', 'exportText', 'exportSeg', 'roleOf', 'canChangeRole', 'segBody', 'withRole', 'stripMarker', 'lookAlikes', 'setRole', 'suspectSpans', 'mdFileName', 'mdBlob', 'hasPageRef', 'pageRefFlag', 'docxComment',
       'normalizeProject', 'isDone', 'mergeMeta', 'projectForSave', 'splitRow', 'parseMdTable', 'cellEsc', 'buildMdTable', 'emptyLike', 'tableShapeOf', 'tableMismatch', 'gridFits', 'mdInline', 'tableHTML', 'hasSource', 'srcBtn', 'devFlag', 'firstSegForPage', 'linkifyPages', 'autoTermsFilter', 'headingTitle', 'computeSections', 'sectionStats', 'segState', 'padWidth', 'railLabel',
       'windowStartFor', 'windowLabel', 'goToWindow', 'railGoto', 'pageEarlier', 'pageLater', 'jumpToLastTranslated', 'lastTranslatedIndex',
-      'roman', 'headingDepths', 'railModel', 'flowCells', 'railWhere', 'railCellClass', 'railOpen', 'applyRailOpen', 'setRailOpen'].map(fn), block('const ICON='), block('window.mergeDown='), block('window.undoMerge='),
+      'roman', 'headingDepths', 'railModel', 'flowCells', 'railWhere', 'railCellClass', 'railOpen', 'applyRailOpen', 'setRailOpen'].map(fn), block('const ICON='), block('window.mergeDown='), block('window.undoMerge='), block('window.undoRole='),
   'return {segType,inlineParse,findSpans,renderSource,refMismatch,neighborText,canMerge,exportText,normalizeProject,' +
-  'headingTitle,computeSections,sectionStats,isDone,mergeMeta,projectForSave,parseMdTable,buildMdTable,emptyLike,tableShapeOf,tableMismatch,gridFits,tableHTML,hasSource,srcBtn,devFlag,suspectSpans,mdFileName,mdBlob,hasPageRef,pageRefFlag,docxComment,firstSegForPage,linkifyPages,autoTermsFilter,mergeDown:(i)=>window.mergeDown(i),undoMerge:()=>window.undoMerge(),getP:()=>P,segState,railLabel,roman,headingDepths,railModel,flowCells,railWhere,railCellClass,railOpen,applyRailOpen,setRailOpen,RAIL_PER_ROW,' +
+  'headingTitle,computeSections,sectionStats,isDone,mergeMeta,projectForSave,parseMdTable,buildMdTable,emptyLike,tableShapeOf,tableMismatch,gridFits,tableHTML,hasSource,srcBtn,devFlag,roleOf,canChangeRole,withRole,segBody,lookAlikes,setRole,undoRole:()=>window.undoRole(),suspectSpans,mdFileName,mdBlob,hasPageRef,pageRefFlag,docxComment,firstSegForPage,linkifyPages,autoTermsFilter,mergeDown:(i)=>window.mergeDown(i),undoMerge:()=>window.undoMerge(),getP:()=>P,segState,railLabel,roman,headingDepths,railModel,flowCells,railWhere,railCellClass,railOpen,applyRailOpen,setRailOpen,RAIL_PER_ROW,' +
   'windowStartFor,windowLabel,goToWindow,railGoto,pageEarlier,pageLater,jumpToLastTranslated,PREFS_:()=>PREFS,LAYOUT,SAVED,' +
   'getWin:()=>winStart,setWin:v=>{winStart=v},calls:CALLS,setMerge:v=>{MERGE_MODE=v},setP:p=>{P=p},setSearch:q=>{SEARCH={query:q}}};'
 ].join('\n');
@@ -327,6 +327,30 @@ check('sections: heading with a footnote ref keeps the title clean', api.heading
   check('suspect words: whole-word occurrences only', JSON.stringify(sus) === JSON.stringify([{start: 0, end: 3}, {start: 12, end: 15}]), JSON.stringify(sus));
   const html = api.renderSource(0);
   check('suspect words: a dotted mark that opens the source page', (html.match(/class="ocr-sus" onclick="openSource\(0\)"/g) || []).length === 2, html);
+  // role change in the editor: the marker or fence changes, the text stays; a translation follows on export
+  api.setP({segments: ['A plain paragraph.', 'Another one.', '# Title', '::: {custom-style="Verse"}\nline one\\\nline two\n:::', '[^n1]: A note.'],
+            finals: [null, 'Çevrilmiş paragraf.', null, null, null], approved: [false, true, false, false, false], terms: '',
+            segMeta: [{style: 'Body 11', flags: []}, {style: 'Body 11', flags: []}, {style: 'Head 16', flags: []}, {style: 'Poem 10', flags: []}, null]});
+  const RP = api.getP();
+  check('role: look-alikes are the same style in the same role', JSON.stringify(api.lookAlikes(0)) === '[1]', JSON.stringify(api.lookAlikes(0)));
+  api.setRole([0], 'epigraph');
+  check('role: paragraph -> epigraph fence, the segment type follows', RP.segments[0] === '::: {custom-style="Epigraph"}\nA plain paragraph.\n:::'
+        && api.segType(RP.segments[0]).type === 'epigraph', RP.segments[0]);
+  check('role: seg_meta notes who decided and the new role', RP.segMeta[0].flags.includes('kullanici:epigraf') && RP.segMeta[0].role === 'epigraph');
+  api.setRole([1], 'blockquote');
+  check('role: a translated paragraph keeps its translation; the export wraps it the new way',
+        RP.segments[1] === '> Another one.' && RP.finals[1] === 'Çevrilmiş paragraf.' && api.exportText([RP.segments[1]], [RP.finals[1]]) === '> Çevrilmiş paragraf.',
+        JSON.stringify([RP.segments[1], RP.finals[1]]));
+  api.setRole([2], 'h2');
+  check('role: heading level', RP.segments[2] === '## Title' && api.segType(RP.segments[2]).level === 2, RP.segments[2]);
+  api.setRole([3], 'para');
+  check('role: verse -> paragraph joins its lines', RP.segments[3] === 'line one line two', RP.segments[3]);
+  api.undoRole();
+  check('role: undo brings the last change back', RP.segments[3] === '::: {custom-style="Verse"}\nline one\\\nline two\n:::' && RP.segMeta[3].flags.length === 0);
+  check('role: footnotes, figures and tables keep their kind', !api.canChangeRole(4));
+  api.setP({segments: ['Old paragraph.', 'Old two.'], finals: [null, null], approved: [false, false], terms: '', segMeta: [null, null]});
+  check('role: an old project (no seg_meta) offers no look-alikes and still changes roles', api.lookAlikes(0).length === 0
+        && (api.setRole([0], 'h1'), api.getP().segments[0] === '# Old paragraph.' && api.getP().segMeta[0] === null));
   // the Markdown export downloads <project name>.md as text/markdown
   check('markdown export: the file is <project name>.md', api.mdFileName('My Book') === 'My_Book.md' && api.mdFileName('') === 'ceviri.md'
         && !api.mdFileName('Kitap').endsWith('.txt'), api.mdFileName('My Book'));

@@ -245,6 +245,20 @@
   .pref-flag{display:inline-block;margin-left:8px;color:var(--pencil);vertical-align:middle;line-height:0;cursor:default;}
   mark.ocr-sus{background:none;color:inherit;text-decoration:underline dotted var(--pencil);text-underline-offset:3px;
     text-decoration-thickness:1.5px;cursor:pointer;}
+  .seg .role-btn{opacity:0;transition:opacity .12s;}
+  .seg:hover .role-btn,.seg .role-btn:focus-visible,.seg-extra .role-btn{opacity:1;}
+  .role-menu{position:absolute;z-index:30;width:230px;background:var(--paper);border:1px solid var(--ink);
+    box-shadow:0 6px 18px -8px rgba(0,0,0,.35);font-family:'Sofia Sans Condensed','Arial Narrow',sans-serif;font-size:15px;}
+  .role-menu .rm-t{font-family:'Spline Sans Mono',monospace;font-size:13px;letter-spacing:.1em;text-transform:uppercase;
+    color:var(--ink-soft);padding:8px 12px 4px;}
+  .role-menu button{display:block;width:100%;text-align:left;border:none;background:none;color:var(--ink);font:inherit;
+    padding:6px 12px;cursor:pointer;}
+  .role-menu button:hover{background:var(--paper-deep);}
+  .role-menu button.on{color:var(--ink-soft);cursor:default;}
+  .role-menu button.on::after{content:' · şimdiki';}
+  .role-menu .rm-all{display:flex;gap:8px;align-items:center;font:inherit;text-transform:none;letter-spacing:0;color:var(--ink);
+    border-top:1px solid var(--rule);margin:4px 0 0;padding:8px 12px;}
+  .role-menu .rm-all input{width:auto;margin:0;}
   .dev-flag{display:inline-block;width:7px;height:7px;margin-left:8px;padding:0;border:1.2px solid var(--pencil);border-radius:50%;
     background:none;cursor:pointer;vertical-align:middle;}
   .review-warn a.pg-link{color:inherit;text-decoration:underline;text-underline-offset:2px;cursor:pointer;}
@@ -877,6 +891,7 @@ const effortTitle=(v)=>'Düşünme eforu · '+EFFORT_HINT[v||'off'];
 
 // --- inline SVG icons (stroke uses currentColor so they theme correctly) ---
 const ICON={
+  role:'<svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><path d="M4 7V5h16v2"/><path d="M12 5v14"/><path d="M9 19h6"/></svg>',
   pageref:'<svg viewBox="0 0 24 24" width="11" height="11" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M6 2h8l4 4v16H6z"/><path d="M9 13h6M12 10v6"/></svg>',
   source:'<svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h5"/><path d="M14 2v6h6"/><circle cx="16.5" cy="16.5" r="3"/><path d="m21 21-2.2-2.2"/></svg>',
   check:'<svg viewBox="0 0 24 24" width="15" height="15" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round"><polyline points="20 6 9 17 4 12"/></svg>',
@@ -2520,7 +2535,7 @@ function segActionsHTML(i,costTag){
       <div class="seg-extra${open}" id="extra-${i}">
         ${modelSelector(i)}${effortSelector(i)}
         <button class="seg-btn icon" onclick="runSeg(${i})" title="Yeniden çevir (makine)">${ICON.rerun}</button>
-        ${costTag}
+        ${roleBtn(i)}${costTag}
       </div>
     </div>`;
 }
@@ -2686,6 +2701,84 @@ function canMerge(i){
 }
 
 // Two segments become one: their sources become one too (pages and boxes together, first style, all flags).
+// ROLE CHANGE in the editor: the markdown marker or fence changes, the text stays. A translation keeps its text: the
+// export wraps it by the source's type (exportSeg), so it follows; a marker an old translation carries comes off.
+const ROLE_CHOICES=[['para','Paragraf'],['h1','Başlık 1'],['h2','Başlık 2'],['h3','Başlık 3'],['epigraph','Epigraf'],
+  ['blockquote','Alıntı'],['verse','Şiir'],['attribution','Atıf'],['caption','Altyazı'],['box','Kutu']];
+// seg_meta: the type field and the importer's role names, so a flag tells who decided ("kullanici:epigraf")
+const ROLE_META={epigraph:'epigraph',blockquote:'blockquote',verse:'verse',attribution:'attribution',box:'box'};
+const ROLE_FLAG={para:'gövde',h1:'bölüm',h2:'alt başlık 1',h3:'alt başlık 2',epigraph:'epigraf',blockquote:'alıntı',
+  verse:'şiir',attribution:'atıf',caption:'altyazı',box:'kutu'};
+function roleOf(s){ const t=segType(s); return t.type==='heading'?'h'+Math.min(3,t.level):t.type; }
+function canChangeRole(i){ return !['footnote','image','table'].includes(typeOf(i).type); }
+// the text inside a segment's marker or fence; a verse's hard breaks as line breaks
+function segBody(s){
+  const t=segType(s); let b=s.slice(segMarkerLen(s),s.length-segTailLen(s));
+  if(t.type==='blockquote') b=b.replace(/^>[ \t]?/gm,'');
+  return b.replace(/\\\n/g,'\n').trim();
+}
+function withRole(body,r){
+  if(r==='verse'||r==='epigraph') return wrapSeg(body,r);
+  const one=body.replace(/\s*\n\s*/g,' ');
+  if(/^h[123]$/.test(r)) return '#'.repeat(+r[1])+' '+one;
+  return r==='para'?one:wrapSeg(one,r);
+}
+function stripMarker(f){
+  if(f==null) return f;
+  return /^(#{1,6}[ \t]|>|:::)/.test(f)?segBody(f):f;
+}
+// segments that look like segment i (same style in seg_meta, same role now); none without a style (old projects)
+function lookAlikes(i){
+  const m=P.segMeta&&P.segMeta[i], r=roleOf(P.segments[i]);
+  if(!m||!m.style) return [];
+  return P.segments.map((s,j)=>j).filter(j=>j!==i&&P.segMeta[j]&&P.segMeta[j].style===m.style&&roleOf(P.segments[j])===r&&canChangeRole(j));
+}
+function setRole(idx,r){
+  P._undo={type:'role',index:idx[0],changes:idx.map(j=>({i:j,seg:P.segments[j],final:P.finals[j],meta:P.segMeta?P.segMeta[j]:null}))};
+  idx.forEach(j=>{
+    P.segments[j]=withRole(segBody(P.segments[j]),r);
+    if(P.finals[j]!=null) P.finals[j]=stripMarker(P.finals[j]);
+    if(P.segMeta&&P.segMeta[j]){
+      const m=Object.assign({},P.segMeta[j]);
+      m.flags=[...new Set([...(m.flags||[]),'kullanici:'+ROLE_FLAG[r]])].sort();
+      m.role=ROLE_META[r]||null; if(m.role) m.conf=1; else delete m.conf;
+      P.segMeta[j]=m;
+    }
+  });
+}
+window.undoRole=()=>{
+  if(!P._undo||P._undo.type!=='role') return;
+  P._undo.changes.forEach(c=>{ P.segments[c.i]=c.seg; P.finals[c.i]=c.final; if(P.segMeta) P.segMeta[c.i]=c.meta; });
+  P._undo=null;
+  renderWindow();renderRail();updateProgress();queueSave();
+};
+// quiet: on an untranslated row it shows only while the row is hovered; on a translated one it sits behind "…"
+function roleBtn(i){
+  return canChangeRole(i)?`<button class="seg-btn icon role-btn" onclick="openRoleMenu(event,${i})" title="Rolü değiştir">${ICON.role}</button>`:'';
+}
+window.openRoleMenu=(e,i)=>{
+  e.stopPropagation();
+  document.querySelectorAll('.role-menu').forEach(el=>el.remove());
+  const cur=roleOf(P.segments[i]), like=lookAlikes(i);
+  const m=document.createElement('div'); m.className='role-menu';
+  m.innerHTML=`<div class="rm-t">Rolü değiştir</div>${ROLE_CHOICES.map(([k,l])=>
+      `<button data-r="${k}"${k===cur?' class="on" disabled':''}>${l}</button>`).join('')}${like.length?
+      `<label class="rm-all"><input type="checkbox" id="rm-all"> Kitapta aynı görünen ${like.length} yere de uygula</label>`:''}`;
+  m.onclick=ev=>{
+    ev.stopPropagation();
+    const r=ev.target.dataset&&ev.target.dataset.r; if(!r) return;
+    const all=$('rm-all')&&$('rm-all').checked;
+    m.remove();
+    setRole([i,...(all?like:[])],r);
+    renderWindow();renderRail();updateProgress();queueSave();
+  };
+  const b=e.currentTarget.getBoundingClientRect();
+  Object.assign(m.style,{left:Math.max(8,b.right-230)+window.scrollX+'px',top:b.bottom+6+window.scrollY+'px'});
+  document.body.appendChild(m);
+  if(b.bottom+6+m.offsetHeight>window.innerHeight)          // no room below: open above the button
+    m.style.top=Math.max(8,b.top-6-m.offsetHeight)+window.scrollY+'px';
+};
+document.addEventListener('click',()=>document.querySelectorAll('.role-menu').forEach(el=>el.remove()));
 function mergeMeta(a,b){
   if(!a&&!b) return null;
   a=a||{pages:[],boxes:[],style:null,flags:[]}; b=b||{pages:[],boxes:[],style:null,flags:[]};
@@ -2790,12 +2883,15 @@ function renderWindow(){
           <button class="seg-btn primary icon" onclick="runSeg(${i})" title="Makine ile çevir">${ICON.translate}</button>
           ${glossFlagBtn(i)}${srcBtn(i)}
           ${modelSelector(i)}${effortSelector(i)}
-          <button class="seg-btn icon" onclick="writeSeg(${i})" title="Kendi çevirimі yaz">${ICON.pencil}</button>
+          <button class="seg-btn icon" onclick="writeSeg(${i})" title="Kendi çevirimі yaz">${ICON.pencil}</button>${roleBtn(i)}
         </div>`;
     }
     let mergeCtl='';
     const isUndoTarget = P._undo&&P._undo.type==='merge'&&P._undo.index===i;
-    if(canMerge(i)||isUndoTarget){
+    const isRoleUndo = P._undo&&P._undo.type==='role'&&P._undo.index===i;
+    if(isRoleUndo){
+      mergeCtl=`<div class="merge-join"><button class="merge-btn undo" onclick="undoRole()" title="Bu rol değişikliğini geri al">↶ Rol değişikliğini geri al</button></div>`;
+    }else if(canMerge(i)||isUndoTarget){
       let inner='';
       if(canMerge(i)){
         inner+=`<button class="merge-btn" onclick="mergeDown(${i})" title="Bu paragrafı bir sonrakiyle birleştir">${ICON.merge}</button>`;
