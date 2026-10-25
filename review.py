@@ -6,7 +6,7 @@ decisions for pdf_import.apply_overrides (decisions_for), so the import is rende
 
     questions(state, rendered) -> [question]     state: pdf_import.analyse(); rendered: pdf_import.render(state)
     decisions_for(question, key, apply_all) -> [decision]
-    integrity(state) -> dict(lost, pages, sentence, notes)
+    integrity(state) -> dict(lost, pages, sentence, notes, contents)
 """
 import collections
 import difflib
@@ -16,7 +16,7 @@ import pdf_import as P
 import segtypes
 
 ROLE_LABEL = {"gövde": "Paragraf", "bölüm": "Başlık 1", "alt başlık 1": "Başlık 2", "alt başlık 2": "Başlık 3",
-              "kısım": "Başlık 1", "epigraf": "Epigraf", "alıntı": "Alıntı", "şiir": "Şiir", "atıf": "Atıf",
+              "kısım": "Kısım", "epigraf": "Epigraf", "alıntı": "Alıntı", "şiir": "Şiir", "atıf": "Atıf",
               "altyazı": "Altyazı", "kutu": "Kutu", "kutu-başlık": "Kutu", "liste": "Paragraf", "dipnot": "Dipnot",
               "son not": "Son not", "sil": "Atılsın"}
 # "Başka…": every role the user can give, in this order
@@ -30,7 +30,8 @@ SHAPE = {"indent", "indent-right", "narrow", "centered", "right", "ragged", "ita
 TITLES = {"rol": "İşaretli yazı ne?", "stil": "İşaretli yazı ne?", "baslik": "Bu başlık içindekilerde yok. Ne olsun?",
           "atif": "Bu atıf rakamının notu bulunamadı. Ne olsun?", "not": "Bu notun atfı bulunamadı. Ne olsun?",
           "sutun": "Bu sayfa iki sütunlu okundu. Doğru mu?", "tekrar": "Bu tekrar eden yazı ne yapılsın?",
-          "bagla": "Hangi atıfa bağlansın?"}
+          "bagla": "Hangi atıfa bağlansın?", "icindekiler": "İçindekilerde başlık, gövdede değil. Başlık olsun mu?",
+          "icindekiler-yok": "İçindekilerdeki bu başlıklar gövdede bulunamadı."}
 
 
 def _box(p, b):
@@ -65,7 +66,7 @@ def questions(state, rendered):
         if q is None:
             q = groups[sig] = dict(type=qtype, title=title or TITLES[qtype], page=p["p"], boxes=[_box(p, b)] if b else [],
                                    seg=seg_of.get(b["bid"]) if b else None, targets=[], choices=choices or [],
-                                   guess=guess, other=OTHER if qtype in ("rol", "stil", "baslik", "eslestir") else [])
+                                   guess=guess, other=OTHER if qtype in ("rol", "stil", "baslik", "eslestir", "icindekiler") else [])
         q["targets"].append(target if target is not None else b["bid"])
         return q
 
@@ -93,23 +94,54 @@ def questions(state, rendered):
         if len(q["targets"]) == 1:                   # the shown unit: every one of its boxes, every block
             q["boxes"] = [_box(pp, x) for pp, x in unit]
             q["bids"] = [x["bid"] for _, x in unit]
-    # 3. headings the PDF's bookmarks do not list (only when the bookmarks are a real contents)
+    # 3. the contents: headings they do not list (the bookmarks too, when they are a real contents), asked only at the
+    # levels the contents name (sub-headings are seldom listed: only counted); entries the body sets as no heading
+    toc = getattr(d, "toc", None) if getattr(d, "toc", None) and len(d.toc["entries"]) >= 3 else None
+    blocks = {b.get("bid"): (p, b) for p in d.pages for b in p["blocks"]}
     outline = [o["title"] for o in state["ctx"].get("outline", []) if o["title"] and not _filename_like(o["title"])]
-    if len(outline) >= 3:
-        toc = [_norm(t) for t in outline]
+    if len(outline) >= 3 or toc:
+        names = [_norm(t) for t in outline] if len(outline) >= 3 else []
+        listed_bids = {bid for e in toc["entries"] for bid in e.get("match", [])} if toc else set()
+        covered = {blocks[bid][1]["role"] for bid in listed_bids if bid in blocks}
 
-        def listed(t):
-            n = _norm(t)
-            return bool(n) and any(n in o or o in n or difflib.SequenceMatcher(None, n, o).ratio() >= 0.8 for o in toc)
+        def listed(b):
+            n = _norm(b["text"])
+            return b["bid"] in listed_bids or bool(n) and any(
+                n in o or o in n or difflib.SequenceMatcher(None, n, o).ratio() >= 0.8 for o in names)
         for p in pages:
             for b in p["blocks"]:
-                if b.get("bid") and b["role"] in P.HEAD and not listed(b["text"]):
+                if b.get("bid") and b["role"] in P.HEAD and not listed(b) and (not toc or b["role"] in covered):
                     add(("baslik", b["role"], b["style"]), "baslik", p, b, "role:" + b["role"], choices=_role_choices(b["role"]))
+    if toc:
+        level_role = {}
+        for e in toc["entries"]:
+            if e.get("match") and e["match"][0] in blocks:
+                level_role.setdefault(e["level"], blocks[e["match"][0]][1]["role"])
+        missing = []
+        for e in toc["entries"]:
+            if e.get("match"):
+                continue
+            if e.get("cand") in blocks:
+                p, b = blocks[e["cand"]]
+                if not first <= p["p"] <= last:
+                    continue
+                r = level_role.get(e["level"], "bölüm")
+                add(("icindekiler", e["level"], b["style"]), "icindekiler", p, b, "none", choices=[
+                    {"key": "role:" + r, "label": ROLE_LABEL[r]}, {"key": "none", "label": "Olduğu gibi kalsın (şimdiki)"}])
+            else:
+                missing.append(e)
+        if missing:
+            p = d.pages[missing[0]["toc_page"] - 1]
+            q = add(("icindekiler-yok",), "icindekiler-yok", p, None, "none", target=missing[0]["toc_page"],
+                    choices=[{"key": "none", "label": "Tamam"}])
+            q["boxes"] = [x["box"] for x in missing]
+            q["count"] = 1
+            q["detail"] = " · ".join(f"{x['title'][:60]}" + (f" (s. {x['num']})" if x["num"] else "") for x in missing[:6]) + (
+                f" · ve {len(missing) - 6} başlık daha" if len(missing) > 6 else "")
     # 4. notes: a callout with no note and a note-like block near it (its mark at the start) are one question; else
     # callouts with no note (not asked when they are a book-level problem, see integrity), notes with no callout, and
     # the user's notes still to be tied to a callout
     notes = getattr(d, "notes", None) or dict(refs=0, matched=0, orphans=[], loose=[])
-    blocks = {b.get("bid"): (p, b) for p in d.pages for b in p["blocks"]}
     orphans = [o for o in (_orphan(o, blocks) for o in notes["orphans"]) if o]
     for o in orphans:
         o["seg"] = seg_of.get(o["bid"])
@@ -167,7 +199,7 @@ def questions(state, rendered):
     out = list(groups.values()) + _repeats(d, pages, seg_of)
     out.sort(key=lambda q: (q["page"], q["type"]))
     for k, q in enumerate(out, 1):
-        q["count"] = len(q["targets"])
+        q["count"] = q.get("count") or len(q["targets"])
         t = q["targets"][0]                        # the block shown: the segment it is in, after any answer
         t = t[0] if isinstance(t, list) else t
         q.setdefault("bid", t["bid"] if isinstance(t, dict) else t if isinstance(t, str) else None)
@@ -333,7 +365,8 @@ def integrity(state):
     """Every character pdfium read on the requested pages is either in a block (written or dropped as margin text,
     front matter, index), inside a figure or table, set at an angle, or an ornament glyph; what is none of these is
     lost. With callouts, how many found their note: notes = dict(matched, refs, low), low when the ones without
-    are a book-level problem (then they are not asked one by one). -> dict(lost, pages, sentence, notes)"""
+    are a book-level problem (then they are not asked one by one). With a table of contents: its pages and whether
+    the user kept it in the text. -> dict(lost, pages, sentence, notes, contents)"""
     d, first, last = state["doc"], state["first"], state["last"]
     ns = lambda t: sum(1 for ch in t if ch.strip())
     lost = {}
@@ -347,4 +380,6 @@ def integrity(state):
     sentence = "Metin kaybı yok" if not n else f"{n} karakter kayıp, s. {P._fmt_pages(sorted(lost))}'te"
     nt = getattr(d, "notes", None)
     notes = dict(matched=nt["matched"], refs=nt["refs"], low=_book_level(nt)) if nt and nt["refs"] else None
-    return dict(lost=n, pages=sorted(lost), sentence=sentence, notes=notes)
+    toc = getattr(d, "toc", None)
+    contents = dict(pages=P._fmt_pages(toc["pages"]), kept=bool(getattr(d, "toc_keep", False))) if toc else None
+    return dict(lost=n, pages=sorted(lost), sentence=sentence, notes=notes, contents=contents)

@@ -553,6 +553,7 @@
   .ck-book{font-weight:600;font-size:17px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;max-width:28ch;}
   .ck-state{flex:1;min-width:0;color:var(--ck-soft);font-size:15px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;}
   .ck-state .ck-low{color:var(--ck-hi);}
+  .ck-state a{color:inherit;text-decoration:underline;text-underline-offset:2px;}
   .ck-state b{color:var(--ck-ink);font-weight:600;}
   .ck-btn{font:600 14px/1 'Sofia Sans Condensed','Arial Narrow',sans-serif;letter-spacing:.05em;text-transform:uppercase;
     border:1px solid var(--ck-ink);background:none;color:var(--ck-ink);padding:10px 16px;cursor:pointer;white-space:nowrap;}
@@ -1159,7 +1160,7 @@ function exportSeg(s,f){
     return s.slice(0,m)+(t.type==='table'?'':'[UNTRANSLATED] ')+s.slice(m);
   }
   if(f===''||f===undefined) return f;
-  if(t.type==='heading'&&!SEG_H.test(f)) return '#'.repeat(t.level)+' '+f;
+  if(t.type==='heading'&&!SEG_H.test(f)) return '#'.repeat(t.level)+' '+f+s.slice(s.length-segTailLen(s));
   if(t.type==='footnote'&&!SEG_F.test(f)) return '[^'+t.label+']: '+f;
   if(t.type in FENCE_STYLE_OF&&!SEG_FENCE.test(f)) return wrapSeg(f,t.type);
   if(t.type==='blockquote'&&!SEG_BQ.test(f)) return wrapSeg(f,t.type);
@@ -1277,10 +1278,18 @@ const ckOpenCount=()=>ckQs().filter(q=>!CK.answers[q.id]).length;
 function ckTop(){
   $('ck-book').textContent=CK.info.name||'';
   const n=ckOpenCount(),total=ckQs().length;
-  const nt=CK.data.integrity.notes;
+  const nt=CK.data.integrity.notes, tc=CK.data.integrity.contents;
   $('ck-state').innerHTML=esc(CK.data.integrity.sentence)+' · '+
+    (tc?(tc.kept?`İçindekiler (s. ${esc(tc.pages)}) metinde · <a href="#" onclick="return ckContents(false)">çıkar</a> · `
+      :`İçindekiler (s. ${esc(tc.pages)}) çeviriden çıkarıldı, başlıkları doğrulamak için kullanıldı · <a href="#" onclick="return ckContents(true)">geri al</a> · `):'')+
     (nt?`<span${nt.low?' class="ck-low"':''}>Notlar: ${nt.matched} / ${nt.refs} eşleşti</span> · `:'')+
     (!total?'Hiç soru yok':n?`<b>${n} yer senin kararını bekliyor</b>`:'Bütün sorular cevaplandı');
+}
+// the table of contents back in the text, or out again: an edit like join/split, saved with the review
+function ckContents(keep){
+  CK.edits=CK.edits.filter(e=>!('contents' in e));
+  if(keep) CK.edits.push({contents:'keep'});
+  ckSave(); return false;
 }
 // the segments a question shows: the ones its blocks are in now (a unit may be several; answers and edits move them)
 function ckSegsOf(q){
@@ -1563,7 +1572,9 @@ function segMarkerLen(s){
   const m=SEG_H.exec(s)||SEG_F.exec(s)||(segType(s).type==='blockquote'?SEG_BQ.exec(s):null); return m?m[0].length:0;
 }
 // a fence's closing line is not shown and never matched
-function segTailLen(s){ return SEG_FENCE.test(s)?CAP_CLOSE.length:0; }
+// a heading's class at its end ("# Part One {.kisim}") is no text either: segtypes.HEAD_ATTR
+const SEG_HATTR=/[ \t]*\{\.[A-Za-z-]+\}[ \t]*$/;
+function segTailLen(s){ if(SEG_FENCE.test(s)) return CAP_CLOSE.length; const m=SEG_H.test(s)&&SEG_HATTR.exec(s); return m?m[0].length:0; }
 // a translation is kept without its marker; export puts it back (segtypes.wrap). A verse's lines get their hard
 // breaks again.
 function wrapSeg(f,t){

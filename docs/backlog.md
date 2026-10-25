@@ -4,13 +4,11 @@ Agreed, not built yet. Short items; add new ones here, remove them when they shi
 
 ## Importer
 
-- **Round after the notes round, contents as a source, not a text to translate**: find contents pages by structure
-  (lines ending in a page number or a dot leader, with or without a "Contents" heading, at the book's start); keep
-  them out of the segments, stored with the pending import and restorable from the review screen's top line; parse
-  entries (title, printed page, level), map printed pages to PDF pages, fix heading levels by them (part and chapter
-  roles arrive here), ask about entries with no heading in the body, use them for the "not in the contents" question.
-- **Part and chapter roles** (`{.kisim}` / `{.bolum}`): kept apart in the markdown, a level of their own in the rail
-  and in Word.
+- **Index out of the text like the contents**: found by structure (alphabetical entries, lists of page numbers),
+  kept as skipped with the pending import, restorable from the review screen (today it is one untranslated
+  placeholder segment).
+- **Tuning set: endnotes grouped under part and chapter headings**: no tuning book has them; when one comes, it
+  joins the set.
 - **Tables without rules** (e.g. Characters, appendix A) are read as text today.
 - **Figures as files**: export images instead of placeholders; vector diagrams too.
 - **Far Calls**: a paragraph indent drawn as a leading space is not seen as a new paragraph.
@@ -29,8 +27,9 @@ Agreed, not built yet. Short items; add new ones here, remove them when they shi
 - **Tables**: the search highlight disappears; a line break inside a cell turns into a space.
 - **Export from the project list**: the format choices the workspace has.
 - **Truncation check in /translate_simple**: a cut-off answer is not caught.
-- **Role change inside a project**: "Dipnot" and "Son not" are review-screen roles only; the editor's role menu
-  has no note role (it would need a callout to tie the note to).
+- **Part role inside a project**: "Kısım" (and "Dipnot", "Son not") are review-screen roles only; the editor's role
+  menu has no note role (it would need a callout to tie the note to) and no part role (it would need {.kisim} /
+  {.bolum} on the book's headings).
 - **Glossary filter speed**: about 660 ms on a long book.
 - **Search bar and rail overflow** on narrow windows.
 

@@ -19,6 +19,8 @@ Local, single-user book translation tool. Flask backend + one vanilla-JS file fr
 ## Data (protect it)
 - Books: ~/.palimpsest/projects/*.json (legacy ./projects/ is migrated once at startup). These are the user's real work.
 - Testlerde ve fixture'larda yalnızca sentetik metin; kitap metni asla. (Synthetic text only in tests and fixtures; never book text. The pre-commit check enforces it.)
+- Açtığın/içe aktardığın her PDF önce hook listesinde olmalı (~/palimpsest-spike/karne/books/<ad>/ ya da karne-holdout/books/; hook bu klasörleri kendisi okur, ayrı bir liste yok). Testlerde gerçek kitaptan tek sözcük dizisi bile yok; bir hatayı yeniden üretmek için kalıbı sentetik metinle kur. (Every PDF you open or import goes into a hook folder first; the dog text in 65fbbdf got in because dog was read before it was there.)
+- Holdout (~/palimpsest-spike/karne-holdout): ölçülür, asla incelenmez ya da ona göre ayarlanmaz. Holdout'ta gerileme görürsen raporla; nedenini holdout'u yoklayarak arama (yalnız sayı basan denemeler dahil). Nedeni ayar kitaplarında ya da sentetik testte ara; bulamazsan dur ve sor. h4 "kirli": içindekiler turunda bir hatanın yeri onun sayılarıyla bulundu; karne tablolarında işaretli, genelleşme kanıtı sayılmaz.
 - NEVER read-modify-write real projects or call paid APIs while testing without asking. For isolated tests run a copy of the app with HOME pointed at a temp dir and a different port.
 - Project JSON has no schema validation. Frontend normalizeProject() backfills missing fields, so old files must keep loading.
 

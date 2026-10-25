@@ -7,7 +7,7 @@ Segment types, derived from the source markdown every time - never stored.
                                     the same names); a verse keeps its lines, each but the last ending in "\"
     "> text"                      -> blockquote (Word style "Block Text")
     "| a | b |" / "|---|---|" ...    -> table (a markdown table; translated cell by cell)
-    "# Title", "## Sub" ...        -> heading (with level)
+    "# Title", "## Sub" ...        -> heading (with level; a class at the end, "{.kisim}"/"{.bolum}", is no text)
     "[^label]: text"              -> footnote (with label)
     anything else                 -> paragraph
 
@@ -23,6 +23,9 @@ from collections import Counter
 # [^\]\r\n\t ] instead of [^\]\s]: Python's \s and JS's \s disagree on a few
 # exotic characters, and the frontend must classify exactly like this does.
 HEADING = re.compile(r"^(#{1,6})[ \t]+")
+# a heading's class at its end: "# Part One {.kisim}", "# Chapter {.bolum}" (parts kept apart from chapters); never
+# shown or translated, put back on export
+HEAD_ATTR = re.compile(r"[ \t]*\{\.[A-Za-z-]+\}[ \t]*\Z")
 FOOTNOTE = re.compile(r"^\[\^([^\]\r\n\t ]+)\]:[ \t]*")
 REF = re.compile(r"\[\^([^\]\r\n\t ]+)\](?!:)")
 PLACEHOLDER = re.compile(r"⟦(\d+)⟧")
@@ -59,14 +62,17 @@ def seg_type(s):
 
 
 def strip_marker(s):
-    """Drop the leading '## ' or '[^label]: ', a fence's lines (and a verse's line-end backslashes: the lines stay
-    lines), or a block quote's '> ' - nothing else."""
+    """Drop the leading '## ' (and a heading's closing class) or '[^label]: ', a fence's lines (and a verse's
+    line-end backslashes: the lines stay lines), or a block quote's '> ' - nothing else."""
     m = FENCED.match(s)
     if m:
         return HARD_BREAK.sub("\n", m.group(2))
     if BLOCKQUOTE.match(s):
         return re.sub(r"(?m)^>[ \t]?", "", s)
-    m = HEADING.match(s) or FOOTNOTE.match(s)
+    m = HEADING.match(s)
+    if m:
+        return HEAD_ATTR.sub("", s[m.end():])
+    m = FOOTNOTE.match(s)
     return s[m.end():] if m else s
 
 
@@ -107,7 +113,7 @@ def from_model(out, prompt_text, labels, src_type):
     sometimes echoes the marker back; it comes off again here."""
     warnings = []
     if src_type["type"] == "heading":
-        out = HEADING.sub("", out, count=1)
+        out = HEAD_ATTR.sub("", HEADING.sub("", out, count=1))
     elif src_type["type"] == "footnote":
         out = FOOTNOTE.sub("", out, count=1)
     elif src_type["type"] in FENCE_STYLE:

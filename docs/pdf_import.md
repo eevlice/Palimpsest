@@ -15,7 +15,7 @@ Each stage is a section of `pdf_import.py`; its input and output are written at 
 | 3 | Blocks (`build_blocks`) | lines, boxes, images, rules | page dict: blocks (paragraph breaks by gap, indent, list item, style change unless inline), two-column order, figures and ruled tables cut out as items |
 | 4 | Margins (`_Margins`) | all pages | `sil` on running heads/feet, folios, slugs, watermarks; the text block (`text_top`/`text_bot`); covers; tiny tinted panels stop being boxes |
 | 5 | Objects (`find_grids`, `grid_markdown`, `_Objects`) | rules, glyphs; items and roles | tables as markdown or a placeholder; blocks above/inside/below a figure or table become its captions (`altyazı`) |
-| 6 | Roles (`_Styles`, `_Roles`, `_ShapeRoles`, `_Notes`) | blocks with margins marked | style statistics → heading tiers, body, lists, boxes, front matter, index; shape → epigraph, block quote, verse, attribution; reasons in `flags`, a confidence in `conf`; page-bottom footnotes (`dipnot`) |
+| 6 | Roles (`_Styles`, `_Roles`, `_ShapeRoles`, `_Notes`, `_Contents`) | blocks with margins marked | the table of contents set aside first (`içindekiler`); style statistics → heading tiers, body, lists, boxes, front matter, index; shape → epigraph, block quote, verse, attribution; reasons in `flags`, a confidence in `conf`; page-bottom footnotes (`dipnot`); heading levels set by the contents |
 | 7 | Merges (`_Merges`, `join_hyphen`, `join_lines`) | lines of the book; texts to join | hyphen lexicon; joins inside blocks, across page breaks, around objects; a hyphen kept only when the book writes the compound |
 | 8 | Writing (`render`, `apply_overrides`, `build_markdown`, `resolve_notes`, `page_refs`) | `Doc`, the page range, the user's decisions | markdown, warnings (Turkish), `seg_meta` (one entry per segment) and the blocks of each segment (`doc.seg_bids`); callouts matched to notes; in-book page references flagged |
 
@@ -33,7 +33,7 @@ requested pages are written.
 
 | Role | Markdown | Segment type (segtypes) |
 |---|---|---|
-| `kısım`, `bölüm` | `# Title` | heading 1 |
+| `kısım`, `bölüm` | `# Title`; when the contents show parts over chapters `# Title {.kisim}` / `# Title {.bolum}` (the class is never translated; Word: parts Heading 1, chapters Heading 2, the rest one down) | heading 1 |
 | `alt başlık 1` | `## Title` | heading 2 |
 | `alt başlık 2` | `### Title` | heading 3 |
 | `gövde` | paragraph | para |
@@ -46,6 +46,7 @@ requested pages are written.
 | `atıf` | `::: {custom-style="Attribution"}` | attribution |
 | `altyazı` | `::: {custom-style="Caption"}` around its figure/table | caption |
 | `dizin` | one placeholder `![Dizin · s.a–b](…)` | image |
+| `içindekiler` | left out (it checks the headings); with the decision `{"contents": "keep"}` its title a heading, each block its lines | — |
 | `dipnot` | `[^label]: text`, its own segment (see Notes) | footnote |
 | `ön sayfa`, `sil` | left out (counted in the warnings) | — |
 
@@ -75,6 +76,31 @@ invisible text); scanned without text (a full-page image alone).
   warning: "Taranmış: italik/kalın bilgisi yok, N şüpheli sözcük."
 - The word list is `data/words_en.txt.gz`: SCOWL 2020.12.07 up to size 70 (131,776 words, 360 KB gzipped; licence
   in `data/SCOWL-LICENSE.txt`, free to use, change and distribute with its notice).
+
+## Table of contents
+
+- **Found** (`_contents`, before the style statistics, so its entries never count as headings): consecutive pages
+  among the first 30 (or 15%) most of whose rows end in a page number after a space or a dot leader (`toc_rows`,
+  `toc_row_share`), arabic numbers not going down (`toc_order`), no number above 1.5 x the PDF's pages (a year). A
+  page number set a little below its row, or taken for the folio at the foot, goes back to its row. A proof's
+  placeholder ("xx", "000": one repeated mark, no word, at one right edge) counts as a page number. A "Contents"
+  title is not needed. Its blocks get the role `içindekiler` and stay out of the text; the review screen's top line
+  says so and can bring them back.
+- **Entries**: rows without a number go on into the next numbered row (a wrapped title, a "Chapter One" label, a
+  row in a chapter label's style: "Epilogue", "Appendix"); a row starting lowercase or after "," ":" (or caps after
+  caps) right after a numbered row is its title going on (the number stood on the first line). A row in another
+  style, or "Part II" alone, is an entry of its own: a part. Levels: parts over the numbered entries; these by
+  indent (a few left edges, per page) or, when centred, by size.
+- **Printed page → PDF page**: the folios in the margins (outside the contents pages), else the usual offset.
+- **Matched** (`_contents_headings`, after every role): each entry to the body heading (or a run of up to six
+  heading blocks on one page: "Walk 1" over a title set line by line) on its PDF page or the next two, else the
+  next one in order, else anywhere (entries listed out of order). An entry with no heading: a short block with its
+  words near its page (between its neighbours' pages when it has none) is a candidate, asked on the review screen.
+- **Levels**: a level whose entries are mostly followed by entries of the next is the parts (`kısım`, then
+  `bölüm`); otherwise the top level is `bölüm`, a lower level the role most of its entries have (when deeper). A
+  heading that moves takes the unlisted sub-headings after it along (the same number of markdown levels).
+- **Review screen**: a heading the contents (or the bookmarks) do not list is asked only at the levels the contents
+  name; entries set as body text are asked by look-alike group; entries the body lacks are listed in one card.
 
 ## Notes and page references
 
@@ -351,6 +377,18 @@ first version of the importer; later rounds are the karne rounds, with the test 
 | `notes_label_head` | 0.8 | ...or, longer, when this share of its words are in one body heading | notes round, dog |
 | `orphan_share` | 0.2 | callouts left without a note above this share are a book-level problem: counted on the review screen, none asked | notes round |
 | `orphan_min` | 10 | ...when there are at least this many; fewer are asked one by one | notes round, Trauma (1 of 3) |
+| `toc_front_pages` | 30 | a table of contents sits in the first this many pages ... | contents round |
+| `toc_front_share` | 0.15 | ...or this share of the book, whichever is more | contents round |
+| `toc_rows` | 3 | a contents page has at least this many rows ending in a page number | contents round |
+| `toc_row_share` | 0.4 | ...and they are at least this share of its rows (titles wrap) | contents round, dog |
+| `toc_order` | 0.8 | ...whose arabic numbers mostly (this share of pairs) do not go down | contents round |
+| `toc_page_max` | 1.5 | a page number is at most this many times the PDF's pages ("2009" is a year) | contents round |
+| `toc_row_em` | 0.35 | lines on baselines this close (x size) are one row | contents round |
+| `toc_indent_em` | 0.8 | entries starting this far apart (x size) are on different indents | contents round |
+| `toc_contain` | 0.6 | a title inside another counts when it is this share of its length | karne tur8 |
+| `toc_similar` | 0.82 | ...or when the two are this similar | karne tur8 |
+| `toc_level_share` | 0.6 | a contents level maps to the heading role most (this share) of its matched entries have | contents round |
+| `toc_entry_words` | 25 | a block that is a contents entry not set as a heading has at most this many words | contents round |
 
 ## Line-end hyphens
 

@@ -1444,6 +1444,21 @@ md = [it for it in md if not (it[0] == "p" and "claim" in P._txt(it))]
 out, st = notes_out(md)
 check("a notes section none of whose notes is cited: left as it was, and warned about",
       "Notes" in out and "1. Source 1 of group 1." in out and st.get("notes_unmatched_pages") == [9], (out, dict(st)))
+# a group label longer than a plain label names a chapter set as two headings ("Part One" over its title, kept apart)
+LONG = ["Lanterns Harbours Ferries Bells Kettles Nets Gulls Tides Ropes Oars", "Meadows Orchards Hedges Barns Wells Lanes Gates Stiles Ponds Mills"]
+PART = ["Part One: Coastal Matters Briefly", "Part Two: Inland Matters Briefly"]
+md = notes_md("Notes", [("p", PART[0] + " " + LONG[0]), ("p", PART[1] + " " + LONG[1])])
+split = []
+for it in md:
+    if it[0] == "head" and it[1]["text"].startswith("Chapter Title"):
+        ch = int(it[1]["text"][-1])
+        split += [("head", dict(it[1], lvl=1, text=PART[ch - 1]), it[2]),
+                  ("head", dict(it[1], lvl=2, text=LONG[ch - 1]), it[2])]
+    else:
+        split.append(it)
+out, st = notes_out(split)
+check("a long group label matches a chapter set as two headings (part over title)",
+      "[^b2-2]: Source 2 of group 2." in out and st["note_refs_unmatched"] == 0, (out[-6:], dict(st)))
 
 # ---------------------------------------------------------------- in-book page references vs citations
 def refs_of(texts, heads=()):

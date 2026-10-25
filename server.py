@@ -500,8 +500,23 @@ PLACEHOLDER_LINE = re.compile(r"^!\[([^\]\r\n]*)\]\([^)\s]+\)$", re.M)
 
 def docx_markdown(md):
     """The app's markdown as Pandoc should read it: a figure/table/index placeholder stays visible text
-    ("[Görsel · s.17]") instead of an image Pandoc would try to load."""
-    return PLACEHOLDER_LINE.sub(lambda m: "\\[" + m.group(1) + "\\]", md)
+    ("[Görsel · s.17]") instead of an image Pandoc would try to load. A book with parts ("# Part One {.kisim}")
+    gets a Word level for them: parts Heading 1, chapters Heading 2, every other heading one level down."""
+    md = PLACEHOLDER_LINE.sub(lambda m: "\\[" + m.group(1) + "\\]", md)
+    if not re.search(r"(?m)^#[ \t].*\{\.kisim\}[ \t]*$", md):
+        return md
+    return re.sub(r"(?m)^(#{1,5})([ \t].*)$", lambda m: m.group(0) if re.search(r"\{\.kisim\}[ \t]*$", m.group(2))
+                  else "#" + m.group(1) + m.group(2), md)
+
+
+def note_mark(label):
+    """a note's mark as printed, from its label (index.html's fnNumber): "b2-13" -> 13, "b1-a" -> a, "b1-s2" -> †"""
+    m = re.match(r"b\d+-([^-]+)", label)
+    if m:
+        s = re.fullmatch(r"s(\d+)", m.group(1))
+        return "*†‡§‖¶"[(int(s.group(1)) - 1) % 6] * ((int(s.group(1)) - 1) // 6 + 1) if s else m.group(1)
+    n = re.search(r"\d+$", label)
+    return n.group(0) if n else label
 
 
 def _runs(par, text):
@@ -515,8 +530,7 @@ def _runs(par, text):
         elif s.startswith("*") and len(s) > 1:
             r = par.add_run(s[1:-1]); r.italic = True
         elif s.startswith("[^"):
-            num = re.search(r"\d+$", s[2:-1])         # "[^b2-13]" -> 13
-            r = par.add_run(num.group(0) if num else s[2:-1]); r.font.superscript = True
+            r = par.add_run(note_mark(s[2:-1])); r.font.superscript = True
         else:
             par.add_run(s)
 

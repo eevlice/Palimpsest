@@ -30,9 +30,11 @@ import math
 import ctypes
 import statistics
 import collections
+import difflib
 import functools
 import gzip
 import os
+import unicodedata
 
 import pypdfium2 as pdfium
 import pypdfium2.raw as raw
@@ -265,6 +267,18 @@ THRESHOLDS = {
     "notes_seq_share": 0.7,       # a notes group counts when this share of its entries follow 1, 2, 3... - gaps 1
     "notes_label_head": 0.8,      # ...or, longer, when this share of its words are in one body heading - notes round, dog
     "orphan_share": 0.2,          # callouts left without a note above this share are a book-level problem: the review screen counts them, asks none - notes round
+    "toc_front_pages": 30,        # a table of contents sits in the first this many pages ... - contents round
+    "toc_front_share": 0.15,      # ...or this share of the book, whichever is more - contents round
+    "toc_rows": 3,                # a contents page has at least this many rows ending in a page number - contents round
+    "toc_row_share": 0.4,         # ...and they are at least this share of its rows (titles wrap) - contents round, dog
+    "toc_order": 0.8,             # ...whose arabic numbers mostly (this share of pairs) do not go down - contents round
+    "toc_page_max": 1.5,          # a page number is at most this many times the PDF's pages ("2009" is a year) - contents round
+    "toc_row_em": 0.35,           # lines on baselines this close (x size) are one row - contents round
+    "toc_indent_em": 0.8,         # entries starting this far apart (x size) are on different indents - contents round
+    "toc_contain": 0.6,           # a title inside another counts when it is this share of its length - karne tur8
+    "toc_similar": 0.82,          # ...or when the two are this similar - karne tur8
+    "toc_level_share": 0.6,       # a contents level maps to the heading role most (this share) of its matched entries have - contents round
+    "toc_entry_words": 25,        # a block that is a contents entry not set as a heading has at most this many words - contents round
     "orphan_min": 10,             # ...when there are at least this many; fewer are asked one by one - notes round, Trauma (1 of 3)
 }
 
@@ -1964,6 +1978,355 @@ class _Notes:
                 last = open_ = None
 
 
+# a contents page's own title; the page itself is found by its rows, with or without it
+TOC_TITLE = re.compile(r"^[*_\s]*(?:table of )?(?:contents|i̇çindekiler|içindekiler|sommaire|inhalt|indice|índice)[*_.:\s]*$", re.I)
+ROMAN = re.compile(r"^(?=[ivxlc])m{0,3}(?:cm|cd|d?c{0,3})(?:xc|xl|l?x{0,3})(?:ix|iv|v?i{0,3})$", re.I)
+# a row ending in its page number, after a space or a dot leader ("Title ....... 12", "Title 12", "Title  xii")
+TOC_ROW = re.compile(r"^(?P<t>.*?\S)(?:\s*[.·…_]{2,}\s*|\s+)(?P<n>[^\s.·…_]{1,6})$")
+# a chapter's label on a line of its own above its title ("Chapter One"): part of that entry; a part's ("Part II")
+# is an entry of its own
+TOC_LABEL = re.compile(r"^(?:chapter|section|bölüm)\s+\S+$", re.I)
+TOC_PART = re.compile(r"^(?:part|book|kısım)\s+\S+$", re.I)
+TOC_PART_START = re.compile(r"^(?:part|book|kısım)\s+(?:[0-9]+|[ivxlc]+|one|two|three|four|five|six|seven|eight|nine|ten)\b", re.I)
+
+
+def toc_norm(t):
+    """a title as compared with a heading: no "Chapter 3:" or leading number, letters and digits only"""
+    whole = t = t.replace("*", "")
+    t = unicodedata.normalize("NFKC", t.replace("*", "")).lower()
+    t = re.sub(r"^\s*(?:chapter|part|section|book|bölüm|kısım)\s+(?:[0-9]+|[ivxlcdm]+|[a-z]+)\s*[:.\-–—]?\s*", "", t)
+    t = re.sub(r"^\s*(?:[0-9]+|[ivxlcdm]+)[.):\t ]+\s*", "", t)
+    return re.sub(r"[\W_]+", "", t) or re.sub(r"[\W_]+", "", unicodedata.normalize("NFKC", whole).lower())   # "Part II" alone
+
+
+def toc_same(a, b):
+    """two normalised titles name the same heading: one inside the other (most of it), or nearly equal"""
+    if not a or not b:
+        return False
+    if len(a) >= 8 and len(b) >= 8 and (a in b or b in a) and min(len(a), len(b)) >= T["toc_contain"] * max(len(a), len(b)):
+        return True
+    sm = difflib.SequenceMatcher(None, a, b)
+    return sm.real_quick_ratio() >= T["toc_similar"] and sm.quick_ratio() >= T["toc_similar"] and sm.ratio() >= T["toc_similar"]
+
+
+class _Contents:
+    """Stage 6e (Doc mixin): the table of contents. Found by structure on the first pages of the book: consecutive
+    pages most of whose rows end in a page number (after a space or a dot leader), the numbers not going down, or in
+    one short mark repeated at one right edge (a proof's "xx"); a "Contents" title is not needed. Its blocks get the
+    role "içindekiler" and stay out of the text (the user can bring them back); the style statistics never see them.
+    Its entries (title, printed page, level by indent or, when centred, by size) are matched to the body's headings
+    near the PDF page the printed number maps to (the folios found in the margins); the levels of the matched
+    headings follow the contents: a level whose entries are each followed by entries of the next is the parts
+    (kısım, then bölüm), any other level takes the heading role most of its entries have."""
+
+    def _toc_rows(self, p):
+        ls = [l for b in p["blocks"] for l in b["lines"] + b.get("cut_lines", []) if not l.get("sil")]
+        # a page number at the foot of the list was taken for the folio: it goes back when a row stands beside it
+        ls += [l for b in p["blocks"] for l in b["lines"] + b.get("cut_lines", []) if l.get("sil") and PAGE_NO.match(l["plain"])
+               and any(abs(l["base"] - x["base"]) <= T["toc_row_em"] * x["size"] and x["x1"] < l["x0"] for x in ls)]
+        ls.sort(key=lambda l: (l["base"], l["x0"]))
+        rows = []
+        for l in ls:
+            if rows and abs(l["base"] - rows[-1][-1]["base"]) <= T["toc_row_em"] * l["size"]:
+                rows[-1].append(l)
+            else:
+                rows.append([l])
+        out = []
+        for r in rows:
+            r.sort(key=lambda l: l["x0"])
+            text = " ".join(l["plain"].replace("\x02", "-").strip() for l in r).strip()
+            if not text:
+                continue
+            # a page number set a little lower than its title's last line goes with it
+            if out and re.fullmatch(r"\d{1,4}|[ivxlcdm]{1,7}", text, re.I) and r[0]["x0"] > out[-1]["x1"] \
+                    and not TOC_ROW.match(out[-1]["text"]):
+                out[-1]["text"] += " " + text
+                out[-1]["lines"] += r
+                out[-1]["x1"], out[-1]["bot"] = r[-1]["x1"], max(out[-1]["bot"], max(l["bot"] for l in r))
+                continue
+            out.append(dict(lines=r, text=text, x0=r[0]["x0"], x1=r[-1]["x1"], top=min(l["top"] for l in r),
+                            bot=max(l["bot"] for l in r), size=r[0]["size"], style=r[0]["style"], page=p["p"]))
+        # a proof's placeholder for the page numbers ("xx", "000"): one short mark, no word (justified prose ends many
+        # lines in "the" at one edge), ending many rows at one right edge
+        ends = collections.defaultdict(list)
+        for row in out:
+            m = TOC_ROW.match(row["text"])
+            if m and len(m.group("n")) <= 3:
+                ends[m.group("n")].append(row["x1"])
+        marks = {k for k, xs in ends.items() if len(xs) >= T["toc_rows"] and re.fullmatch(r"(.)\1+|[^\w]+", k)
+                 and max(xs) - min(xs) <= 0.5 * statistics.median(r["size"] for r in out)}
+        for row in out:
+            row["title"], row["num"] = row["text"], False
+            m = TOC_ROW.match(row["text"])
+            if not m or TOC_LABEL.match(row["text"]) or TOC_PART.match(row["text"]):
+                continue
+            n = m.group("n")
+            if n in marks:
+                row["title"], row["num"] = m.group("t"), None
+            elif n.isdigit() and 0 < int(n) <= T["toc_page_max"] * self.NP:
+                row["title"], row["num"] = m.group("t"), n
+            elif ROMAN.match(n) and _roman(n) <= 60:
+                row["title"], row["num"] = m.group("t"), n.lower()
+        return out
+
+    def _toc_page(self, rows):
+        """a contents page: enough rows ending in a page number, their numbers not going down"""
+        rows = [r for r in rows if not TOC_TITLE.match(r["text"]) and not TOC_LABEL.match(r["text"])]
+        numbered = [r for r in rows if r["num"] is not False]
+        arabic = [int(r["num"]) for r in numbered if r["num"] and r["num"].isdigit()]
+        up = sum(b >= a for a, b in zip(arabic, arabic[1:])) >= T["toc_order"] * (len(arabic) - 1) if len(arabic) >= 2 else True
+        return len(numbered) >= T["toc_rows"] and len(numbered) >= T["toc_row_share"] * len(rows) and up
+
+    def _contents(self):
+        self.toc = None
+        front = max(T["toc_front_pages"], int(T["toc_front_share"] * self.NP))
+        run, rows_of = [], {}
+        for p in self.pages[:front]:
+            if p["cover"]:
+                continue
+            rows = rows_of[p["p"]] = self._toc_rows(p)
+            titled = any(TOC_TITLE.match(r["text"]) for r in rows)
+            if self._toc_page(rows) or (titled and not run and any(r["num"] is not False for r in rows)):
+                if run and p["p"] != run[-1] + 1:
+                    break
+                run.append(p["p"])
+            elif run:
+                break
+        if not run:
+            return
+        # the entries: rows without a number go on into the next numbered row (a wrapped title, a "Chapter One"
+        # label); one set in another style is an entry of its own (a part's title)
+        entries, acc = [], []
+        same_style = lambda a, b: (abs(a["size"] - b["size"]) <= 0.5 and ("Bold" in a["style"]) == ("Bold" in b["style"])
+                                   and fam_of(a["style"])[0] == fam_of(b["style"])[0])
+
+        def entry(rs, num, last, own=False):
+            # own: set apart from the numbered entries (another style, no number, or "Part II ..."): a part's title.
+            # Its place on the line is its title's first row, not its label's
+            first = next((r for r in rs if not label(r)), rs[0])
+            title = " ".join(r["title"] if r is last else r["text"] for r in rs)
+            return dict(title=title, num=num, x0=first["x0"], own=own, part=bool(TOC_PART_START.match(title)), _last=last,
+                        center=(first["x0"] + first["x1"]) / 2,
+                        size=last["size"], style=last["style"], toc_page=rs[0]["page"],
+                        box=[rs[0]["page"], round(min(r["x0"] for r in rs), 1), round(rs[0]["top"], 1),
+                             round(max(r["x1"] for r in rs), 1), round(last["bot"], 1)])
+        # a chapter label's style ("Chapter 6" set apart): other rows in it are labels too ("Epilogue", "Appendix")
+        label_styles = {r["style"] for pg in run for r in rows_of[pg] if TOC_LABEL.match(r["text"])}
+        label = lambda r: bool(TOC_LABEL.match(r["text"]) or r["style"] in label_styles or r["text"].endswith(":"))
+        titled = False
+        for pg in run:
+            for r in rows_of[pg]:
+                if TOC_TITLE.match(r["text"]):
+                    titled = True
+                    continue
+                caps = lambda x: bool(re.search(r"[A-Z]{2,}[\W\d]*$", x["title"])) and x["title"].upper() == x["title"] or bool(
+                    re.search(r"\b[A-Z]{2,}(?:\s+[A-Z]{2,})+[\W\d]*$", x["title"]))
+                if r["num"] is False and not acc and entries and same_style(entries[-1]["_last"], r) and (
+                        LOWER_START.match(r["text"]) or re.search(r"[,:;–—-]\s*$", entries[-1]["title"])
+                        or caps(r) and caps(entries[-1]["_last"])):
+                    # the number stood on the entry's first line: this row is its title going on
+                    entries[-1]["title"] += " " + r["text"]
+                    entries[-1]["box"][3], entries[-1]["box"][4] = max(entries[-1]["box"][3], round(r["x1"], 1)), round(r["bot"], 1)
+                    entries[-1]["_last"] = r
+                    continue
+                if r["num"] is False:
+                    # back at a left edge after a hanging wrap: the entry before had no page number
+                    if acc and r["x0"] < acc[-1]["x0"] - T["toc_indent_em"] * r["size"] and len(acc) >= 2 \
+                            and acc[-1]["x0"] > acc[0]["x0"] + T["toc_indent_em"] * r["size"]:
+                        entries.append(entry(acc, None, acc[-1]))
+                        acc = []
+                    acc.append(r)
+                    continue
+                k = len(acc)
+                while k and (same_style(acc[k - 1], r) or label(acc[k - 1])) and not TOC_PART.match(acc[k - 1]["text"]):
+                    k -= 1                              # the rows that go with this entry: its wrap, its label
+                group = []
+                for x in acc[:k] + [None]:              # a part's title is an entry of its own; rows between, one
+                    if x is None or TOC_PART.match(x["text"]):
+                        if group:
+                            entries.append(entry(group, None, group[-1], own=True))
+                        group = [x] if x else []
+                        if x:
+                            entries.append(entry(group, None, x, own=True))
+                            group = []
+                    else:
+                        group.append(x)
+                entries.append(entry(acc[k:] + [r], r["num"], r))
+                acc = []
+        entries += [entry([r], None, r, own=True) for r in acc]
+        # "Part II ..." with a page number is a part's title when it is set apart (no number, another style)
+        common = collections.Counter(e["style"] for e in entries).most_common(1)[0][0] if entries else None
+        for e in entries:
+            if e.pop("part") and (e["num"] is None or e["style"] != common):
+                e["own"] = True
+        # levels: a part's title over the numbered entries; these by indent when they line up on a few left edges
+        # (per page: pages are offset), else (centred) by size
+        own = [e for e in entries if e["own"]]
+        entries_n = [e for e in entries if not e["own"]] or entries
+        for e in entries_n:
+            e["rel"] = e["x0"] - min(x["x0"] for x in entries_n if x["toc_page"] == e["toc_page"])
+        xs = sorted(e["rel"] for e in entries_n)
+        size = statistics.median(e["size"] for e in entries_n)
+        edges = []
+        for x in xs:
+            if not edges or x - edges[-1][-1] > T["toc_indent_em"] * size:
+                edges.append([x])
+            else:
+                edges[-1].append(x)
+        big = sorted(edges, key=len, reverse=True)[:3]
+        cs = [e["center"] - min(x["x0"] for x in entries_n if x["toc_page"] == e["toc_page"]) for e in entries_n]
+        centred = max(xs) - min(xs) > 2 * T["toc_indent_em"] * size and max(cs) - min(cs) < 0.5 * (max(xs) - min(xs))
+        if not centred and (len(edges) <= 3 or sum(len(e) for e in big) >= 0.9 * len(entries_n)):
+            starts = sorted(e[0] for e in big)
+            for e in entries_n:
+                e["level"] = 1 + max(k for k, x in enumerate(starts) if e["rel"] >= x - 0.01) if e["rel"] >= starts[0] - 0.01 else 1
+        else:
+            sizes = sorted({round(e["size"] * 2) / 2 for e in entries_n}, reverse=True)
+            for e in entries_n:
+                e["level"] = 1 + sizes.index(round(e["size"] * 2) / 2)
+        if own and len(own) < len(entries):
+            for e in entries_n:
+                e["level"] += 1
+            for e in own:
+                e["level"] = 1
+        # printed page -> PDF page: the usual offset of the folios in the margins, else a folio seen (roman ones)
+        folio, offs = {}, collections.Counter()
+        for p in self.pages:
+            if p["p"] in run:
+                continue
+            for b in p["blocks"]:
+                for l in b["lines"] + b.get("cut_lines", []):
+                    if not l.get("zone"):
+                        continue
+                    m = PAGE_NO.match(l["plain"]) or FOLIO.match(l["plain"])
+                    n = m and next((g for g in m.groups() if g), None)
+                    if not n:
+                        continue
+                    key = n if n.isdigit() else n.lower()
+                    folio.setdefault(key, p["p"])
+                    if n.isdigit():
+                        offs[p["p"] - int(n)] += 1
+        off = offs.most_common(1)[0] if offs else None
+        for e in entries:
+            n = e["num"]
+            if n and n.isdigit() and off and off[1] >= T["repeat_pages"]:
+                e["pdf"] = int(n) + off[0]          # the usual offset first: one odd margin number misleads
+            else:
+                e["pdf"] = folio.get(n) if n else None
+        for pg in run:
+            for b in self.pages[pg - 1]["blocks"]:
+                if not b["sil"]:
+                    b["toc"], b["sil"] = True, True
+        for e in entries:
+            e.pop("_last", None)
+        self.toc = dict(pages=run, titled=titled, entries=entries)
+
+    def _contents_headings(self):
+        toc = self.toc
+        if not toc:
+            return
+        for pg in toc["pages"]:
+            for b in self.pages[pg - 1]["blocks"]:
+                if b.get("toc"):
+                    b["role"], b["flags"], b["conf"] = "içindekiler", [], None
+        # the body's headings; a title set over several heading blocks on one page ("Walk 1" over "The Toaster",
+        # a long title line by line) is tried as one, the closest such run counts
+        heads = [(p, b) for p in self.pages if p["p"] not in toc["pages"] for b in p["blocks"] if b["role"] in HEAD]
+        cands = []
+        for k, (p, b) in enumerate(heads):
+            run = [b]
+            for q, c in heads[k + 1:k + 6]:
+                if q is not p:
+                    break
+                run.append(c)
+            cands.append([(run[:j], p["p"], k, toc_norm(" ".join(x["text"] for x in run[:j]))) for j in range(1, len(run) + 1)])
+        last, used = -1, set()
+        for e in toc["entries"]:
+            t = toc_norm(e["title"])
+
+            def best(runs):
+                ok = [c for c in runs if toc_same(t, c[3])]
+                return max(ok, key=lambda c: difflib.SequenceMatcher(None, t, c[3]).ratio()) if ok else None
+            found = [best([c for c in runs if not any(id(b) in used for b in c[0])]) for runs in cands]
+            near = [c for c in found if c and e["pdf"] and e["pdf"] - 1 <= c[1] <= e["pdf"] + 2]
+            hit = near[0] if near else next((c for c in found if c and c[2] > last), None) or next(
+                (c for c in found if c), None)          # listed out of order
+            e["_match"], e["_cand"] = [], None
+            if hit:
+                e["_match"], e["role"] = hit[0], hit[0][0]["role"]
+                used.update(id(b) for b in hit[0])
+                for b in hit[0][1:]:
+                    b["toc_join"] = True                # one entry, one heading: "CHAPTER 1" over its title
+                last = max(last, hit[2])
+        # an entry not set as a heading: a short block with its words near its page; with no page, between the pages
+        # of the entries around it ("Part I" between the last chapter before and the first after)
+        es = toc["entries"]
+        page_of = {id(b): p["p"] for p in self.pages for b in p["blocks"]}
+        for k, e in enumerate(es):
+            if e["_match"]:
+                continue
+            if e["pdf"]:
+                lo, hi = e["pdf"] - 1, e["pdf"] + 1
+            else:
+                before = [x["pdf"] or page_of[id(x["_match"][0])] for x in es[:k] if x["pdf"] or x["_match"]]
+                after = [x["pdf"] or page_of[id(x["_match"][0])] for x in es[k + 1:] if x["pdf"] or x["_match"]]
+                if not before or not after:
+                    continue
+                lo, hi = before[-1], after[0]
+            t = toc_norm(e["title"])
+            e["_cand"] = next((b for p in self.pages[max(0, lo - 1):hi] for b in p["blocks"]
+                               if b["role"] not in HEAD and b["role"] not in ("sil", "içindekiler") and
+                               b["nwords"] <= T["toc_entry_words"] and toc_same(t, toc_norm(b["text"]))), None)
+        # the levels: parts over chapters, else what most entries of a level are
+        lv = [e["level"] for e in es]
+        firsts = [k for k, x in enumerate(lv) if x == 1]
+        parts = (len(firsts) >= 2 and max(lv) >= 2 and 2 * len(firsts) <= lv.count(2)
+                 and sum(k + 1 < len(lv) and lv[k + 1] == 2 for k in firsts) >= T["toc_level_share"] * len(firsts))
+        want = {}
+        for level in set(lv):
+            roles = collections.Counter(e["role"] for e in es if e["_match"] and e["level"] == level)
+            if roles:
+                r, n = roles.most_common(1)[0]
+                if n >= T["toc_level_share"] * sum(roles.values()) and n >= 2:
+                    want[level] = r
+        # the top level is the chapters (the parts when it holds them); a lower level keeps its majority, below those
+        want = {lv: r for lv, r in want.items() if lv > 1 and HEAD[r] > HEAD["bölüm" if not parts or lv > 2 else "kısım"]}
+        want.update({1: "kısım", 2: "bölüm"} if parts else {1: "bölüm"})
+        toc["changed"] = []
+        moved = {}                                  # heading block id -> markdown levels it moves (- up, + down)
+        for e in es:
+            r = want.get(e["level"])
+            if e["_match"] and r and e["role"] != r:
+                for b in e["_match"]:
+                    moved[id(b)] = MD_LEVEL[HEAD[r]] - MD_LEVEL[HEAD[b["role"]]]
+                    b["role"] = r
+                    b["flags"] = sorted(set(b.get("flags") or ()) | {"icindekiler-seviye"})
+                toc["changed"].append((e["role"], r))
+        # the headings under a moved one, up to the next listed heading, move with it (the contents name the frame,
+        # the sub-headings keep their place in it)
+        listed = {id(b) for e in es for b in e["_match"]}
+        shift = 0
+        for p, b in heads:
+            if id(b) in listed:
+                shift = moved.get(id(b), 0)
+            elif shift and b["role"] in ("alt başlık 1", "alt başlık 2"):
+                md = min(3, max(2, MD_LEVEL[HEAD[b["role"]]] + shift))
+                r = next(k for k in ("alt başlık 1", "alt başlık 2") if MD_LEVEL[HEAD[k]] == md)
+                if r != b["role"]:
+                    b["role"] = r
+                    b["flags"] = sorted(set(b.get("flags") or ()) | {"icindekiler-seviye"})
+        toc["parts"] = parts
+        matched = {id(b) for e in es for b in e["_match"]}
+        toc["unlisted"] = collections.Counter(b["role"] for p, b in heads if id(b) not in matched)
+
+    def toc_ids(self):
+        """the matched blocks by their ids, once the blocks have them (after the stages)"""
+        for e in (self.toc or {}).get("entries", []):
+            e["match"] = [b["bid"] for b in e.pop("_match", [])]
+            c = e.pop("_cand", None)
+            e["cand"] = c["bid"] if c else None
+
+
 # ====================================================================================================================
 # 7. MERGES
 #   in:  every line of the book (lexicon); line texts of a block or two paragraph parts (joins)
@@ -2077,7 +2440,7 @@ def dialogue_lines(texts, hy, stats, amb=None):
 # ====================================================================================================================
 
 
-class Doc(_Margins, _Objects, _Styles, _Roles, _ShapeRoles, _Notes, _Merges):
+class Doc(_Margins, _Objects, _Styles, _Roles, _ShapeRoles, _Notes, _Contents, _Merges):
     """The book-level stages over every page, in this order. One step runs out of its section's order: running heads
     that repeat a heading (stage 4) need the heading roles of stage 6 first."""
     def __init__(self, pages):
@@ -2089,6 +2452,8 @@ class Doc(_Margins, _Objects, _Styles, _Roles, _ShapeRoles, _Notes, _Merges):
         self._mark_cover_and_repeats()
         self._filter_boxes()
         self._recheck_two_col()
+        # 6e. the table of contents, found before the styles are counted (its entries are no headings)
+        self._contents()
         # 6a. style statistics and the role each style suggests
         self.S = self._style_stats()
         self.sugg, self.why, self.body_style, self.body_styles = self._suggest()
@@ -2102,6 +2467,8 @@ class Doc(_Margins, _Objects, _Styles, _Roles, _ShapeRoles, _Notes, _Merges):
         self._shape_roles()
         # 6d. page-bottom footnotes
         self._footnotes()
+        # 6e. the contents' entries matched to the headings, heading levels set by them
+        self._contents_headings()
         # 7. the hyphen lexicon for the joins written in stage 8
         self.lex = self._hyphen_lexicon()
 
@@ -2262,7 +2629,10 @@ def _notes_sections(md):
         return None
 
     words = lambda t: set(re.findall(r"[^\W_]+", t.lower()))
-    heads = [words(_txt(it)) for it in md if it[0] == "head"]
+    # the body's headings, and up to three in a row as one ("Part Two" over its title, kept apart as part and chapter)
+    hs = [i for i, it in enumerate(md) if it[0] == "head"]
+    heads = [set().union(*(words(_txt(md[k])) for k in range(i, j + 1)))
+             for n, i in enumerate(hs) for j in hs[n:n + 3] if all(md[k][0] == "head" for k in range(i, j + 1))]
 
     def label(t, k):
         """a plain line naming the next group: short and no sentence, or a body heading's words (a chapter's long
@@ -2626,7 +2996,7 @@ def user_joins(md, lex, stats, amb):
 
 
 # roles the user can give a block (the review screen's and the editor's choices); "sil" leaves it out
-USER_ROLES = ("gövde", "bölüm", "alt başlık 1", "alt başlık 2", "epigraf", "alıntı", "şiir", "atıf", "altyazı", "kutu",
+USER_ROLES = ("gövde", "kısım", "bölüm", "alt başlık 1", "alt başlık 2", "epigraf", "alıntı", "şiir", "atıf", "altyazı", "kutu",
               "dipnot", "son not", "sil")
 
 
@@ -2637,9 +3007,11 @@ def apply_overrides(doc, decisions):
     {"bid", "join": True} goes on in the segment before; {"bid", "split": k}
     a new segment from the block's line k (0: from the block itself, which then joins nothing before it); {"bid", "drop_refs": True} unmatched callout numbers go;
     {"bid", "line": k, "cut": bool, "keep": bool} a margin line kept or dropped (k in the lines the margin stage cut,
-    or in the block's lines); {"page", "order": "rows"} a page read top to bottom, not as two columns.
+    or in the block's lines); {"page", "order": "rows"} a page read top to bottom, not as two columns; {"contents": "keep"}
+    the table of contents written as text again.
     Every decision is noted in the block's flags ("kullanici:..."), so seg_meta tells who decided."""
     blocks = {b.get("bid"): (p, b) for p in doc.pages for b in p["blocks"]}
+    doc.toc_keep = False
 
     def note(b, what):
         b["flags"] = sorted(set(b.get("flags") or ()) | {"kullanici:" + what})
@@ -2651,6 +3023,9 @@ def apply_overrides(doc, decisions):
                     it[k] = [x for x in it[k] if x is not b]
         b.pop("obj", None)
     for dec in decisions:
+        if "contents" in dec:                       # {"contents": "keep"}: the contents back in the text
+            doc.toc_keep = dec["contents"] == "keep"
+            continue
         if "page" in dec:
             p = doc.pages[int(dec["page"]) - 1]
             if dec.get("order") == "rows":
@@ -2822,6 +3197,21 @@ def build_markdown(doc, first_idx, last_idx):
                                                   user=b.get("user_note"), ref=b.get("note_ref")), _meta_of(b))
                         (feet if cur else md).append(last_foot)
                 continue
+            if role == "içindekiler":
+                # out of the text (it served to check the headings), unless the user brought it back: then as it
+                # stood, its title a heading, each block its lines
+                if not getattr(doc, "toc_keep", False):
+                    stats["toc_words"] += b["nwords"]
+                    stats["toc_blocks"] += 1
+                    continue
+                flush()
+                lines = [l["md"].strip() for l in b["lines"] if l["md"].strip()]
+                if len(lines) == 1 and TOC_TITLE.match(b["lines"][0]["plain"]):
+                    md.append(("head", dict(lvl=2, page=p["p"], base=b["lines"][-1]["base"], size=b["size"], toc=True,
+                                            text=b["lines"][0]["md_nobold"].strip()), _meta_of(b)))
+                elif lines:
+                    md.append(("raw", "\\\n".join(lines), _meta_of(b)))
+                continue
             if role == "dizin":
                 stats["index_words"] += b["nwords"]
                 if not index_done:
@@ -2886,8 +3276,13 @@ def build_markdown(doc, first_idx, last_idx):
                     continue
                 lvl = HEAD[role]
                 prev = md[-1][1] if md and md[-1][0] == "head" else None
-                near = prev is not None and prev["page"] == p["p"] and 0 < b["lines"][0]["base"] - prev["base"] < T["head_wrap_em"] * max(b["size"], prev["size"])
-                if near and prev["lvl"] == lvl:                       # a heading that wrapped
+                near = prev is not None and prev["page"] == p["p"] and (0 < b["lines"][0]["base"] - prev["base"] < T["head_wrap_em"] * max(b["size"], prev["size"])
+                                                                         or b.get("toc_join"))
+                if near and b.get("toc_join") and prev["lvl"] < lvl:    # one contents entry: one heading, its level
+                    prev["text"] += " " + t
+                    prev["base"] = b["lines"][-1]["base"]
+                    _meta_add(md[-1][2], _meta_of(b))
+                elif near and prev["lvl"] == lvl:                     # a heading that wrapped
                     prev["text"] += " " + t
                     prev["base"] = b["lines"][-1]["base"]
                     _meta_add(md[-1][2], _meta_of(b))
@@ -2940,9 +3335,12 @@ def build_markdown(doc, first_idx, last_idx):
     md = [it for it in md if it is not None]
     page_refs(md, stats)
     out, meta, doc.seg_bids, kinds = [], [], [], []
+    # a book whose contents show parts over chapters keeps the two apart: "# Part One {.kisim}", "# Chapter {.bolum}"
+    parts = bool(getattr(doc, "toc", None) and doc.toc.get("parts"))
+    attr = {1: " {.kisim}", 2: " {.bolum}"} if parts else {}
     for kind, v, m in md:
         text = (v["text"] if not v.get("box") else fenced("kutu", v["text"])) if kind == "p" else (
-            "#" * MD_LEVEL[v["lvl"]] + " " + v["text"] if kind == "head" else "> " + v if kind == "quote" else
+            "#" * MD_LEVEL[v["lvl"]] + " " + v["text"] + ("" if v.get("toc") else attr.get(v["lvl"], "")) if kind == "head" else "> " + v if kind == "quote" else
             v["text"] if kind == "note" else v)
         if not text.strip():
             continue
@@ -3088,6 +3486,7 @@ def analyse(pdf_bytes, first_page=None, last_page=None):
     for pg in d.pages:
         for k, b in enumerate(pg["blocks"]):
             b["bid"] = f"{pg['p']}.{k}"            # stable through renders: the review screen's decisions name blocks
+    d.toc_ids()
     return dict(doc=d, first=first, last=last,
                 ctx=dict(signals=signals, ocr=ocr, sel_ocr=sel_ocr, miner=sorted(miner), retry=sorted(retry),
                          no_miner=no_miner, textless=textless, producer=producer, tint=tint, orn=orn, outline=outline))
