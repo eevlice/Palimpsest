@@ -4,6 +4,8 @@ Agreed, not built yet. Short items; add new ones here, remove them when they shi
 
 ## Importer
 
+- **Front matter: one unit per dedication page**: the dedication blocks of one page as one unit (today NEI's is a
+  paragraph, an epigraph and a paragraph), one role, its line breaks kept.
 - **Index out of the text like the contents**: found by structure (alphabetical entries, lists of page numbers),
   kept as skipped with the pending import, restorable from the review screen (today it is one untranslated
   placeholder segment).

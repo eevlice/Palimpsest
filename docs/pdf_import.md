@@ -48,7 +48,7 @@ requested pages are written.
 | `dizin` | one placeholder `![Dizin · s.a–b](…)` | image |
 | `içindekiler` | left out (it checks the headings); with the decision `{"contents": "keep"}` its title a heading, each block its lines | — |
 | `dipnot` | `[^label]: text`, its own segment (see Notes) | footnote |
-| `ön sayfa`, `sil` | left out (counted in the warnings) | — |
+| `ön sayfa`, `sil` | left out (counted in the warnings). Front matter is left out only on a colophon page (strong marks: ©, an ISBN, mostly digits and punctuation) or a title page (a line twice the body size, or the book's title as a front page sets it large and another repeats it); other front text (a dedication, a note on the author, praise, an epigraph) is kept, flagged `on-sayfa`, asked once per page on the review screen: a paragraph, its lines kept when all are short, a line opening with a dash an attribution | — |
 
 Figures become `![Görsel · s.N](…)`, tables a markdown table or `![Tablo · s.N](…)` when cells are merged.
 Named roles carry a confidence in `seg_meta` (0.5 style only, 0.6–0.7 shape, 0.8–0.9 shape and position);
@@ -309,6 +309,9 @@ first version of the importer; later rounds are the karne rounds, with the test 
 | `variant_lines` | 10 | a font set inside this many body lines is a body variant | round 5, Characters |
 | `variant_lines_flagged` | 3 | ...this many when flagged italic/bold | round 5 |
 | `title_page_size` | 1.3 | a front page whose blocks are all this many times the body is a title page | round 5, fourth_trimester/Girl |
+| `kunye_density` | 0.25 | a front page whose text is this share digits and punctuation is a colophon | front round |
+| `front_verse_words` | 8 | kept front text whose lines all have at most this many words keeps its lines | front round |
+| `title_display` | 2.0 | a front line this many times the body is a title page's | front round, Attachment (dedication 1.3) |
 | `runs_para_lines` | 3 | a heading-style block longer than this many lines | round 6, Characters |
 | `runs_para_words` | 30 | ...and this many words | round 6, Characters |
 | `runs_body_share` | 0.15 | ...with this share of body glyphs is a paragraph, not a heading | round 6, Characters |

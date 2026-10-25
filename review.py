@@ -31,7 +31,8 @@ TITLES = {"rol": "İşaretli yazı ne?", "stil": "İşaretli yazı ne?", "baslik
           "atif": "Bu atıf rakamının notu bulunamadı. Ne olsun?", "not": "Bu notun atfı bulunamadı. Ne olsun?",
           "sutun": "Bu sayfa iki sütunlu okundu. Doğru mu?", "tekrar": "Bu tekrar eden yazı ne yapılsın?",
           "bagla": "Hangi atıfa bağlansın?", "icindekiler": "İçindekilerde başlık, gövdede değil. Başlık olsun mu?",
-          "icindekiler-yok": "İçindekilerdeki bu başlıklar gövdede bulunamadı."}
+          "icindekiler-yok": "İçindekilerdeki bu başlıklar gövdede bulunamadı.",
+          "onsayfa": "Bu ön sayfa yazısı çevrilsin mi?"}
 
 
 def _box(p, b):
@@ -94,6 +95,13 @@ def questions(state, rendered):
         if len(q["targets"]) == 1:                   # the shown unit: every one of its boxes, every block
             q["boxes"] = [_box(pp, x) for pp, x in unit]
             q["bids"] = [x["bid"] for _, x in unit]
+    # front matter kept as text (a dedication, a note on the author, praise): asked once per page
+    for p in pages:
+        fb = [b for b in p["blocks"] if b.get("front") and b.get("bid")]
+        if fb:
+            q = add(("onsayfa", p["p"]), "onsayfa", p, fb[0], "none", target=[b["bid"] for b in fb], choices=[
+                {"key": "none", "label": "Çevrilsin (şimdiki)"}, {"key": "role:sil", "label": "Atılsın"}])
+            q["boxes"], q["bids"] = [_box(p, b) for b in fb], [b["bid"] for b in fb]
     # 3. the contents: headings they do not list (the bookmarks too, when they are a real contents), asked only at the
     # levels the contents name (sub-headings are seldom listed: only counted); entries the body sets as no heading
     toc = getattr(d, "toc", None) if getattr(d, "toc", None) and len(d.toc["entries"]) >= 3 else None

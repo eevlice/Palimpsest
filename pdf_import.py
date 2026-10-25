@@ -204,6 +204,9 @@ THRESHOLDS = {
     "variant_lines": 10,          # a font set inside this many body lines is a body variant - round 5, Characters
     "variant_lines_flagged": 3,   # ...this many when flagged italic/bold - round 5
     "title_page_size": 1.3,       # a front page whose blocks are all this many times the body is a title page - round 5, fourth_trimester/Girl
+    "kunye_density": 0.25,        # a front page whose text is this share digits and punctuation is a colophon - front round
+    "front_verse_words": 8,       # kept front text whose lines all have at most this many words keeps its lines - front round
+    "title_display": 2.0,         # a front line this many times the body is a title page's - front round, Attachment (dedication 1.3)
     "runs_para_lines": 3,         # a heading-style block longer than this many lines - round 6, Characters
     "runs_para_words": 30,        # ...and this many words - round 6, Characters
     "runs_body_share": 0.15,      # ...with this share of body glyphs is a paragraph, not a heading - round 6, Characters
@@ -2327,6 +2330,45 @@ class _Contents:
             e["cand"] = c["bid"] if c else None
 
 
+class _Front:
+    """Stage 6f (Doc mixin): front matter. Its blocks (role "ön sayfa") stay out of the text only on a colophon page
+    (©, an ISBN, or text mostly digits and punctuation: strong marks only, short lines alone are a poem as much as a
+    list of credits) or a title page (a line in display type and no sentence: the book's title, its author, the
+    imprint). Any other front text - a dedication, a note on the author, praise, an epigraph - is kept (flag
+    "on-sayfa"; the review screen asks once per page whether it is translated): as a paragraph, its lines kept when
+    they are all short (a dedication set as verse, an epigraph), a line opening with a dash as the attribution. A title page: a line in display type (twice the
+    body), or the book's title as some front page sets it large (a half title repeats it), and no sentence. Marks,
+    not words: no language's phrases."""
+
+    def _front_kept(self):
+        self.front_kept = []
+        key = lambda t: re.sub(r"[\W\d_]+", "", t.lower())
+        seen = collections.defaultdict(set)         # the book's title: set large on one front page, found on two
+        for p in self.pages:
+            for b in p["blocks"]:
+                if b["role"] == "ön sayfa" and len(key(b["text"])) >= 4:
+                    seen[key(b["text"])].add((p["p"], b["size"] >= T["title_page_size"] * self.bsize))
+        titles = {k for k, v in seen.items() if len({pg for pg, _ in v}) >= 2 and any(big for _, big in v)}
+        for p in self.pages:
+            front = [b for b in p["blocks"] if b["role"] == "ön sayfa"]
+            if not front or p["cover"]:
+                continue
+            text = " ".join(b["text"] for b in p["blocks"] if b["role"] != "sil")
+            ink = re.sub(r"\s", "", text)
+            marks = "©" in text or re.search(r"\bI\s?S\s?B\s?N\b", text, re.I) or (
+                ink and sum(not c.isalpha() for c in ink) / len(ink) >= T["kunye_density"])
+            sentence = any(re.search(r"[a-z]", b["text"]) and len(b["text"].split()) >= 3 and terminal(b["text"]) for b in front)
+            display = any(b["size"] >= T["title_display"] * self.bsize or key(b["text"]) in titles for b in front)
+            if marks or (display and not sentence):
+                continue
+            for b in front:
+                verse = len(b["lines"]) >= 2 and all(len(l["plain"].split()) <= T["front_verse_words"] for l in b["lines"])
+                b["role"] = "atıf" if DASH.match(b["text"]) else "epigraf" if verse else "gövde"
+                b["breaks"], b["front"] = verse, True
+                b["flags"] = sorted(set(b.get("flags") or ()) | {"on-sayfa"})
+            self.front_kept.append(p["p"])
+
+
 # ====================================================================================================================
 # 7. MERGES
 #   in:  every line of the book (lexicon); line texts of a block or two paragraph parts (joins)
@@ -2440,7 +2482,7 @@ def dialogue_lines(texts, hy, stats, amb=None):
 # ====================================================================================================================
 
 
-class Doc(_Margins, _Objects, _Styles, _Roles, _ShapeRoles, _Notes, _Contents, _Merges):
+class Doc(_Margins, _Objects, _Styles, _Roles, _ShapeRoles, _Notes, _Contents, _Front, _Merges):
     """The book-level stages over every page, in this order. One step runs out of its section's order: running heads
     that repeat a heading (stage 4) need the heading roles of stage 6 first."""
     def __init__(self, pages):
@@ -2469,6 +2511,8 @@ class Doc(_Margins, _Objects, _Styles, _Roles, _ShapeRoles, _Notes, _Contents, _
         self._footnotes()
         # 6e. the contents' entries matched to the headings, heading levels set by them
         self._contents_headings()
+        # 6f. front matter that is text (a dedication, a note on the author, praise) is kept
+        self._front_kept()
         # 7. the hyphen lexicon for the joins written in stage 8
         self.lex = self._hyphen_lexicon()
 
@@ -3294,7 +3338,8 @@ def build_markdown(doc, first_idx, last_idx):
             elif role == "kutu-başlık":
                 md.append(("raw", fenced(role, "**" + re.sub(r"\*+", "", join_lines(texts, lex, stats, amb)) + "**"), _meta_of(b)))
             elif role == "şiir" or (role == "epigraf" and b.get("breaks")):
-                t = poem_lines(ls, texts, lex, stats, amb)
+                # front text set as verse (a dedication) keeps every line as set
+                t = verse_lines(texts) if b.get("front") else poem_lines(ls, texts, lex, stats, amb)
                 if not _named_join(md, role, t, _meta_of(b), b, p["p"], lex, stats, amb):
                     md.append(("raw", fenced(role, t), _meta_of(b)))
             elif role == "epigraf":
