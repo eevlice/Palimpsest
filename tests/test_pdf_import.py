@@ -480,6 +480,35 @@ check("display type inside a picture stays text; a small label inside it belongs
       any("Chapter Title On A Band" in t for t in texts) and not any("a b label" in t for t in texts), texts[:3])
 
 
+# -- one paragraph of an epigraph or a poem stays one segment
+Ln = lambda x1, size=11: dict(x1=x1, size=size)
+st_ = collections.Counter()
+prose_block = P.poem_lines([Ln(400), Ln(400), Ln(250)], ["Charlie learns how accurate it is when he", "travels with Raymond and we", "see it."],
+                           lambda a, b: False, st_)
+check("poem: a block set like prose (two lines at the edge) joins its lowercase wraps",
+      prose_block == "Charlie learns how accurate it is when he travels with Raymond and we see it.", prose_block)
+poem = P.poem_lines([Ln(180), Ln(400), Ln(90), Ln(260)], ["Short line one", "a much longer second line of the poem", "third", "and the last"],
+                    lambda a, b: False, collections.Counter())
+check("poem: a real poem keeps every break, its longest line too",
+      poem == "Short line one\\\na much longer second line of the poem\\\nthird\\\nand the last", poem)
+split = P.poem_lines([Ln(400), Ln(300)], ["Charlie trav\x02", "els with Raymond."], lambda a, b: False, collections.Counter())
+check("poem: a split word joins (the hyphen rule decides the hyphen)", split == "Charlie travels with Raymond.", split)
+M = lambda pg: dict(pages={pg}, boxes=[], style="Body 12", flags=set())
+md_ = [("raw", P.fenced("epigraf", "What we talk about on this walk: What one"), M(15))]
+blk_ = dict(bid="15.3")
+ok = P._named_join(md_, "epigraf", "man’s attempt to build a toaster.", M(15), blk_, 15, lambda a, b: False, st_, None)
+check("callout cut by a drop cap's indent: one Epigraph segment",
+      ok and len(md_) == 1 and md_[0][1] == P.fenced("epigraf", "What we talk about on this walk: What one man’s attempt to build a toaster."), md_)
+md_ = [("raw", P.fenced("epigraf", "A closed sentence."), M(15))]
+check("...not after a closed sentence, nor into another role, nor over a skipped page",
+      not P._named_join(md_, "epigraf", "and more", M(15), blk_, 15, lambda a, b: False, st_, None)
+      and not P._named_join([("raw", P.fenced("atıf", "—A Name"), M(15))], "epigraf", "and more", M(15), blk_, 15, lambda a, b: False, st_, None)
+      and not P._named_join([("raw", P.fenced("epigraf", "it goes"), M(13))], "epigraf", "and more", M(15), blk_, 15, lambda a, b: False, st_, None))
+md_ = [("raw", P.fenced("şiir", "the first line\\\nand the second"), M(15))]
+P._named_join(md_, "şiir", "and the third", M(16), blk_, 16, lambda a, b: False, st_, None)
+check("a poem going on overleaf keeps its line break", md_[0][1] == P.fenced("şiir", "the first line\\\nand the second\\\nand the third"), md_)
+
+
 def rotated_pdf(n=5, size=(522, 738)):
     pdf = pdfium.PdfDocument.new()
     for p in range(n):

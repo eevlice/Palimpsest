@@ -14,6 +14,8 @@ Agreed, not built yet. Short items; add new ones here, remove them when they shi
 - **The 2 wrongly kept line-end hyphens** (in-authenticity, pseudo-dementia): ask them as a review-screen question.
 - **OCR engine for scanned PDFs**: Apple Vision first, then Tesseract, behind an engine-independent interface.
 - **AI role suggestion** for doubtful blocks, shown as the first answer on the review screen.
+- **Epigraph/verse edge cases**: a prose wrap where only one line reaches the right edge keeps its hard break; prose
+  mistaken for verse (Characters' cataloguing page) keeps its line breaks.
 
 ## Editor / UI
 

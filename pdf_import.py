@@ -259,6 +259,7 @@ THRESHOLDS = {
     "ref_max_chars": 3,           # ...and at most this many digits or signs - gaps 1
     "ref_gap_em": 0.5,            # a callout row past a line's end starts within this many sizes of it - gaps 1, Far Calls
     "foot_size": 0.92,            # a page-bottom footnote is set at most this share of the body size - gaps 1
+    "wrap_edge_em": 1,            # a verse line ending within this many sizes of the block's right edge reaches it (a prose wrap) - gaps 3, Characters
     "notes_label_words": 12,      # a plain line naming a group of notes has at most this many words - gaps 2
     "notes_seq_share": 0.7,       # a notes group counts when this share of its entries follow 1, 2, 3... - gaps 1
 }
@@ -2083,13 +2084,65 @@ ROLE_TYPE = {"epigraf": "epigraph", "alıntı": "blockquote", "şiir": "verse", 
 FENCE = {"epigraf": "Epigraph", "şiir": "Verse", "atıf": "Attribution", "kutu": "Box", "kutu-başlık": "Box"}
 
 
+FENCE_OPEN = '::: {custom-style="%s"}'
+
+
 def fenced(role, text):
-    return '::: {custom-style="%s"}\n%s\n:::' % (FENCE[role], text)
+    return (FENCE_OPEN + '\n%s\n:::') % (FENCE[role], text)
 
 
 def verse_lines(texts):
     """lines kept as written: a Pandoc hard break (backslash at the line end) after every line but the last"""
     return "\\\n".join(t.replace("\x02", "-") for t in texts)
+
+
+def poem_lines(ls, texts, hy, stats, amb=None):
+    """a verse or a verse-like epigraph: a hard break where a line of the poem ends, not where prose merely wraps. A
+    line ending in a split word joins the next (the hyphen rule decides the hyphen); a line that runs to the block's
+    right edge joins a lowercase next line when the block is set like prose (two lines or more reach that edge), so
+    the longest line of a real poem is never taken for a wrap."""
+    if not texts:
+        return ""
+    edge = max(l["x1"] for l in ls)
+    full = [abs(l["x1"] - edge) <= T["wrap_edge_em"] * l["size"] for l in ls]
+    prose = sum(full) >= 2
+    out = texts[0]
+    for k in range(1, len(texts)):
+        t = texts[k]
+        j = join_hyphen(out, t, hy, stats, amb=amb) if out.rstrip().endswith("\x02") else None
+        if j is not None:
+            out = j
+        elif prose and full[k - 1] and re.match(r"[*_“\"‘(]*[a-z]", t):
+            out += " " + t
+            stats["verse_wraps_joined"] += 1
+        else:
+            out += "\\\n" + t
+    return out.replace("\x02", "-")
+
+
+def _named_join(md, role, text, meta, b, p, lex, stats, amb):
+    """an epigraph or a poem cut into two blocks (a drop cap's indent, a page turn): the block goes on in the segment
+    before when it is the same role, that one does not close its sentence and this one starts in lowercase (or the
+    word was split). An epigraph joins as prose, a poem keeps the break between its lines. True when joined."""
+    last = md[-1] if md else None
+    if not last or last[0] != "raw" or b.get("nojoin") or not last[1].startswith(FENCE_OPEN % FENCE[role]):
+        return False
+    if not ({p, p - 1} & last[2]["pages"]):
+        return False
+    inner = last[1][len(FENCE_OPEN % FENCE[role]) + 1:-len("\n:::")]
+    tail = inner.split("\\\n")[-1]
+    split_word = tail.rstrip().endswith("-")
+    if not split_word and (terminal(tail) or not re.match(r"[*_“\"‘(]*[a-z]", text)):
+        return False
+    if split_word:
+        j = join_hyphen(inner, text, lex, stats, mark="-", amb=amb)
+        inner = j if j is not None else inner + " " + text
+    else:
+        inner += ("\\\n" if role == "şiir" else " ") + text
+    md[-1] = ("raw", fenced(role, inner), last[2])
+    _meta_add(last[2], meta)
+    stats["named_joins"] += 1
+    return True
 
 
 def _style_name(style):
@@ -2721,8 +2774,14 @@ def build_markdown(doc, first_idx, last_idx):
             elif role == "kutu-başlık":
                 md.append(("raw", fenced(role, "**" + re.sub(r"\*+", "", join_lines(texts, lex, stats, amb)) + "**"), _meta_of(b)))
             elif role == "şiir" or (role == "epigraf" and b.get("breaks")):
-                md.append(("raw", fenced(role, verse_lines(texts)), _meta_of(b)))
-            elif role in ("epigraf", "atıf"):
+                t = poem_lines(ls, texts, lex, stats, amb)
+                if not _named_join(md, role, t, _meta_of(b), b, p["p"], lex, stats, amb):
+                    md.append(("raw", fenced(role, t), _meta_of(b)))
+            elif role == "epigraf":
+                t = join_lines(texts, lex, stats, amb)
+                if not _named_join(md, role, t, _meta_of(b), b, p["p"], lex, stats, amb):
+                    md.append(("raw", fenced(role, t), _meta_of(b)))
+            elif role == "atıf":
                 md.append(("raw", fenced(role, join_lines(texts, lex, stats, amb)), _meta_of(b)))
             elif role == "alıntı":
                 text = join_lines(texts, lex, stats, amb)
