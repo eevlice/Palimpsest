@@ -7,8 +7,11 @@ Agreed, not built yet. Short items; add new ones here, remove them when they shi
 - **Heading hierarchy the body does not show** (Characters: parts and the groups under them one style; only the
   contents tell them apart): left to the AI pass's heading-list call, no rule is written for it. The branch
   baslik-seviye (not committed, kept locally) holds the Sazima 25/25 and Trauma 14/14 gains; it was not taken
-  because the clean holdout h7 fell from 24/24 to 20/24. The AI heading call should win these gains back
-  without a rule.
+  because the clean holdout h7 fell from 24/24 to 20/24.
+- **Heading call (Haiku), shelved**: on the tuning books it fixes Sazima and Trauma, but on the clean holdout
+  criterion 2 stays at 89/119 → 89/119, no gain. First a label on its own line ("Walk N", "CHAPTER 1") must join
+  its heading (the evidence is dog: called "not a heading", it fell from 24/24 to 15/24); then one holdout
+  measurement. Trial scripts and numbers: ~/palimpsest-spike/ai-utu/.
 - **Front matter: one unit per dedication page**: the dedication blocks of one page as one unit (today NEI's is a
   paragraph, an epigraph and a paragraph), one role, its line breaks kept.
 - **Index out of the text like the contents**: found by structure (alphabetical entries, lists of page numbers),
