@@ -72,6 +72,30 @@ check("the repo's allowlist names exact paths only, each with a reason",
       all("#" in l and not any(ch in l.split("#")[0] for ch in "*?[") for l in open(os.path.join(os.path.dirname(HERE), "scripts", "book_text_allowlist.txt"))
           if l.strip() and not l.startswith("#")))
 
+# a book that cannot be read stops the commit: a PDF with no gt.json and no pypdfium2, a broken PDF
+unread = os.path.join(HOME, "unread")
+os.makedirs(os.path.join(unread, "new_book"))
+open(os.path.join(unread, "new_book", "kitap.pdf"), "wb").write(b"%PDF-1.4 not really a pdf")
+os.environ["PALIMPSEST_BOOK_DIRS"] = unread
+saved = sys.modules.get("pypdfium2")
+sys.modules["pypdfium2"] = None                  # as an interpreter without it: the import fails
+code, err = run('x = "anything at all here"')
+check("a book that cannot be read (no pypdfium2): the commit stops and says why",
+      code == 1 and "okunamadı" in err and "pypdfium2 yok" in err and "new_book" in err, err)
+if saved is not None:
+    sys.modules["pypdfium2"] = saved
+else:
+    del sys.modules["pypdfium2"]
+try:
+    import pypdfium2                             # noqa: F401
+    code, err = run('x = "anything at all here"')
+    check("...and a broken PDF too", code == 1 and "new_book" in err, err)
+except ImportError:
+    print("SKIP a broken PDF (no pypdfium2 here)")
+hook = "".join(l for l in open(os.path.join(os.path.dirname(HERE), "scripts", "hooks", "pre-commit")) if not l.startswith("#"))
+check("the hook runs the project's .venv Python first, python3.13 / python3 only without it",
+      hook.index(".venv/bin/python") < hook.index("python3.13"))
+
 os.environ["PALIMPSEST_BOOK_DIRS"] = os.path.join(HOME, "nowhere")
 code, err = run('rows = [("the quiet lantern keeper counted seven", 100, 200)]')
 check("without the book folders: a warning, and the commit goes through", code == 0 and "atlandı" in err, err)

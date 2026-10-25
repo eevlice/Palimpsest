@@ -10,9 +10,10 @@ A file that shares a run of 6 words with one of the test books (the tuning and h
 ~/palimpsest-spike/karne and ~/palimpsest-spike/karne-holdout) stops the commit; every run found is shown with its
 book. Files listed by exact path in scripts/book_text_allowlist.txt (each with its reason) are not read. The books
 are read only from this machine and never copied into the repo: from their gt.json (text already
-extracted) or, failing that, from kitap.pdf with pypdfium2. A word index is cached under ~/.palimpsest/. Without the
-book folders the check warns and lets the commit through. PALIMPSEST_BOOK_DIRS (paths separated by ':') replaces
-the default folders."""
+extracted) or, failing that, from kitap.pdf with pypdfium2. A book that cannot be read (no pypdfium2, a broken PDF)
+stops the commit: an unchecked book is no check. A word index is cached under ~/.palimpsest/. Without the book
+folders the check warns and lets the commit through. PALIMPSEST_BOOK_DIRS (paths separated by ':') replaces the
+default folders."""
 import hashlib
 import json
 import os
@@ -49,15 +50,22 @@ def book_text(folder):
         try:
             import pypdfium2 as pdfium
         except ImportError:
-            print(f"uyarı: {pdf} okunamadı (pypdfium2 yok); bu kitap denetlenmiyor", file=sys.stderr)
-            return None, None
-        doc = pdfium.PdfDocument(pdf)
-        return "\n".join(doc[i].get_textpage().get_text_range() for i in range(len(doc))), pdf
+            raise Unreadable(f"{pdf}: pypdfium2 yok ({sys.executable}); gt.json da yok")
+        try:
+            doc = pdfium.PdfDocument(pdf)
+            return "\n".join(doc[i].get_textpage().get_text_range() for i in range(len(doc))), pdf
+        except Exception as e:
+            raise Unreadable(f"{pdf}: okunamadı ({e})")
     return None, None
 
 
+class Unreadable(Exception):
+    """a book folder whose text cannot be read: the message says which and why"""
+
+
 def index(dirs):
-    """{ngram key: book name} for every book folder; rebuilt when a book's source file changes"""
+    """{ngram key: book name} for every book folder; rebuilt when a book's source file changes. Raises Unreadable
+    with every book it could not read."""
     books = []
     for d in dirs:
         if os.path.isdir(d):
@@ -68,7 +76,7 @@ def index(dirs):
         cache = pickle.load(open(CACHE, "rb"))
     except Exception:
         cache = {}
-    idx, changed = {}, False
+    idx, changed, unreadable = {}, False, []
     for b in books:
         name = os.path.basename(b)
         src = os.path.join(b, "gt.json") if os.path.exists(os.path.join(b, "gt.json")) else os.path.join(b, "kitap.pdf")
@@ -77,7 +85,11 @@ def index(dirs):
         if stamp is None:
             continue
         if not hit or hit[0] != stamp:
-            text, _ = book_text(b)
+            try:
+                text, _ = book_text(b)
+            except Unreadable as e:
+                unreadable.append(str(e))
+                continue
             if text is None:
                 continue
             ws = words(text)
@@ -88,6 +100,8 @@ def index(dirs):
     if changed:
         os.makedirs(os.path.dirname(CACHE), exist_ok=True)
         pickle.dump(cache, open(CACHE, "wb"))
+    if unreadable:
+        raise Unreadable("\n  ".join(unreadable))
     return idx
 
 
@@ -130,7 +144,12 @@ def find(idx, files):
 
 def main(argv):
     dirs = os.environ.get("PALIMPSEST_BOOK_DIRS", "").split(":") if os.environ.get("PALIMPSEST_BOOK_DIRS") else DEFAULT_DIRS
-    idx = index(dirs)
+    try:
+        idx = index(dirs)
+    except Unreadable as e:
+        print("Commit durduruldu: bir kitap okunamadı, denetim yapılamadı.\n  %s\n"
+              "Projenin .venv'iyle çalıştır (pypdfium2 orada) ya da kitabın gt.json'unu üret." % e, file=sys.stderr)
+        return 1
     if idx is None:
         print("uyarı: kitap klasörleri bulunamadı (%s); kitap metni denetimi atlandı" % ", ".join(dirs), file=sys.stderr)
         return 0

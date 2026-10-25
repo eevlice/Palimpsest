@@ -1,5 +1,11 @@
 #!/bin/sh
-# Palimpsest pre-commit: no book text in the repo (see scripts/check_book_text.py). The interpreter with pypdfium2
-# (python3.13 on this machine) also reads books that have no gt.json.
-PY=$(command -v python3.13 || command -v python3)
-exec "$PY" "$(git rev-parse --show-toplevel)/scripts/check_book_text.py"
+# Palimpsest pre-commit: no book text in the repo (see scripts/check_book_text.py). The project's own Python first
+# (.venv, with pypdfium2: it reads books that have no gt.json yet), else python3.13 / python3; a book that cannot be
+# read stops the commit.
+ROOT=$(git rev-parse --show-toplevel)
+if [ -x "$ROOT/.venv/bin/python" ]; then
+  PY="$ROOT/.venv/bin/python"
+else
+  PY=$(command -v python3.13 || command -v python3)
+fi
+exec "$PY" "$ROOT/scripts/check_book_text.py"
