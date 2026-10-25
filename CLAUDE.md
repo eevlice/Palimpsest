@@ -37,3 +37,4 @@ Local, single-user book translation tool. Flask backend + one vanilla-JS file fr
 - UI taste: quiet and distraction-proof. Paper/serif look, monospace uppercase labels, small line icons, no filled loud highlights, no extra buttons when position can say it. Prefer removing text over adding it.
 - Do not add features, abstractions or config that were not asked for.
 - Do not add Co-Authored-By trailers to commit messages.
+- Backlog (agreed, not built): docs/backlog.md. Add new items there, remove them when they ship.
