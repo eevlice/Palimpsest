@@ -245,6 +245,11 @@
   .pref-flag{display:inline-block;margin-left:8px;color:var(--pencil);vertical-align:middle;line-height:0;cursor:default;}
   mark.ocr-sus{background:none;color:inherit;text-decoration:underline dotted var(--pencil);text-underline-offset:3px;
     text-decoration-thickness:1.5px;cursor:pointer;}
+  /* a unit (the paragraphs of one epigraph, quote, poem or box): one quiet frame, lighter rules inside */
+  .seg.u-in{border-left:1px solid rgba(92,84,71,.45);border-right:1px solid rgba(92,84,71,.45);border-bottom:1px dotted var(--rule);}
+  .seg.u-first{border-top:1px solid rgba(92,84,71,.45);margin-top:10px;}
+  .seg.u-last{border-bottom:1px solid rgba(92,84,71,.45);margin-bottom:10px;}
+  .role-menu .rm-out{border-top:1px solid var(--rule);margin-top:4px;}
   .seg .role-btn{opacity:0;transition:opacity .12s;}
   .seg:hover .role-btn,.seg .role-btn:focus-visible,.seg-extra .role-btn{opacity:1;}
   .role-menu{position:absolute;z-index:30;width:230px;background:var(--paper);border:1px solid var(--ink);
@@ -567,6 +572,9 @@
   .ck-read{flex:1;min-height:0;overflow:auto;padding:22px 40px 22px 34px;font-family:'Newsreader',Georgia,serif;font-size:17px;line-height:1.6;}
   .ck-seg{position:relative;padding:3px 10px;margin:0 -10px 10px;}
   .ck-seg.hl{background:var(--ck-hl);}
+  .ck-seg.u-in{border-left:1px solid rgba(35,34,32,.35);border-right:1px solid rgba(35,34,32,.35);margin-bottom:0;padding-bottom:10px;}
+  .ck-seg.u-first{border-top:1px solid rgba(35,34,32,.35);padding-top:10px;}
+  .ck-seg.u-last{border-bottom:1px solid rgba(35,34,32,.35);margin-bottom:10px;}
   .ck-seg h2,.ck-seg h3,.ck-seg h4{font-family:'Instrument Serif',Georgia,serif;font-weight:400;margin:14px 0 4px;line-height:1.2;}
   .ck-seg h2{font-size:28px;} .ck-seg h3{font-size:23px;} .ck-seg h4{font-size:20px;}
   .ck-seg p{margin:0;}
@@ -1116,12 +1124,32 @@ function deleteProject(p){
 // Markers come off on the way to the model and out of the translation box;
 // they go back on here, taken from the source. A final that already starts
 // with its marker (projects translated before segment types) is left alone.
-function exportText(segments,finals,each){
-  return segments.map((s,i)=>{
+function exportText(segments,finals,each,units){
+  const outs=segments.map((s,i)=>{
     const out=exportSeg(s,finals[i]);
     return each&&out?each(out,i):out;
-  }).join('\n\n');
+  });
+  return (units?joinUnits(outs,units):outs).join('\n\n');
 }
+// A unit (segMeta.unit: the paragraphs of one epigraph, quote, poem or box) goes out in one wrapper: one fence with
+// its paragraphs inside, or one > block; the attribution closing a unit keeps its own fence.
+function unitKind(o){
+  const m=/^::: \{custom-style="([^"]+)"\}\n/.exec(o||'');
+  return m?'fence:'+m[1]:/^>/.test(o||'')?'bq':null;
+}
+function joinUnits(outs,units){
+  const res=[]; let prev=null;
+  outs.forEach((o,i)=>{
+    const u=units[i]||null, k=unitKind(o);
+    if(u&&k&&prev&&prev.u===u&&prev.k===k){
+      const a=res[res.length-1];
+      res[res.length-1]=k==='bq'?a+'\n>\n'+o:a.slice(0,a.lastIndexOf('\n:::'))+'\n\n'+o.slice(o.indexOf('\n')+1);
+    }else res.push(o);
+    prev={u,k};
+  });
+  return res;
+}
+const unitsOf=p=>Array.isArray(p.segMeta)?p.segMeta.map(m=>m&&m.unit||null):null;
 function exportSeg(s,f){
   const t=segType(s);
   if(t.type==='image') return s;                 // a placeholder is never translated
@@ -1147,7 +1175,7 @@ function downloadMarkdown(name,text){
   setTimeout(()=>URL.revokeObjectURL(a.href),1000);
 }
 function exportProject(pid){
-  fetch('/project/'+encodeURIComponent(pid)).then(r=>r.json()).then(d=>downloadMarkdown(d.name,exportText(d.segments,d.finals)));
+  fetch('/project/'+encodeURIComponent(pid)).then(r=>r.json()).then(d=>downloadMarkdown(d.name,exportText(d.segments,d.finals,null,unitsOf(d))));
 }
 
 // ================================================================
@@ -1276,7 +1304,9 @@ function ckSegHTML(s,i){
     case 'table': h=tableHTML(s); break;
     default: h=`<p>${inl(s)}</p>`;
   }
-  return `<div class="ck-seg" id="ck-s${i}">${h}<button class="ck-more" title="Düzenle" onclick="ckMenu(event,${i})">…</button></div>`;
+  const um=CK.data.segMeta||[], u=um[i]&&um[i].unit, a=u&&um[i-1]&&um[i-1].unit===u, z=u&&um[i+1]&&um[i+1].unit===u;
+  const uc=a||z?' u-in'+(a?'':' u-first')+(z?'':' u-last'):'';
+  return `<div class="ck-seg${uc}" id="ck-s${i}">${h}<button class="ck-more" title="Düzenle" onclick="ckMenu(event,${i})">…</button></div>`;
 }
 function ckRead(){ $('ck-read').innerHTML=(CK.data.segments||[]).map(ckSegHTML).join(''); }
 function ckShow(scroll=true){
@@ -2728,10 +2758,42 @@ function stripMarker(f){
   return /^(#{1,6}[ \t]|>|:::)/.test(f)?segBody(f):f;
 }
 // segments that look like segment i (same style in seg_meta, same role now); none without a style (old projects)
+// a unit: consecutive segments sharing segMeta.unit (the importer's: the paragraphs of one epigraph, quote, poem or
+// box, and the attribution closing it); a segment without one is its own unit
+const unitId=i=>(P&&Array.isArray(P.segMeta)&&P.segMeta[i]&&P.segMeta[i].unit)||null;
+function unitOf(i){
+  const u=unitId(i); if(!u) return [i];
+  let a=i,b=i;
+  while(a>0&&unitId(a-1)===u) a--;
+  while(b+1<P.segments.length&&unitId(b+1)===u) b++;
+  return Array.from({length:b-a+1},(_,k)=>a+k);
+}
+// what a role change moves: the whole unit, but an attribution keeps its own role
+const roleUnit=i=>unitOf(i).filter(j=>canChangeRole(j)&&(j===i||typeOf(j).type!=='attribution'));
+// look-alike units: same style and role, counted per unit, each as its member segments
 function lookAlikes(i){
-  const m=P.segMeta&&P.segMeta[i], r=roleOf(P.segments[i]);
+  const m=P.segMeta&&P.segMeta[i], r=roleOf(P.segments[i]), mine=new Set(unitOf(i));
   if(!m||!m.style) return [];
-  return P.segments.map((s,j)=>j).filter(j=>j!==i&&P.segMeta[j]&&P.segMeta[j].style===m.style&&roleOf(P.segments[j])===r&&canChangeRole(j));
+  const out=[], seen=new Set();
+  P.segments.forEach((s,j)=>{
+    if(mine.has(j)||seen.has(j)||!P.segMeta[j]||P.segMeta[j].style!==m.style||roleOf(s)!==r||!canChangeRole(j)) return;
+    const u=roleUnit(j); u.forEach(x=>seen.add(x)); out.push(u);
+  });
+  return out;
+}
+// one frame around a unit: first / inside / last
+function unitClass(i){
+  const u=unitId(i); if(!u) return '';
+  const a=i>0&&unitId(i-1)===u, b=i+1<P.segments.length&&unitId(i+1)===u;
+  return a||b?' u-in'+(a?'':' u-first')+(b?'':' u-last'):'';
+}
+// "Birimden çıkar": the segment becomes a unit of its own (undo brings it back)
+function leaveUnit(i){
+  if(!unitId(i)) return;
+  P._undo={type:'role',index:i,changes:[{i,seg:P.segments[i],final:P.finals[i],meta:P.segMeta[i]}]};
+  const m=Object.assign({},P.segMeta[i]); delete m.unit;
+  m.flags=[...new Set([...(m.flags||[]),'kullanici:birimden-cikti'])].sort();
+  P.segMeta[i]=m;
 }
 function setRole(idx,r){
   P._undo={type:'role',index:idx[0],changes:idx.map(j=>({i:j,seg:P.segments[j],final:P.finals[j],meta:P.segMeta?P.segMeta[j]:null}))};
@@ -2759,17 +2821,20 @@ function roleBtn(i){
 window.openRoleMenu=(e,i)=>{
   e.stopPropagation();
   document.querySelectorAll('.role-menu').forEach(el=>el.remove());
-  const cur=roleOf(P.segments[i]), like=lookAlikes(i);
+  const cur=roleOf(P.segments[i]), like=lookAlikes(i), unit=roleUnit(i), inUnit=unitOf(i).length>1;
   const m=document.createElement('div'); m.className='role-menu';
-  m.innerHTML=`<div class="rm-t">Rolü değiştir</div>${ROLE_CHOICES.map(([k,l])=>
+  m.innerHTML=`<div class="rm-t">Rolü değiştir${unit.length>1?` · birim, ${unit.length} paragraf`:''}</div>${ROLE_CHOICES.map(([k,l])=>
       `<button data-r="${k}"${k===cur?' class="on" disabled':''}>${l}</button>`).join('')}${like.length?
-      `<label class="rm-all"><input type="checkbox" id="rm-all"> Kitapta aynı görünen ${like.length} yere de uygula</label>`:''}`;
+      `<label class="rm-all"><input type="checkbox" id="rm-all"> Kitapta aynı görünen ${like.length} yere de uygula</label>`:''}${
+      inUnit?'<button class="rm-out" data-out="1">Birimden çıkar</button>':''}`;
   m.onclick=ev=>{
     ev.stopPropagation();
-    const r=ev.target.dataset&&ev.target.dataset.r; if(!r) return;
+    const d=ev.target.dataset||{};
+    if(d.out){ m.remove(); leaveUnit(i); renderWindow();renderRail();updateProgress();queueSave(); return; }
+    const r=d.r; if(!r) return;
     const all=$('rm-all')&&$('rm-all').checked;
     m.remove();
-    setRole([i,...(all?like:[])],r);
+    setRole([...unit,...(all?like.flat():[])],r);
     renderWindow();renderRail();updateProgress();queueSave();
   };
   const b=e.currentTarget.getBoundingClientRect();
@@ -2855,7 +2920,7 @@ function renderWindow(){
     const ty=typeOf(i);
     div.className='seg'+(P.approved[i]?' done':'')+
       (ty.type==='heading'?' heading h'+ty.level:ty.type==='footnote'?' fn':ty.type==='image'?' img'
-        :ty.type==='caption'?' cap':ty.type==='table'?' tab':NAMED[ty.type]?' nb '+ty.type:'');div.id='seg-'+i;
+        :ty.type==='caption'?' cap':ty.type==='table'?' tab':NAMED[ty.type]?' nb '+ty.type:'')+unitClass(i);div.id='seg-'+i;
     const gutter=ty.type==='heading'?'H'+ty.level
       :ty.type==='footnote'?'NOT '+esc(fnNumber(ty.label))
       :ty.type==='image'?'GÖRSEL':ty.type==='caption'?'ALTYAZI':ty.type==='table'?'TABLO'
@@ -3141,7 +3206,7 @@ async function exportAs(mode){
     :{mode:'word', name:base, markdown:exportText(P.segments,P.finals,(out,i)=>{
         const t=segType(out).type;
         return hasPageRef(i)&&t!=='image'&&t!=='table'?docxComment(out,i):out;
-      })};
+      },unitsOf(P))};
   $('export-meta').textContent='· Word hazırlanıyor…';
   try{
     const res=await fetch('/export_docx',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(body)});
@@ -3152,7 +3217,7 @@ async function exportAs(mode){
   }catch(err){ $('export-meta').textContent='· Sunucuya ulaşılamadı'; }
 }
 function exportMarkdown(){
-  downloadMarkdown(P.name,exportText(P.segments,P.finals));
+  downloadMarkdown(P.name,exportText(P.segments,P.finals,null,unitsOf(P)));
   $('export-meta').textContent=`· ${P.segments.length} paragraftan ${P.segments.filter((s,i)=>isDone(P.segments,P.approved,i)).length} tanesi dışa aktarıldı`;
 };
 </script>

@@ -67,9 +67,10 @@ def questions(state, rendered):
         return q
 
     # 1. named roles set with low or middling confidence, captions joined by look alone; 2. blocks flagged for review.
-    # Asked per unit: blocks that follow each other in reading order with the same role and style are one thing (a
-    # callout cut into two blocks); one shaky part makes the whole unit asked, a sure part gets no exemption.
-    for unit in _units(pages):
+    # Asked per unit, the importer's seg_meta "unit" (a multi-paragraph epigraph, quote, poem or box; any other
+    # segment is a unit of its own): one shaky part makes the whole unit asked, a sure part gets no exemption. An
+    # attribution closing a unit keeps its own role.
+    for unit in _units(d, rendered["meta"], first, last):
         reason = None
         for p, b in unit:
             role, flags = b["role"], set(b.get("flags") or ())
@@ -139,20 +140,29 @@ def questions(state, rendered):
     return out
 
 
-def _units(pages):
-    """[(page, block)] runs: written blocks next to each other in reading order (across a page break too) with the
-    same role and style"""
-    out, last = [], None
-    for p in pages:
-        for b in p["blocks"]:
-            if not b.get("bid") or b["role"] in ("sil", "ön sayfa", "dizin", "dipnot"):
-                continue
-            if last is not None and b["role"] == last["role"] and b["style"] == last["style"]:
-                out[-1].append((p, b))
-            else:
-                out.append([(p, b)])
-            last = b
-    return out
+def _units(d, meta, first, last):
+    """[(page, block)] per unit: the blocks of consecutive segments sharing seg_meta "unit" (one definition, the
+    importer's), or of one segment; an attribution is a unit of its own (its role is not the unit's); blocks the
+    questions never ask about are left out"""
+    where = {b.get("bid"): (p, b) for p in d.pages for b in p["blocks"]}
+    out, prev = [], None
+    for i, m in enumerate(meta):
+        if not first <= m["pages"][0] <= last if m.get("pages") else True:
+            prev = None
+            continue
+        u = m.get("unit")
+        blocks = [where[x] for x in d.seg_bids[i] if x in where
+                  and where[x][1]["role"] not in ("sil", "ön sayfa", "dizin", "dipnot")]
+        if blocks and all(bb["role"] == "atıf" for _, bb in blocks):
+            out.append(blocks)                      # an attribution is asked on its own, never with its unit
+            prev = None
+            continue
+        if u and u == prev:
+            out[-1].extend(blocks)
+        elif blocks:
+            out.append(blocks)
+        prev = u
+    return [x for x in out if x]
 
 
 def _repeats(d, pages, seg_of):

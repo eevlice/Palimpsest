@@ -2493,6 +2493,28 @@ def page_refs(md, stats):
             stats["page_refs"] += 1
 
 
+FENCE_KIND = {"Epigraph": "epigraph", "Verse": "verse", "Box": "box", "Attribution": "attribution"}
+
+
+def _units(kinds, meta):
+    """seg_meta "unit": the paragraphs of one epigraph, quote, poem or box, each its own segment, are one unit -
+    consecutive segments of one kind and one style; an attribution right after one closes it. Only units of two or
+    more segments get an id ("u1", "u2", ...); the export writes a unit in one wrapper, the editor in one frame."""
+    n, i = 0, 0
+    while i < len(kinds):
+        k, j = kinds[i], i
+        if k in ("epigraph", "blockquote", "verse", "box"):
+            while j + 1 < len(kinds) and kinds[j + 1] == k and meta[j + 1]["style"] == meta[i]["style"]:
+                j += 1
+            if j + 1 < len(kinds) and kinds[j + 1] == "attribution":
+                j += 1
+        if j > i:
+            n += 1
+            for x in range(i, j + 1):
+                meta[x]["unit"] = f"u{n}"
+        i = j + 1
+
+
 def user_joins(md, lex, stats, amb):
     """segments the user joined to the one before ("öncekiyle birleştir"): whatever their kinds, the text goes on in
     the segment before, hyphen-joined where the line breaks a word"""
@@ -2814,7 +2836,7 @@ def build_markdown(doc, first_idx, last_idx):
     resolve_notes(md, stats, {b["bid"] for p in doc.pages for b in p["blocks"] if b.get("drop_refs")})
     md = [it for it in md if it is not None]
     page_refs(md, stats)
-    out, meta, doc.seg_bids = [], [], []
+    out, meta, doc.seg_bids, kinds = [], [], [], []
     for kind, v, m in md:
         text = (v["text"] if not v.get("box") else fenced("kutu", v["text"])) if kind == "p" else (
             "#" * MD_LEVEL[v["lvl"]] + " " + v["text"] if kind == "head" else "> " + v if kind == "quote" else
@@ -2827,6 +2849,10 @@ def build_markdown(doc, first_idx, last_idx):
         if m.get("page_refs"):
             meta[-1]["page_refs"] = m["page_refs"]
         doc.seg_bids.append(m.get("_bids", []))
+        kinds.append("blockquote" if kind == "quote" else "box" if kind == "p" and v.get("box") else
+                     FENCE_KIND.get(re.match(r'::: \{custom-style="([^"]+)"\}', text).group(1)) if kind == "raw" and text.startswith(":::")
+                     else None)
+    _units(kinds, meta)
     doc.seg_meta = meta
     return "\n\n".join(out) + "\n", stats
 

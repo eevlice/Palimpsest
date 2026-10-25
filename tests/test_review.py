@@ -63,12 +63,15 @@ pages[2]["blocks"].append(blk("3.3", "alt başlık 1", "Sub|13", "A Section Nobo
 pages[3]["two_col"] = True
 pages[4]["blocks"].append(blk("5.2", "epigraf", "Call|10", "What we talk about on this walk:", conf=0.7, flags=["centered"]))
 pages[4]["blocks"].append(blk("5.3", "epigraf", "Call|10", "a toaster and the market.", conf=0.9, flags=["centered"]))
+pages[4]["blocks"].append(blk("5.4", "atıf", "Call|10", "—A Name", conf=0.9))
 D = FakeDoc()
 D.pages, D.body_styles, D.index_pages = pages, {"Body|11"}, []
 D.seg_bids = [[b["bid"]] for p in pages for b in p["blocks"] if b["role"] != "sil"]
 meta = [dict(pages=[int(bids[0].split(".")[0])], flags=[]) for bids in D.seg_bids]
 meta[D.seg_bids.index(["2.1"])]["flags"] = ["atif-eslesmedi"]
 meta[D.seg_bids.index(["4.1"])]["flags"] = ["not-eslesmedi"]
+for x in ("5.2", "5.3", "5.4"):                 # one unit (the importer's seg_meta "unit"), closed by its attribution
+    meta[D.seg_bids.index([x])]["unit"] = "u1"
 state = dict(doc=D, first=1, last=6, ctx=dict(outline=[dict(title=t, level=0, page=1) for t in
                                                          ("A Synthetic Running Head", "Chapter One", "Chapter Two")]))
 qs = R.questions(state, dict(meta=meta))
@@ -80,9 +83,11 @@ check("questions: one of every kind (role, review flag, unlisted heading, unmatc
 flat = lambda q: [b for t in q["targets"] for b in (t if isinstance(t, list) else [t])]
 check("a role set with confidence 0.8+ is not asked on its own", not any("1.3" in flat(q) for q in by["rol"]), by["rol"])
 callout = next((q for q in by["rol"] if "5.2" in flat(q)), {})
-check("unit: two adjacent blocks of one role and style are one question (the sure part goes with the shaky one)",
+check("unit: the segments of one seg_meta unit are one question (the sure part goes with the shaky one, not the attribution)",
       callout.get("targets") == [["5.2", "5.3"]] and callout.get("count") == 1 and callout.get("bids") == ["5.2", "5.3"]
       and len(callout.get("boxes", [])) == 2, callout)
+att = next((q for q in qs if "5.4" in flat(q)), None)
+check("unit: its attribution is not part of the unit's question", att is None or att["targets"] == [["5.4"]], att)
 check("unit: the answer goes to both blocks", R.decisions_for(callout, "role:gövde") == [{"bid": "5.2", "role": "gövde"}, {"bid": "5.3", "role": "gövde"}])
 check("the same style signature is one question (two odd blocks, count 2)", len(by["stil"]) == 1 and by["stil"][0]["count"] == 2,
       by["stil"])

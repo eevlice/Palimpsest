@@ -509,6 +509,16 @@ P._named_join(md_, "şiir", "and the third", M(16), blk_, 16, lambda a, b: False
 check("a poem going on overleaf keeps its line break", md_[0][1] == P.fenced("şiir", "the first line\\\nand the second\\\nand the third"), md_)
 
 
+# -- units: the paragraphs of one epigraph, quote, poem or box are one unit (seg_meta "unit")
+kinds = ["epigraph", "epigraph", "attribution", "epigraph", "attribution", None, "blockquote", "blockquote", "blockquote", "box"]
+styles = ["Epi 10", "Epi 10", "Att 10", "Epi 10", "Att 10", "Body 11", "Q 10", "Q 10", "Q 9", "Box 10"]
+um = [dict(style=x) for x in styles]
+P._units(kinds, um)
+check("units: two epigraph paragraphs and their attribution are one unit; the next epigraph+attribution another; a style "
+      "change ends a quote unit; a single segment has no id",
+      [m.get("unit") for m in um] == ["u1", "u1", "u1", "u2", "u2", None, "u3", "u3", None, None], [m.get("unit") for m in um])
+
+
 def rotated_pdf(n=5, size=(522, 738)):
     pdf = pdfium.PdfDocument.new()
     for p in range(n):

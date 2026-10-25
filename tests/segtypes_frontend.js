@@ -32,15 +32,15 @@ function line(prefix) {           // a one-line top-level statement
   return src.slice(at, src.indexOf('\n', at));
 }
 const code = [
-  line('const esc='), line('const SEG_H='), line('const SEG_REF='), line('const SEG_IMG='), line('const SEG_CAP='), line('const SEG_TAB='), line('const CAP_OPEN='), line('const SEG_FENCE='), line('const FENCE_TYPE='), line('const SEG_BQ='), line('const FENCE_STYLE_OF='), line('const NAMED='), line("const MASK="), line('const PARSE_CACHE='), line('const WIN='), line('const RAIL_PER_ROW='), line('const STATE_CLS='), line('const PAGE_REF_NOTE='), src.slice(src.indexOf('const ROLE_CHOICES='), src.indexOf('function roleOf(')),
+  line('const esc='), line('const SEG_H='), line('const SEG_REF='), line('const SEG_IMG='), line('const SEG_CAP='), line('const SEG_TAB='), line('const CAP_OPEN='), line('const SEG_FENCE='), line('const FENCE_TYPE='), line('const SEG_BQ='), line('const FENCE_STYLE_OF='), line('const NAMED='), line("const MASK="), line('const PARSE_CACHE='), line('const WIN='), line('const RAIL_PER_ROW='), line('const STATE_CLS='), line('const PAGE_REF_NOTE='), src.slice(src.indexOf('const ROLE_CHOICES='), src.indexOf('function roleOf(')), line('const unitId='), line('const roleUnit='), line('const unitsOf='),
   ...['foldCase', 'segType', 'segMarkerLen', 'segTailLen', 'wrapSeg', 'fnNumber', 'typeOf', 'refLabels', 'maskRefs',
       'inlineParse', 'isWordChar', 'findSpans', 'parseTerms', 'glossHitsForText',
-      'searchSpans', 'renderSource', 'refMismatch', 'neighborText', 'canMerge', 'exportText', 'exportSeg', 'roleOf', 'canChangeRole', 'segBody', 'withRole', 'stripMarker', 'lookAlikes', 'setRole', 'suspectSpans', 'mdFileName', 'mdBlob', 'hasPageRef', 'pageRefFlag', 'docxComment',
+      'searchSpans', 'renderSource', 'refMismatch', 'neighborText', 'canMerge', 'exportText', 'exportSeg', 'roleOf', 'canChangeRole', 'segBody', 'withRole', 'stripMarker', 'lookAlikes', 'setRole', 'unitOf', 'unitClass', 'leaveUnit', 'joinUnits', 'unitKind', 'suspectSpans', 'mdFileName', 'mdBlob', 'hasPageRef', 'pageRefFlag', 'docxComment',
       'normalizeProject', 'isDone', 'mergeMeta', 'projectForSave', 'splitRow', 'parseMdTable', 'cellEsc', 'buildMdTable', 'emptyLike', 'tableShapeOf', 'tableMismatch', 'gridFits', 'mdInline', 'tableHTML', 'hasSource', 'srcBtn', 'devFlag', 'firstSegForPage', 'linkifyPages', 'autoTermsFilter', 'headingTitle', 'computeSections', 'sectionStats', 'segState', 'padWidth', 'railLabel',
       'windowStartFor', 'windowLabel', 'goToWindow', 'railGoto', 'pageEarlier', 'pageLater', 'jumpToLastTranslated', 'lastTranslatedIndex',
       'roman', 'headingDepths', 'railModel', 'flowCells', 'railWhere', 'railCellClass', 'railOpen', 'applyRailOpen', 'setRailOpen'].map(fn), block('const ICON='), block('window.mergeDown='), block('window.undoMerge='), block('window.undoRole='),
   'return {segType,inlineParse,findSpans,renderSource,refMismatch,neighborText,canMerge,exportText,normalizeProject,' +
-  'headingTitle,computeSections,sectionStats,isDone,mergeMeta,projectForSave,parseMdTable,buildMdTable,emptyLike,tableShapeOf,tableMismatch,gridFits,tableHTML,hasSource,srcBtn,devFlag,roleOf,canChangeRole,withRole,segBody,lookAlikes,setRole,undoRole:()=>window.undoRole(),suspectSpans,mdFileName,mdBlob,hasPageRef,pageRefFlag,docxComment,firstSegForPage,linkifyPages,autoTermsFilter,mergeDown:(i)=>window.mergeDown(i),undoMerge:()=>window.undoMerge(),getP:()=>P,segState,railLabel,roman,headingDepths,railModel,flowCells,railWhere,railCellClass,railOpen,applyRailOpen,setRailOpen,RAIL_PER_ROW,' +
+  'headingTitle,computeSections,sectionStats,isDone,mergeMeta,projectForSave,parseMdTable,buildMdTable,emptyLike,tableShapeOf,tableMismatch,gridFits,tableHTML,hasSource,srcBtn,devFlag,unitOf,unitClass,leaveUnit,joinUnits,roleUnit,unitsOf,roleOf,canChangeRole,withRole,segBody,lookAlikes,setRole,undoRole:()=>window.undoRole(),suspectSpans,mdFileName,mdBlob,hasPageRef,pageRefFlag,docxComment,firstSegForPage,linkifyPages,autoTermsFilter,mergeDown:(i)=>window.mergeDown(i),undoMerge:()=>window.undoMerge(),getP:()=>P,segState,railLabel,roman,headingDepths,railModel,flowCells,railWhere,railCellClass,railOpen,applyRailOpen,setRailOpen,RAIL_PER_ROW,' +
   'windowStartFor,windowLabel,goToWindow,railGoto,pageEarlier,pageLater,jumpToLastTranslated,PREFS_:()=>PREFS,LAYOUT,SAVED,' +
   'getWin:()=>winStart,setWin:v=>{winStart=v},calls:CALLS,setMerge:v=>{MERGE_MODE=v},setP:p=>{P=p},setSearch:q=>{SEARCH={query:q}}};'
 ].join('\n');
@@ -332,7 +332,7 @@ check('sections: heading with a footnote ref keeps the title clean', api.heading
             finals: [null, 'Çevrilmiş paragraf.', null, null, null], approved: [false, true, false, false, false], terms: '',
             segMeta: [{style: 'Body 11', flags: []}, {style: 'Body 11', flags: []}, {style: 'Head 16', flags: []}, {style: 'Poem 10', flags: []}, null]});
   const RP = api.getP();
-  check('role: look-alikes are the same style in the same role', JSON.stringify(api.lookAlikes(0)) === '[1]', JSON.stringify(api.lookAlikes(0)));
+  check('role: look-alikes are the same style in the same role (one unit each)', JSON.stringify(api.lookAlikes(0)) === '[[1]]', JSON.stringify(api.lookAlikes(0)));
   api.setRole([0], 'epigraph');
   check('role: paragraph -> epigraph fence, the segment type follows', RP.segments[0] === '::: {custom-style="Epigraph"}\nA plain paragraph.\n:::'
         && api.segType(RP.segments[0]).type === 'epigraph', RP.segments[0]);
@@ -351,6 +351,32 @@ check('sections: heading with a footnote ref keeps the title clean', api.heading
   api.setP({segments: ['Old paragraph.', 'Old two.'], finals: [null, null], approved: [false, false], terms: '', segMeta: [null, null]});
   check('role: an old project (no seg_meta) offers no look-alikes and still changes roles', api.lookAlikes(0).length === 0
         && (api.setRole([0], 'h1'), api.getP().segments[0] === '# Old paragraph.' && api.getP().segMeta[0] === null));
+  // units (segMeta.unit): one wrapper on export, one frame, one role change, "Birimden çıkar"
+  const EPI = t => '::: {custom-style="Epigraph"}\n' + t + '\n:::', ATT = t => '::: {custom-style="Attribution"}\n' + t + '\n:::';
+  api.setP({segments: [EPI('First paragraph.'), EPI('Second paragraph.'), ATT('—A Name'), '> One.', '> Two.', 'Plain.', EPI('Alone.')],
+            finals: [null, 'İkinci paragraf.', null, null, null, null, null], approved: new Array(7).fill(false), terms: '',
+            segMeta: [{style: 'Epi 10', unit: 'u1', flags: []}, {style: 'Epi 10', unit: 'u1', flags: []}, {style: 'Att 10', unit: 'u1', flags: []},
+                      {style: 'Q 10', unit: 'u2', flags: []}, {style: 'Q 10', unit: 'u2', flags: []}, {style: 'Body 11', flags: []}, {style: 'Epi 10', flags: []}]});
+  const UP = api.getP();
+  const exp = api.exportText(UP.segments, UP.finals, null, api.unitsOf(UP)).split('\n\n');
+  check('unit export: one Epigraph fence holding both paragraphs, the attribution in its own fence, the quote one > block',
+        api.exportText(UP.segments, UP.finals, null, api.unitsOf(UP)) ===
+        '::: {custom-style="Epigraph"}\n[UNTRANSLATED] First paragraph.\n\nİkinci paragraf.\n:::\n\n' + ATT('[UNTRANSLATED] —A Name') +
+        '\n\n> [UNTRANSLATED] One.\n>\n> [UNTRANSLATED] Two.\n\n[UNTRANSLATED] Plain.\n\n' + EPI('[UNTRANSLATED] Alone.'), JSON.stringify(exp));
+  check('unit export: without units (old projects) every segment keeps its own wrapper',
+        api.exportText(UP.segments, UP.finals).split('\n\n').length === 7);
+  check('unit: members and frame classes', JSON.stringify(api.unitOf(1)) === '[0,1,2]' && api.unitClass(0).includes('u-first')
+        && api.unitClass(2).includes('u-last') && api.unitClass(5) === '' && api.unitClass(6) === '');
+  check('unit: a role change takes the unit but not its attribution', JSON.stringify(api.roleUnit(0)) === '[0,1]');
+  api.setRole(api.roleUnit(1), 'blockquote');
+  check('unit: role change on the whole unit, the translation kept', UP.segments[0] === '> First paragraph.' && UP.segments[1] === '> Second paragraph.'
+        && UP.finals[1] === 'İkinci paragraf.' && api.segType(UP.segments[2]).type === 'attribution');
+  api.undoRole();
+  api.leaveUnit(1);
+  check('Birimden çıkar: the segment is its own unit, noted; the rest keep theirs', !UP.segMeta[1].unit && UP.segMeta[1].flags.includes('kullanici:birimden-cikti')
+        && UP.segMeta[0].unit === 'u1' && api.unitClass(0) === '' && api.unitClass(2) === '');
+  api.undoRole();
+  check('Birimden çıkar: undone', UP.segMeta[1].unit === 'u1' && JSON.stringify(api.unitOf(0)) === '[0,1,2]');
   // the Markdown export downloads <project name>.md as text/markdown
   check('markdown export: the file is <project name>.md', api.mdFileName('My Book') === 'My_Book.md' && api.mdFileName('') === 'ceviri.md'
         && !api.mdFileName('Kitap').endsWith('.txt'), api.mdFileName('My Book'));
