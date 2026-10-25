@@ -637,13 +637,16 @@ def _load_review(pid):
 
 
 def _decisions(rv):
-    """the review's answers (in question order) and its edits, as pdf_import decisions"""
+    """the review's answers (in question order) and its edits, as pdf_import decisions; a group asked one by one
+    ("Tek tek sor") answers through its parts"""
     import review
     out = []
+    opened = set(rv.get("open") or ())
     for q in rv["questions"]:
-        a = rv["answers"].get(q["id"])
-        if a:
-            out += review.decisions_for(q, a.get("key"), a.get("all", True))
+        for x in q["parts"] if q["id"] in opened and q.get("parts") else [q]:
+            a = rv["answers"].get(x["id"])
+            if a:
+                out += review.decisions_for(x, a.get("key"), a.get("all", True))
     return out + list(rv.get("edits", []))
 
 
@@ -724,14 +727,15 @@ def import_lines(pid):
 
 @app.route("/import/<pid>/answers", methods=["POST"])
 def import_answers(pid):
-    """answers {question id: {key, all}} and edits (pdf_import decisions: join/split/drop) saved, the import rendered
-    again with them"""
+    """answers {question id: {key, all}}, edits (pdf_import decisions: join/split/drop) and the groups opened to be
+    asked one by one (open: [question id]) saved, the import rendered again with them"""
     rv = _load_review(pid)
     if rv is None:
         return jsonify({"error": "Bu içe aktarma bulunamadı (bir günden eski olabilir); PDF'i yeniden yükle."}), 404
     d = request.get_json() or {}
     rv["answers"] = {k: v for k, v in (d.get("answers") or {}).items() if v and v.get("key") not in (None, "skip")}
     rv["edits"] = [e for e in (d.get("edits") or []) if isinstance(e, dict)]
+    rv["open"] = [k for k in (d.get("open") or []) if isinstance(k, str)]
     x = _render_review(pid, rv)
     # a block the user made a note that found no callout is asked "which callout?" right after the question that
     # made it one; such a question stays while answered (its answer is a decision), goes when the block is no note

@@ -1264,16 +1264,21 @@ $('start').onclick=()=>{
 // REVIEW SCREEN ("kontrol"): the importer's open questions, after /import (free) and before /setup (paid).
 // Answers and edits (join / split / drop) are saved with the pending import, so a reload keeps them.
 // ================================================================
-const CK={info:null,data:null,i:0,page:1,answers:{},edits:[],all:{},other:false,chain:Promise.resolve()};
+const CK={info:null,data:null,i:0,page:1,answers:{},edits:[],all:{},open:new Set(),other:false,chain:Promise.resolve()};
 const CK_KEY='palimpsest.pendingImport';
 function ckOpen(data,info){
-  CK.info=info;CK.data=data;CK.answers=data.answers||{};CK.edits=data.edits||[];CK.all={};CK.other=false;
+  CK.info=info;CK.data=data;CK.answers=data.answers||{};CK.edits=data.edits||[];CK.all={};CK.open=new Set(data.open||[]);CK.other=false;
   try{localStorage.setItem(CK_KEY,JSON.stringify(info));}catch(e){}
-  CK.i=Math.max(0,(data.questions||[]).findIndex(q=>!CK.answers[q.id]));
+  CK.i=Math.max(0,ckQs().findIndex(q=>!CK.answers[q.id]));
   showScreen('check');
   ckRead();ckShow();
 }
-const ckQs=()=>(CK.data&&CK.data.questions)||[];
+// the cards in order: a group opened with "Tek tek sor" stands as the questions it was made of, in its place
+function ckQs(){ return ((CK.data&&CK.data.questions)||[]).flatMap(q=>q.parts&&CK.open.has(q.id)?q.parts.map(x=>({...x,group:q.id})):[q]); }
+// "apply to the others" as the group is: one stretch of pages, or look-alikes across the book
+function ckAllText(q){
+  return q.scope==='bolge'?`Bu bölgedeki ${q.count-1} yere de uygula (s. ${esc(q.pages)})`:`Kitapta aynı görünen ${q.count-1} yere de uygula`;
+}
 const ckOpenCount=()=>ckQs().filter(q=>!CK.answers[q.id]).length;
 function ckTop(){
   $('ck-book').textContent=CK.info.name||'';
@@ -1336,7 +1341,8 @@ function ckShow(scroll=true){
     <div class="ck-choices">${main.map((c,k)=>`<button class="ck-choice${a&&a.key===c.key?' on':''}" onclick="ckAnswer('${c.key}')"><span class="k">${k+1}</span>${esc(c.label)}</button>`).join('')}${
       q.other&&q.other.length?`<button class="ck-choice${otherOn?' on':''}" onclick="ckToggleOther()"><span class="k">${main.length+1}</span>Başka…</button>`:''}</div>
     ${CK.other?`<div class="ck-other">${q.other.map(c=>`<button onclick="ckAnswer('${c.key}')">${esc(c.label)}</button>`).join('')}</div>`:''}
-    <div class="ck-foot">${q.count>1&&q.type!=='tekrar'?`<label><input type="checkbox" id="ck-all" ${all?'checked':''} onchange="CK.all['${q.id}']=this.checked"> Kitapta aynı görünen ${q.count-1} yere de uygula</label>`:''}
+    <div class="ck-foot">${q.count>1&&q.type!=='tekrar'?`<label><input type="checkbox" id="ck-all" ${all?'checked':''} onchange="CK.all['${q.id}']=this.checked"> ${ckAllText(q)}</label>`:''}
+      ${q.parts?`<button class="skip" onclick="ckGroup('${q.id}',true)">Tek tek sor</button>`:q.group?`<button class="skip" onclick="ckGroup('${q.group}',false)">Tek soruda topla</button>`:''}
       <button class="skip" onclick="ckSkip()">Atla</button><span>Seçince sonraki soruya geçer</span></div>`;
   const els=ckSegsOf(q).map(i=>$('ck-s'+i)).filter(Boolean);
   els.forEach(el=>el.classList.add('hl'));
@@ -1368,6 +1374,13 @@ function ckAnswer(key){
   CK.answers[q.id]={key,all:q.type==='tekrar'||CK.all[q.id]!==false};
   CK.other=false; ckSave(); ckMove(1);
 }
+// a group asked one by one, or as one again; the answers of the other form go, the card stays where it was
+function ckGroup(id,open){
+  const g=((CK.data&&CK.data.questions)||[]).find(q=>q.id===id); if(!g||!g.parts) return;
+  if(open){ CK.open.add(id); delete CK.answers[id]; } else { CK.open.delete(id); g.parts.forEach(x=>delete CK.answers[x.id]); }
+  CK.i=Math.max(0,ckQs().findIndex(q=>q.id===(open?g.parts[0].id:id)));
+  CK.other=false; ckSave(); ckShow();
+}
 function ckSkip(){ CK.other=false; ckMove(1); }
 function ckToggleOther(){ CK.other=!CK.other; ckShow(false); }
 function ckMove(d){
@@ -1376,7 +1389,7 @@ function ckMove(d){
 }
 // answers and edits go to the server one save at a time; the reading view follows the latest render
 function ckSave(){
-  const body=JSON.stringify({answers:CK.answers,edits:CK.edits}), pid=CK.info.pid;
+  const body=JSON.stringify({answers:CK.answers,edits:CK.edits,open:[...CK.open]}), pid=CK.info.pid;
   CK.chain=CK.chain.then(async()=>{
     try{
       const res=await fetch('/import/'+encodeURIComponent(pid)+'/answers',{method:'POST',headers:{'Content-Type':'application/json'},body});

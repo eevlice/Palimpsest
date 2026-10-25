@@ -26,6 +26,11 @@ ALTERNATIVES = {"epigraf": ["gövde", "alıntı"], "alıntı": ["gövde", "şiir
                 "atıf": ["gövde", "epigraf"], "kutu": ["gövde", "alıntı"], "kutu-başlık": ["gövde", "bölüm"],
                 "altyazı": ["gövde", "sil"], "gövde": ["alıntı", "sil"], "bölüm": ["gövde", "sil"],
                 "kısım": ["gövde", "sil"], "alt başlık 1": ["gövde", "sil"], "alt başlık 2": ["gövde", "sil"]}
+# an attribution under a quote, an epigraph or praise text is asked with it; it stays an attribution when the text
+# becomes one of these, else it takes the text's role
+ATTRIBUTED = ("alıntı", "epigraf", "şiir", "gövde")
+KEEPS_ATTRIBUTION = ("alıntı", "epigraf", "şiir")
+DASH = re.compile(r"[—–―-]")
 SHAPE = {"indent", "indent-right", "narrow", "centered", "right", "ragged", "italic-block", "smaller", "font", "hanging"}
 TITLES = {"rol": "İşaretli yazı ne?", "stil": "İşaretli yazı ne?", "baslik": "Bu başlık içindekilerde yok. Ne olsun?",
           "atif": "Bu atıf rakamının notu bulunamadı. Ne olsun?", "not": "Bu notun atfı bulunamadı. Ne olsun?",
@@ -48,7 +53,11 @@ def _filename_like(t):
     return bool(re.fullmatch(r"[A-Za-z]+[A-Z][A-Za-z]*\d+|[\w-]+\.(?:indd|pdf|doc)", t.strip()))
 
 
-def _role_choices(guess):
+def _role_choices(guess, attributed=False):
+    if attributed:                                  # a text and its attribution: quote first (praise pages too)
+        keys = ["alıntı", "epigraf", "gövde"]
+        keys = keys if guess in keys else [guess] + keys[:2]
+        return [{"key": "role:" + r, "label": ROLE_LABEL[r] + (" (şimdiki)" if r == guess else "")} for r in keys]
     keys = [guess] + [r for r in ALTERNATIVES.get(guess, ["gövde", "sil"]) if r != guess]
     return [{"key": "role:" + r, "label": ROLE_LABEL[r] + (" (şimdiki)" if r == guess else "")} for r in keys[:3]]
 
@@ -74,8 +83,11 @@ def questions(state, rendered):
     # 1. named roles set with low or middling confidence, captions joined by look alone; 2. blocks flagged for review.
     # Asked per unit, the importer's seg_meta "unit" (a multi-paragraph epigraph, quote, poem or box; any other
     # segment is a unit of its own): one shaky part makes the whole unit asked, a sure part gets no exemption. An
-    # attribution closing a unit keeps its own role. A note that found its callout is never asked.
-    for unit in _units(d, rendered["meta"], first, last, _segments(rendered.get("md", ""))):
+    # attribution closing a unit is asked with it, by the text's role. A note that found its callout is never asked.
+    for unit, attr in _units(d, rendered["meta"], first, last, _segments(rendered.get("md", ""))):
+        attr = set(attr) | {b["bid"] for p, b in unit if b["role"] == "atıf"}
+        text = [(p, b) for p, b in unit if b["bid"] not in attr]
+        attr = [b["bid"] for p, b in unit if b["bid"] in attr] if text else []
         reason = None
         for p, b in unit:
             role, flags = b["role"], set(b.get("flags") or ())
@@ -88,10 +100,14 @@ def questions(state, rendered):
         if reason is None:
             continue
         qtype, p, b = reason
+        if attr:
+            p, b = text[0]
         role = b["role"]
         shape = tuple(sorted(set(b.get("flags") or ()) & SHAPE))
         q = add((qtype, role, b["style"], shape), qtype, p, b, "role:" + role,
-                target=[x["bid"] for _, x in unit], choices=_role_choices(role))
+                target=[x["bid"] for _, x in unit], choices=_role_choices(role, attributed=bool(attr)))
+        if attr:
+            q.setdefault("attr", []).extend(attr)
         if len(q["targets"]) == 1:                   # the shown unit: every one of its boxes, every block
             q["boxes"] = [_box(pp, x) for pp, x in unit]
             q["bids"] = [x["bid"] for _, x in unit]
@@ -213,12 +229,18 @@ def questions(state, rendered):
         q.setdefault("bid", t["bid"] if isinstance(t, dict) else t if isinstance(t, str) else None)
         q.setdefault("bids", [q["bid"]] if q["bid"] else [])
         q["id"] = "n:" + q["bid"] if q["type"] == "bagla" else "q%d" % k     # asked after an answer: a stable id
+        for j, x in enumerate(q.get("parts", []), 1):    # "Tek tek sor": the questions the group was made of
+            x["count"] = len(x["targets"])
+            t = x["targets"][0]
+            x["bid"] = t[0] if isinstance(t, list) else t
+            x["bids"] = x.get("bids") or [x["bid"]]
+            x["id"] = "%s.%d" % (q["id"], j)
     return out
 
 
 def _regions(qs, d, blocks):
     """Role and style questions asked as one where one answer would do: a block the contents question already asks
-    about is not asked again; questions in one chapter at most T["q_region_gap"] pages apart, on one page or at one
+    about is not asked again; questions on one page, or in one chapter at most T["q_region_gap"] pages apart at one
     text size (a reference list, a table, a page of figure text), are one; then, anywhere in the book, short lines of
     one style, and questions of one style the importer gave one role. A group whose blocks have different roles now
     keeps them unless answered ("Olduğu gibi kalsın")."""
@@ -238,8 +260,8 @@ def _regions(qs, d, blocks):
     runs = []
     for q in sorted(asked, key=lambda q: (q["page"], chapter.get(q["bids"][0], 0))):
         last = runs[-1][-1] if runs else None
-        if last and chapter.get(q["bids"][0]) == chapter.get(last["bids"][0]) and q["page"] - last["page"] <= P.T["q_region_gap"] and (
-                q["page"] == last["page"] or shown(q).get("size") == shown(last).get("size")):
+        if last and (q["page"] == last["page"] or chapter.get(q["bids"][0]) == chapter.get(last["bids"][0])
+                     and q["page"] - last["page"] <= P.T["q_region_gap"] and shown(q).get("size") == shown(last).get("size")):
             runs[-1].append(q)
         else:
             runs.append([q])
@@ -251,24 +273,27 @@ def _regions(qs, d, blocks):
         elif all(shown(q).get("style") == b.get("style") and q["guess"] == run[0]["guess"] for q in run):
             by_style.setdefault((b.get("style"), run[0]["guess"]), []).extend(run)
         else:
-            keep.append(_one(run, blocks))
-    keep += [_one(run, blocks) for run in by_style.values()]
+            keep.append(_one(run, blocks, "bolge"))
+    keep += [_one(run, blocks, "kitap") for run in by_style.values()]
     return keep
 
 
-def _one(run, blocks):
-    """questions as one: every target, the first one shown; its current role when they share it"""
+def _one(run, blocks, scope):
+    """questions as one: every target, the first one shown; its current role when they share it. scope: "bolge"
+    (one stretch of pages, named in pages) or "kitap" (look-alikes across the book); parts: the questions it was
+    made of, to be asked one by one again"""
     if len(run) == 1:
         return run[0]
-    q = dict(run[0], targets=[t for x in run for t in x["targets"]])
+    q = dict(run[0], targets=[t for x in run for t in x["targets"]], scope=scope, parts=[dict(x) for x in run])
+    if any(x.get("attr") for x in run):
+        q["attr"] = [t for x in run for t in x.get("attr", [])]
     q["boxes"] = [b for x in run if x["page"] == q["page"] for b in x["boxes"]]
     guesses = collections.Counter(x["guess"] for x in run)
     if len(guesses) > 1:
         q["type"], q["guess"] = "rol", "none"
         q["choices"] = [{"key": "none", "label": "Olduğu gibi kalsın (şimdiki)"}] + [
             {"key": g, "label": ROLE_LABEL[g[5:]]} for g, _ in guesses.most_common(2)]
-    pages = sorted({blocks[t][0]["p"] for u in q["targets"] for t in u if t in blocks})
-    q["detail"] = f"s. {P._fmt_pages(pages)}"
+    q["pages"] = P._fmt_pages(sorted({blocks[t][0]["p"] for u in q["targets"] for t in u if t in blocks}))
     return q
 
 
@@ -312,12 +337,28 @@ def _note_like(d, blocks, o, first, last):
     return out
 
 
+def _attribution(above, blocks):
+    """a segment that reads as the source line of the text right above it (praise, a quote, an epigraph): short
+    (T["q_attr_words"]), not ending like a sentence, and set apart from that text: a leading dash, another
+    alignment or indent, or another style (size, italic, small capitals)"""
+    t = " ".join(b["text"] for _, b in blocks).replace("*", "").strip()
+    if not t or len(t.split()) > P.T["q_attr_words"] or re.search(r"[.?!…][\s\"'”’»)\]]*$", t):
+        return False
+    b = blocks[0][1]
+    align = lambda x: set(x.get("flags") or ()) & {"right", "centered", "indent"}
+    return bool(DASH.match(t) or align(b) != align(above) or abs(b["x0"] - above["x0"]) > 0.5 * b.get("size", 10)
+                or b.get("style") != above.get("style"))
+
+
 def _units(d, meta, first, last, segs=None):
-    """[(page, block)] per unit: the blocks of consecutive segments sharing seg_meta "unit" (one definition, the
-    importer's), or of one segment; an attribution is a unit of its own (its role is not the unit's); blocks the
-    questions never ask about are left out, and so are notes that found their callout ("[^label]: ...")"""
+    """[([(page, block)], [attribution block id])] per unit: the blocks of consecutive segments sharing seg_meta
+    "unit" (one definition, the importer's), or of one segment; a segment that reads as an attribution (_attribution,
+    the importer's own "atıf" included) goes with the unit right above it when that is a quote, an epigraph, verse or
+    body text (praise) on the same or the page before, unless it opens a unit of its own; an "atıf" that does not
+    read as one is a unit of its own;
+    blocks the questions never ask about are left out, and so are notes that found their callout ("[^label]: ...")"""
     where = {b.get("bid"): (p, b) for p in d.pages for b in p["blocks"]}
-    out, prev = [], None
+    out, attr, prev, last_i, attr_u = [], {}, None, None, None
     for i, m in enumerate(meta):
         if not first <= m["pages"][0] <= last if m.get("pages") else True:
             prev = None
@@ -328,16 +369,31 @@ def _units(d, meta, first, last, segs=None):
         u = m.get("unit")
         blocks = [where[x] for x in d.seg_bids[i] if x in where
                   and where[x][1]["role"] not in ("sil", "ön sayfa", "dizin", "dipnot")]
-        if blocks and all(bb["role"] == "atıf" for _, bb in blocks):
-            out.append(blocks)                      # an attribution is asked on its own, never with its unit
-            prev = None
+        joined = u and u == prev
+        # the line read as an attribution; one that opens a unit of the importer's only with a dash (a source set
+        # over several lines goes with it whole; "...this road:" opening an epigraph does not)
+        if blocks and (joined and u == attr_u or not joined and out and last_i == i - 1 and out[-1][0][1]["role"] in ATTRIBUTED
+                       and all(bb["role"] in ATTRIBUTED + ("atıf", "altyazı") for _, bb in blocks)
+                       and blocks[0][0]["p"] - out[-1][-1][0]["p"] <= 1 and _attribution(out[-1][-1][1], blocks)
+                       and (not u or DASH.match(blocks[0][1]["text"].replace("*", "").lstrip()))):
+            attr.setdefault(len(out) - 1, []).extend(b["bid"] for _, b in blocks)
+            out[-1].extend(blocks)
+            prev, last_i, attr_u = u, i, u
             continue
-        if u and u == prev:
+        if blocks and all(bb["role"] == "atıf" for _, bb in blocks) and (
+                not joined or not _attribution(out[-1][-1][1], blocks)):
+            out.append(blocks)                      # no text above it to go with, or it does not read as a source
+            prev, last_i, attr_u = None, i, None
+            continue
+        if joined:
             out[-1].extend(blocks)
         elif blocks:
             out.append(blocks)
+            attr_u = None
         prev = u
-    return [x for x in out if x]
+        if blocks:
+            last_i = i
+    return [(x, attr.get(k, [])) for k, x in enumerate(out) if x]
 
 
 def _repeats(d, pages, seg_of):
@@ -412,7 +468,8 @@ def decisions_for(q, key, apply_all=True):
     targets = q["targets"] if apply_all else q["targets"][:1]
     targets = [b for t in targets for b in (t if isinstance(t, list) else [t])]     # units: all their blocks
     if key.startswith("role:"):
-        return [{"bid": t, "role": key[5:]} for t in targets]
+        r, attr = key[5:], set(q.get("attr") or ())
+        return [{"bid": t, "role": "atıf" if t in attr and r in KEEPS_ATTRIBUTION else r} for t in targets]
     if key == "link":                                  # "Evet": the block is the callout's footnote
         return [{"bid": q["bid"], "role": "dipnot", "ref": q["ref"]}]
     if key.startswith("ref:"):

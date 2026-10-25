@@ -83,12 +83,16 @@ check("questions: one of every kind (role, review flag, unlisted heading, unmatc
 flat = lambda q: [b for t in q["targets"] for b in (t if isinstance(t, list) else [t])]
 check("a role set with confidence 0.8+ is not asked on its own", not any("1.3" in flat(q) for q in by["rol"]), by["rol"])
 callout = next((q for q in by["rol"] if "5.2" in flat(q)), {})
-check("unit: the segments of one seg_meta unit are one question (the sure part goes with the shaky one, not the attribution)",
-      callout.get("targets") == [["5.2", "5.3"]] and callout.get("count") == 1 and callout.get("bids") == ["5.2", "5.3"]
-      and len(callout.get("boxes", [])) == 2, callout)
-att = next((q for q in qs if "5.4" in flat(q)), None)
-check("unit: its attribution is not part of the unit's question", att is None or att["targets"] == [["5.4"]], att)
-check("unit: the answer goes to both blocks", R.decisions_for(callout, "role:gövde") == [{"bid": "5.2", "role": "gövde"}, {"bid": "5.3", "role": "gövde"}])
+check("unit: the segments of one seg_meta unit are one question, its attribution with them, all of it shown",
+      callout.get("targets") == [["5.2", "5.3", "5.4"]] and callout.get("count") == 1 and callout.get("bids") == ["5.2", "5.3", "5.4"]
+      and len(callout.get("boxes", [])) == 3 and callout.get("attr") == ["5.4"], callout)
+check("unit: its attribution is asked nowhere else", [q["id"] for q in qs if "5.4" in flat(q)] == [callout.get("id")])
+check("unit: Paragraf makes the text and its attribution paragraphs",
+      R.decisions_for(callout, "role:gövde") == [{"bid": x, "role": "gövde"} for x in ("5.2", "5.3", "5.4")])
+check("unit: Epigraf keeps the attribution an attribution", R.decisions_for(callout, "role:epigraf")
+      == [{"bid": "5.2", "role": "epigraf"}, {"bid": "5.3", "role": "epigraf"}, {"bid": "5.4", "role": "atıf"}])
+check("unit: a text with its attribution is offered Alıntı / Epigraf / Paragraf",
+      [c["key"] for c in callout.get("choices", [])] == ["role:alıntı", "role:epigraf", "role:gövde"], callout.get("choices"))
 check("the same style signature is one question (two odd blocks, count 2)", len(by["stil"]) == 1 and by["stil"][0]["count"] == 2,
       by["stil"])
 check("a heading the bookmarks list is not asked; one they do not list is", [q["targets"] for q in by["baslik"]] == [["3.3"]],
@@ -116,27 +120,63 @@ for p, style in ((2, "Ref|8"), (3, "RefI|8"), (5, "Ref|8")):        # a referenc
                                       size=8, nwords=6, top=200))
 pages[2]["blocks"].append(blk("3.2", "alıntı", "Ref|8", "A synthetic quoted line in the list.", conf=0.6, size=8, nwords=7, top=300))
 for p, shape in ((7, "centered"), (12, "right")):                   # one short line style in two chapters, set two ways
-    pages[p - 1]["blocks"].append(blk(f"{p}.1", "alıntı", "Lbl|9", "A short line", conf=0.6, size=9, nwords=3, flags=[shape], top=400))
+    pages[p - 1]["blocks"].append(blk(f"{p}.1", "alıntı", "Lbl|9", "A short line.", conf=0.6, size=9, nwords=3, flags=[shape], top=400))
+pages[8]["blocks"].append(blk("9.1", "alıntı", "Body|11", "A synthetic word of praise.", conf=0.9, flags=["indent"], size=11, nwords=5, top=200))
+pages[8]["blocks"].append(blk("9.2", "atıf", "Body|11", "— A. Synthetic Name", conf=0.6, flags=["right"], size=11, nwords=3, top=230))
 D = FakeDoc()
 D.pages, D.body_styles, D.index_pages = pages, {"Body|11"}, []
 D.seg_bids = [[b["bid"]] for p in pages for b in p["blocks"]]
 meta = [dict(pages=[int(bids[0].split(".")[0])], flags=[]) for bids in D.seg_bids]
 qs = R.questions(dict(doc=D, first=1, last=12, ctx=dict(outline=[])), dict(meta=meta))
+praise = [q for q in qs if {"9.1", "9.2"} & set(flat(q))]
+check("attribution: a quote and the attribution under it (two segments) are one question, highlighted together",
+      len(praise) == 1 and flat(praise[0]) == ["9.1", "9.2"] and praise[0]["bids"] == ["9.1", "9.2"] and praise[0]["guess"] == "role:alıntı", praise)
+check("attribution: Paragraf makes both paragraphs; Alıntı keeps the name line an attribution",
+      praise and R.decisions_for(praise[0], "role:gövde") == [{"bid": "9.1", "role": "gövde"}, {"bid": "9.2", "role": "gövde"}]
+      and R.decisions_for(praise[0], "role:alıntı") == [{"bid": "9.1", "role": "alıntı"}, {"bid": "9.2", "role": "atıf"}])
 ref = next((q for q in qs if "2.1" in flat(q)), {})
 check("grouping: a reference list in one chapter (pages a few apart, one size) is one question",
-      sorted(flat(ref)) == ["2.1", "3.1", "3.2", "5.1"] and ref.get("count") == 4 and ref.get("detail") == "s. 2–3, 5", ref)
+      sorted(flat(ref)) == ["2.1", "3.1", "3.2", "5.1"] and ref.get("count") == 4 and ref.get("scope") == "bolge"
+      and ref.get("pages") == "2–3, 5", ref)
 check("grouping: blocks with different roles now keep them unless answered", ref.get("guess") == "none" and
       ref.get("choices", [{}])[0] == {"key": "none", "label": "Olduğu gibi kalsın (şimdiki)"} and R.decisions_for(ref, "none") == [], ref)
 check("grouping: one answer goes to every block of the group",
       sorted(x["bid"] for x in R.decisions_for(ref, "role:gövde")) == ["2.1", "3.1", "3.2", "5.1"])
 lbl = next((q for q in qs if "7.1" in flat(q)), {})
 check("grouping: short lines of one style are one question across chapters", sorted(flat(lbl)) == ["12.1", "7.1"]
-      and lbl.get("guess") == "role:alıntı", lbl)
-check("grouping: two questions in all", len(qs) == 2, [q["type"] for q in qs])
+      and lbl.get("guess") == "role:alıntı" and lbl.get("scope") == "kitap", lbl)
+parts = ref.get("parts", [])
+check("grouping: a group keeps the questions it was made of, ids under its own",
+      [sorted(flat(x)) for x in parts] == [["2.1", "5.1"], ["3.1"], ["3.2"]] and [x["id"] for x in parts] == [ref["id"] + ".%d" % k for k in (1, 2, 3)]
+      and all(x["choices"] and x["count"] and x["bid"] for x in parts), parts)
+check("grouping: three questions in all", len(qs) == 3, [q["type"] for q in qs])
 asked_twice = [dict(type="icindekiler", targets=["5.1"], page=5, bids=["5.1"]),
                dict(type="stil", targets=[["5.1"]], page=5, bids=["5.1"], guess="role:gövde")]
 check("grouping: a block the contents question asks about is not asked again",
       [q["type"] for q in R._regions(asked_twice, D, {b["bid"]: (p, b) for p in pages for b in p["blocks"]})] == ["icindekiler"])
+
+# ---------------------------------------------------------------- A3. a line read as the attribution of the text above it
+def units_of(*pairs):
+    """one page: (text block, line block) pairs, each block a segment of its own -> {line bid: its unit's attributions}"""
+    bl = [b for pair in pairs for b in pair]
+    D3 = FakeDoc()
+    D3.pages, D3.body_styles, D3.index_pages = [dict(p=1, W=500, H=700, blocks=bl, two_col=False, items=[])], {"Body|11"}, []
+    D3.seg_bids = [[b["bid"]] for b in bl]
+    us = R._units(D3, [dict(pages=[1], flags=[]) for _ in bl], 1, 1)
+    return {line["bid"]: next(a for u, a in us if any(b["bid"] == line["bid"] for _, b in u)) for _, line in pairs}
+
+
+praise = blk("1.1", "gövde", "Body|11", "A synthetic book that reads like a long kind walk.", size=11, top=100)
+source = blk("1.2", "altyazı", "Body|11", "Synthetic Name, A Synthetic Review", flags=["right"], size=11, x0=200, top=130)
+quote = blk("1.3", "alıntı", "Body|11", "Another synthetic line of praise, warm and short.", flags=["indent"], size=11, top=200)
+dash = blk("1.4", "alıntı", "Body|11", "—Synthetic Person, a made-up title", flags=["indent"], size=11, top=230)
+said = blk("1.5", "alıntı", "Body|11", "So what do we do now?", flags=["indent"], size=11, top=300)
+asked = blk("1.6", "atıf", "Body|10", "Like our synthetic kettle?", size=10, top=330)
+got = units_of((praise, source), (quote, dash), (said, asked))
+check("attribution: praise text and its \"Name, Source\" line (set apart, no full stop) are one unit", got["1.2"] == ["1.2"], got)
+check("attribution: a line starting with a dash goes with the quote above it, whatever its role", got["1.4"] == ["1.4"], got)
+check("attribution: a line ending like a sentence (a question) is no attribution, even when the importer says so",
+      got["1.6"] == [], got)
 
 
 # ---------------------------------------------------------------- B. render with decisions, on a synthetic PDF
@@ -244,8 +284,16 @@ d4 = r.get_json()
 check("/setup from the review: its decisions are in the project, seg_meta aligned and noted",
       r.status_code == 200 and d4["segments"] == d2["segments"] and len(d4["segMeta"]) == len(d4["segments"])
       and "kullanici:epigraf" in d4["segMeta"][i_join]["flags"] and d4["pdfKept"], (r.status_code, d4.get("error")))
+group = dict(id="q7", type="rol", targets=[["a"], ["b"]], parts=[dict(id="q7.1", type="rol", targets=[["a"]]),
+                                                                  dict(id="q7.2", type="rol", targets=[["b"]])])
+rv = dict(questions=[group], answers={"q7": {"key": "role:gövde"}, "q7.2": {"key": "role:alıntı"}}, edits=[])
+check("a group answers as a whole while closed", server._decisions(rv) == [{"bid": "a", "role": "gövde"}, {"bid": "b", "role": "gövde"}])
+check("...and through its parts once opened (\"Tek tek sor\"): an unanswered part stays as it is",
+      server._decisions(dict(rv, open=["q7"])) == [{"bid": "b", "role": "alıntı"}])
+c.post("/import/p_rev/answers", json={"answers": {}, "edits": [], "open": ["q1"]})
+check("the opened groups are saved with the review", c.get("/import/p_rev").get_json().get("open") == ["q1"])
 c.post("/import/p_rev/answers", json={"answers": {}, "edits": []})
-d5 = c.post("/setup", data={"import_id": "p_rev", "project_id": "p_rev", "model": "anthropic::claude-opus-5-5", "name": "deneme"},
+d5 =c.post("/setup", data={"import_id": "p_rev", "project_id": "p_rev", "model": "anthropic::claude-opus-5-5", "name": "deneme"},
             content_type="multipart/form-data").get_json()
 check("unanswered: the importer's own reading goes on (same as without a review)", d5["segments"] == server.segment(md0)[0])
 c.post("/save", json={"id": "p_rev", "name": "deneme", "segments": d5["segments"]})
