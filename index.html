@@ -521,7 +521,110 @@
   .seg-effort:not(.open) .ef{display:none;}
   .seg-effort:not(.open) .ef.on{display:inline-flex;border-right:none;}
   .seg-effort:not(.open):not([data-value="off"]){background:var(--paper-deep);color:var(--ink);}
+
+  /* ---- review screen ("kontrol"): after a PDF import, before the paid context pass. Full window, its own top row. ---- */
+  #check{--ck-bg:#F2ECE0;--ck-ink:#232220;--ck-soft:#6F695C;--ck-rule:#D8CFBD;--ck-hi:#A0412D;--ck-hl:rgba(160,65,45,.14);
+    position:fixed;inset:0;z-index:40;display:flex;flex-direction:column;background:var(--ck-bg);color:var(--ck-ink);
+    font:400 15px/1.45 'Sofia Sans Condensed','Arial Narrow',sans-serif;}
+  #check.hidden{display:none;}
+  body.check-open{overflow:hidden;}
+  .ck-top{display:flex;align-items:center;gap:16px;padding:12px 22px;border-bottom:1px solid var(--ck-rule);}
+  .ck-logo{font:400 26px/1 'Instrument Serif',Georgia,serif;white-space:nowrap;}
+  .ck-logo .m{color:var(--ck-hi);}
+  .ck-book{font-weight:600;font-size:17px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;max-width:28ch;}
+  .ck-state{flex:1;min-width:0;color:var(--ck-soft);font-size:15px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;}
+  .ck-state b{color:var(--ck-ink);font-weight:600;}
+  .ck-btn{font:600 14px/1 'Sofia Sans Condensed','Arial Narrow',sans-serif;letter-spacing:.05em;text-transform:uppercase;
+    border:1px solid var(--ck-ink);background:none;color:var(--ck-ink);padding:10px 16px;cursor:pointer;white-space:nowrap;}
+  .ck-btn:hover{border-color:var(--ck-hi);color:var(--ck-hi);}
+  .ck-btn.primary{background:var(--ck-ink);color:var(--ck-bg);}
+  .ck-btn.primary:hover{background:var(--ck-hi);border-color:var(--ck-hi);color:var(--ck-bg);}
+  .ck-body{flex:1;min-height:0;display:grid;grid-template-columns:minmax(0,1fr) minmax(0,1fr);}
+  .ck-left{min-height:0;display:flex;flex-direction:column;border-right:1px solid var(--ck-rule);}
+  .ck-page{flex:1;min-height:0;overflow:auto;padding:18px;display:flex;justify-content:center;align-items:flex-start;}
+  .ck-img{position:relative;width:100%;max-width:640px;}
+  .ck-img img{display:block;width:100%;height:auto;background:#fff;box-shadow:0 0 0 1px var(--ck-rule);}
+  .ck-box{position:absolute;background:var(--ck-hl);pointer-events:none;}
+  .ck-nav{display:flex;justify-content:center;align-items:center;gap:16px;padding:8px;border-top:1px solid var(--ck-rule);
+    color:var(--ck-soft);font-size:15px;font-variant-numeric:tabular-nums;}
+  .ck-nav button{border:none;background:none;color:var(--ck-ink);font-size:20px;line-height:1;cursor:pointer;padding:2px 8px;}
+  .ck-nav button:disabled{color:var(--ck-rule);cursor:default;}
+  .ck-right{min-height:0;display:flex;flex-direction:column;}
+  .ck-read{flex:1;min-height:0;overflow:auto;padding:22px 40px 22px 34px;font-family:'Newsreader',Georgia,serif;font-size:17px;line-height:1.6;}
+  .ck-seg{position:relative;padding:3px 10px;margin:0 -10px 10px;}
+  .ck-seg.hl{background:var(--ck-hl);}
+  .ck-seg h2,.ck-seg h3,.ck-seg h4{font-family:'Instrument Serif',Georgia,serif;font-weight:400;margin:14px 0 4px;line-height:1.2;}
+  .ck-seg h2{font-size:28px;} .ck-seg h3{font-size:23px;} .ck-seg h4{font-size:20px;}
+  .ck-seg p{margin:0;}
+  .ck-seg .epi{font-style:italic;margin-left:3em;max-width:40ch;}
+  .ck-seg .attr{text-align:right;font-size:15px;}
+  .ck-seg .quote{margin-left:2em;}
+  .ck-seg .verse{margin-left:2em;white-space:pre-line;}
+  .ck-seg .box{border-left:2px solid var(--ck-rule);padding-left:12px;}
+  .ck-seg .cap{font-size:14px;color:var(--ck-soft);}
+  .ck-seg .fn{font-size:14px;color:var(--ck-soft);}
+  .ck-seg .fn b{font-family:'Sofia Sans Condensed',sans-serif;font-weight:600;margin-right:6px;}
+  .ck-seg .ph{font:400 14px 'Sofia Sans Condensed',sans-serif;color:var(--ck-soft);border:1px dashed var(--ck-rule);padding:6px 10px;}
+  .ck-seg sup{font-size:13px;color:var(--ck-hi);}
+  .ck-more{position:absolute;top:0;right:-30px;width:24px;height:24px;border:none;background:none;color:var(--ck-soft);
+    font:600 18px/1 'Sofia Sans Condensed',sans-serif;cursor:pointer;visibility:hidden;}
+  .ck-seg:hover .ck-more,.ck-more.open{visibility:visible;}
+  .ck-menu{position:absolute;right:-30px;top:26px;z-index:2;background:var(--ck-bg);border:1px solid var(--ck-ink);
+    font:400 15px 'Sofia Sans Condensed',sans-serif;min-width:190px;}
+  .ck-menu button,.ck-lines button{display:block;width:100%;text-align:left;border:none;background:none;color:var(--ck-ink);
+    font:inherit;padding:8px 12px;cursor:pointer;}
+  .ck-menu button:hover,.ck-lines button:hover{background:var(--ck-hl);}
+  .ck-lines{margin:6px 0 0;border:1px solid var(--ck-rule);font:400 15px 'Sofia Sans Condensed',sans-serif;background:var(--ck-bg);}
+  .ck-lines .t{color:var(--ck-soft);padding:6px 12px;font-size:14px;}
+  .ck-card{border-top:1px solid var(--ck-rule);padding:16px 26px 14px;}
+  .ck-qn{font-size:14px;font-weight:600;letter-spacing:.06em;text-transform:uppercase;color:var(--ck-soft);font-variant-numeric:tabular-nums;}
+  .ck-qt{font:400 25px/1.2 'Instrument Serif',Georgia,serif;margin:4px 0 2px;}
+  .ck-detail{color:var(--ck-soft);font-size:15px;}
+  .ck-choices{display:flex;flex-wrap:wrap;gap:8px;margin:12px 0 10px;}
+  .ck-choice{font:600 17px/1.2 'Sofia Sans Condensed','Arial Narrow',sans-serif;border:1px solid var(--ck-ink);background:none;
+    color:var(--ck-ink);padding:12px 16px;min-width:150px;text-align:left;cursor:pointer;}
+  .ck-choice .k{font-weight:400;color:var(--ck-soft);margin-right:10px;}
+  .ck-choice:hover{border-color:var(--ck-hi);}
+  .ck-choice.on{background:var(--ck-ink);color:var(--ck-bg);}
+  .ck-choice.on .k{color:var(--ck-bg);}
+  .ck-other{display:flex;flex-wrap:wrap;gap:6px;margin:0 0 10px;}
+  .ck-other button{font:400 15px 'Sofia Sans Condensed',sans-serif;border:1px solid var(--ck-rule);background:none;color:var(--ck-ink);
+    padding:7px 12px;cursor:pointer;}
+  .ck-other button:hover{border-color:var(--ck-ink);}
+  .ck-foot{display:flex;flex-wrap:wrap;gap:6px 20px;align-items:center;color:var(--ck-soft);font-size:14px;}
+  .ck-foot label{font:400 15px/1.3 'Sofia Sans Condensed','Arial Narrow',sans-serif;text-transform:none;letter-spacing:0;color:var(--ck-ink);
+    display:inline-flex;gap:8px;align-items:center;margin:0;white-space:nowrap;}
+  .ck-foot input{width:auto;margin:0;padding:0;accent-color:var(--ck-ink);}
+  .ck-foot .skip{border:none;background:none;color:var(--ck-ink);text-decoration:underline;text-underline-offset:3px;font:inherit;cursor:pointer;padding:0;}
+  .ck-none{font:400 25px/1.2 'Instrument Serif',Georgia,serif;}
+  .ck-modal{position:fixed;inset:0;z-index:60;display:flex;align-items:center;justify-content:center;background:rgba(35,34,32,.25);}
+  .ck-modal.hidden{display:none;}
+  .ck-dialog{background:var(--ck-bg);border:1px solid var(--ck-ink);padding:22px 24px;max-width:420px;font-size:16px;}
+  .ck-dialog .row{display:flex;gap:10px;justify-content:flex-end;margin-top:18px;}
 </style>
+
+<!-- ========== REVIEW SCREEN (after a PDF import, before the paid context pass) ========== -->
+<section id="check" class="hidden" aria-label="Kontrol">
+  <div class="ck-top">
+    <span class="ck-logo"><span class="m">¶</span>Palimpsest</span>
+    <span class="ck-book" id="ck-book"></span>
+    <span class="ck-state" id="ck-state"></span>
+    <button class="ck-btn" id="ck-cancel">Vazgeç</button>
+    <button class="ck-btn primary" id="ck-go">Onayla ve başla</button>
+  </div>
+  <div class="ck-body">
+    <div class="ck-left">
+      <div class="ck-page" id="ck-page"><div class="ck-img" id="ck-img"><img id="ck-pimg" alt=""></div></div>
+      <div class="ck-nav"><button id="ck-prev" aria-label="Önceki sayfa">‹</button><span id="ck-pno"></span><button id="ck-next" aria-label="Sonraki sayfa">›</button></div>
+    </div>
+    <div class="ck-right">
+      <div class="ck-read" id="ck-read"></div>
+      <div class="ck-card" id="ck-card"></div>
+    </div>
+  </div>
+  <div class="ck-modal hidden" id="ck-modal"><div class="ck-dialog"><div id="ck-modal-text"></div>
+    <div class="row"><button class="ck-btn" id="ck-modal-no">Vazgeç</button><button class="ck-btn primary" id="ck-modal-yes">Devam</button></div></div></div>
+</section>
 
 <div class="wrap">
   <header>
@@ -1053,21 +1156,38 @@ function pickFile(){
 $('analyze').onclick=async()=>{
   if(!fileObj)return;
   const name=$('pname').value.trim()||fileObj.name.replace(/\.[^.]+$/,'');
+  const info={pid:'p_'+Date.now(),name,source_lang:$('src').value,target_lang:$('tgt').value,model:$('model').value||defaultModel()};
   $('analyze').disabled=true;$('setup-err').innerHTML='';
-  $('setup-status').innerHTML='<span class="loading">Reading the whole book</span>';
-  const pid='p_'+Date.now();            // known before /setup: the server keeps the PDF under this id
   const fd=new FormData();
-  fd.append('file',fileObj);fd.append('source_lang',$('src').value);fd.append('project_id',pid);
-  fd.append('target_lang',$('tgt').value);fd.append('model',$('model').value);
-  fd.append('name',name);
-  if(/\.pdf$/i.test(fileObj.name)){fd.append('first_page',$('pdf-first').value.trim());fd.append('last_page',$('pdf-last').value.trim());}
+  fd.append('file',fileObj);fd.append('project_id',info.pid);fd.append('name',name);
+  if(/\.pdf$/i.test(fileObj.name)){
+    // a PDF: the free reading first, then the review screen; the paid context pass starts from there
+    fd.append('first_page',$('pdf-first').value.trim());fd.append('last_page',$('pdf-last').value.trim());
+    $('setup-status').innerHTML='<span class="loading">PDF okunuyor</span>';
+    try{
+      const res=await fetch('/import',{method:'POST',body:fd});
+      const data=await res.json();
+      $('analyze').disabled=false;$('setup-status').textContent='';
+      if(!res.ok){$('setup-err').innerHTML=`<div class="err">${esc(data.error)}</div>`;return;}
+      ckOpen(data,info);
+    }catch(e){$('setup-err').innerHTML=`<div class="err">Server unreachable.</div>`;
+      $('analyze').disabled=false;$('setup-status').textContent='';}
+    return;
+  }
+  fd.append('source_lang',info.source_lang);fd.append('target_lang',info.target_lang);fd.append('model',info.model);
+  $('setup-status').innerHTML='<span class="loading">Reading the whole book</span>';
+  runSetup(fd,info);
+};
+// the paid context pass (/setup), then the context review; from a file, or from a reviewed PDF import
+async function runSetup(fd,info){
+  const {pid,name}=info;
   try{
     const res=await fetch('/setup',{method:'POST',body:fd});
     const data=await res.json();
     if(!res.ok){$('setup-err').innerHTML=`<div class="err">${esc(data.error)}</div>`;
-      $('analyze').disabled=false;$('setup-status').textContent='';return;}
-    P={id:pid,name,source_lang:$('src').value,target_lang:$('tgt').value,
-      model:($('model').value||defaultModel()),segments:data.segments,
+      $('analyze').disabled=false;$('setup-status').textContent='';return false;}
+    P={id:pid,name,source_lang:info.source_lang,target_lang:info.target_lang,
+      model:(info.model||defaultModel()),segments:data.segments,
       finals:new Array(data.segments.length).fill(null),
       approved:new Array(data.segments.length).fill(false),
       synopsis:data.synopsis,terms:data.terms,rules:'',style:'',cost:0,segEffort:{}};
@@ -1083,9 +1203,10 @@ $('analyze').onclick=async()=>{
     $('review-scan').textContent=scanW||'';$('review-scan').classList.toggle('hidden',!scanW);
     $('review-warn').innerHTML=[...(data.warnings||[]).filter(w=>w!==scanW),...termNote].map(w=>linkifyPages(esc(w))).join('\n');
     showScreen('review');
+    return true;
   }catch(e){$('setup-err').innerHTML=`<div class="err">Server unreachable.</div>`;
-    $('analyze').disabled=false;$('setup-status').textContent='';}
-};
+    $('analyze').disabled=false;$('setup-status').textContent='';return false;}
+}
 
 $('start').onclick=()=>{
   P.synopsis=$('synopsis').value;P.terms=$('terms').value;
@@ -1095,11 +1216,206 @@ $('start').onclick=()=>{
 };
 
 // ================================================================
+// REVIEW SCREEN ("kontrol"): the importer's open questions, after /import (free) and before /setup (paid).
+// Answers and edits (join / split / drop) are saved with the pending import, so a reload keeps them.
+// ================================================================
+const CK={info:null,data:null,i:0,page:1,answers:{},edits:[],all:{},other:false,chain:Promise.resolve()};
+const CK_KEY='palimpsest.pendingImport';
+function ckOpen(data,info){
+  CK.info=info;CK.data=data;CK.answers=data.answers||{};CK.edits=data.edits||[];CK.all={};CK.other=false;
+  try{localStorage.setItem(CK_KEY,JSON.stringify(info));}catch(e){}
+  CK.i=Math.max(0,(data.questions||[]).findIndex(q=>!CK.answers[q.id]));
+  showScreen('check');
+  ckRead();ckShow();
+}
+const ckQs=()=>(CK.data&&CK.data.questions)||[];
+const ckOpenCount=()=>ckQs().filter(q=>!CK.answers[q.id]).length;
+function ckTop(){
+  $('ck-book').textContent=CK.info.name||'';
+  const n=ckOpenCount(),total=ckQs().length;
+  $('ck-state').innerHTML=esc(CK.data.integrity.sentence)+' · '+
+    (!total?'Hiç soru yok':n?`<b>${n} yer senin kararını bekliyor</b>`:'Bütün sorular cevaplandı');
+}
+// the segments a question shows: the ones its blocks are in now (a unit may be several; answers and edits move them)
+function ckSegsOf(q){
+  if(!q) return [];
+  const bids=CK.data.segBids||[], want=q.bids&&q.bids.length?q.bids:(q.bid?[q.bid]:[]);
+  const out=bids.map((b,i)=>b&&b.some(x=>want.includes(x))?i:-1).filter(i=>i>=0);
+  return out.length?out:(q.seg==null?[]:[q.seg]);
+}
+function ckSegHTML(s,i){
+  const t=segType(s), body=s.slice(segMarkerLen(s),s.length-segTailLen(s)).trim();
+  const inl=x=>mdInline(x).replace(/\[\^([^\]\s]+)\]/g,(m,l)=>`<sup>${esc(fnNumber(l))}</sup>`);
+  const lines=x=>inl(x.replace(/\\\n/g,'\n'));
+  let h;
+  switch(t.type){
+    case 'heading': { const n=Math.min(4,t.level+1); h=`<h${n}>${inl(body)}</h${n}>`; break; }
+    case 'epigraph': h=`<p class="epi">${lines(body)}</p>`; break;
+    case 'attribution': h=`<p class="attr">${inl(body)}</p>`; break;
+    case 'blockquote': h=`<p class="quote">${inl(body)}</p>`; break;
+    case 'verse': h=`<p class="verse">${lines(body)}</p>`; break;
+    case 'box': h=`<p class="box">${inl(body)}</p>`; break;
+    case 'caption': h=`<p class="cap">${inl(body)}</p>`; break;
+    case 'footnote': h=`<p class="fn"><b>${esc(fnNumber(t.label))}</b>${inl(body)}</p>`; break;
+    case 'image': h=`<div class="ph">${esc(s.slice(2,s.indexOf(']')))}</div>`; break;
+    case 'table': h=tableHTML(s); break;
+    default: h=`<p>${inl(s)}</p>`;
+  }
+  return `<div class="ck-seg" id="ck-s${i}">${h}<button class="ck-more" title="Düzenle" onclick="ckMenu(event,${i})">…</button></div>`;
+}
+function ckRead(){ $('ck-read').innerHTML=(CK.data.segments||[]).map(ckSegHTML).join(''); }
+function ckShow(scroll=true){
+  ckTop();
+  const qs=ckQs(), q=qs[CK.i];
+  document.querySelectorAll('#ck-read .ck-seg.hl').forEach(el=>el.classList.remove('hl'));
+  if(!q){
+    $('ck-card').innerHTML='<div class="ck-none">Hiç soru yok</div><div class="ck-detail">İçe aktarıcı emin olmadığı bir yer bulmadı.</div>';
+    CK.page=CK.page||1; ckPage(); return;
+  }
+  const a=CK.answers[q.id], all=CK.all[q.id]!==false, main=q.choices.slice(0,3);
+  const otherOn=a&&!main.some(c=>c.key===a.key);
+  $('ck-card').innerHTML=`<div class="ck-qn">Soru ${CK.i+1} / ${qs.length}</div>
+    <div class="ck-qt">${esc(q.title)}</div>${q.detail?`<div class="ck-detail">${esc(q.detail)}</div>`:''}
+    <div class="ck-choices">${main.map((c,k)=>`<button class="ck-choice${a&&a.key===c.key?' on':''}" onclick="ckAnswer('${c.key}')"><span class="k">${k+1}</span>${esc(c.label)}</button>`).join('')}${
+      q.other&&q.other.length?`<button class="ck-choice${otherOn?' on':''}" onclick="ckToggleOther()"><span class="k">${main.length+1}</span>Başka…</button>`:''}</div>
+    ${CK.other?`<div class="ck-other">${q.other.map(c=>`<button onclick="ckAnswer('${c.key}')">${esc(c.label)}</button>`).join('')}</div>`:''}
+    <div class="ck-foot">${q.count>1&&q.type!=='tekrar'?`<label><input type="checkbox" id="ck-all" ${all?'checked':''} onchange="CK.all['${q.id}']=this.checked"> Kitapta aynı görünen ${q.count-1} yere de uygula</label>`:''}
+      <button class="skip" onclick="ckSkip()">Atla</button><span>Seçince sonraki soruya geçer</span></div>`;
+  const els=ckSegsOf(q).map(i=>$('ck-s'+i)).filter(Boolean);
+  els.forEach(el=>el.classList.add('hl'));
+  if(els.length&&scroll) els[0].scrollIntoView({block:'center'});
+  CK.page=q.page; ckPage();
+}
+function ckPage(){
+  const pid=CK.info.pid, n=CK.data.pages||1;
+  CK.page=Math.min(Math.max(1,CK.page),n);
+  $('ck-pno').textContent=`s. ${CK.page} / ${n}`;
+  $('ck-prev').disabled=CK.page<=1; $('ck-next').disabled=CK.page>=n;
+  const img=$('ck-pimg'), src=`/page_image?project=${encodeURIComponent(pid)}&page=${CK.page}&scale=1.6`;
+  if(img.getAttribute('src')!==src){ img.onload=ckBoxes; img.setAttribute('src',src); } else ckBoxes();
+}
+// the asked block on the page: the question's own boxes and the boxes of the segment it is in now
+function ckBoxes(){
+  document.querySelectorAll('#ck-img .ck-box').forEach(el=>el.remove());
+  const q=ckQs()[CK.i], img=$('ck-pimg'), size=(CK.data.pageSizes||{})[CK.page];
+  if(!q||!size||!img.clientWidth) return;
+  const metas=ckSegsOf(q).map(i=>(CK.data.segMeta||[])[i]).filter(Boolean);
+  const boxes=[...(q.boxes||[]),...metas.flatMap(m=>m.boxes||[])].filter(b=>b[0]===CK.page);
+  const k=img.clientWidth/size[0];
+  boxes.forEach(b=>{ const d=document.createElement('div'); d.className='ck-box';
+    Object.assign(d.style,{left:b[1]*k+'px',top:b[2]*k+'px',width:(b[3]-b[1])*k+'px',height:(b[4]-b[2])*k+'px'});
+    $('ck-img').appendChild(d); });
+}
+function ckAnswer(key){
+  const q=ckQs()[CK.i]; if(!q) return;
+  CK.answers[q.id]={key,all:q.type==='tekrar'||CK.all[q.id]!==false};
+  CK.other=false; ckSave(); ckMove(1);
+}
+function ckSkip(){ CK.other=false; ckMove(1); }
+function ckToggleOther(){ CK.other=!CK.other; ckShow(false); }
+function ckMove(d){
+  const n=ckQs().length; if(!n) return;
+  CK.i=Math.min(Math.max(0,CK.i+d),n-1); CK.other=false; ckShow();
+}
+// answers and edits go to the server one save at a time; the reading view follows the latest render
+function ckSave(){
+  const body=JSON.stringify({answers:CK.answers,edits:CK.edits}), pid=CK.info.pid;
+  CK.chain=CK.chain.then(async()=>{
+    try{
+      const res=await fetch('/import/'+encodeURIComponent(pid)+'/answers',{method:'POST',headers:{'Content-Type':'application/json'},body});
+      const data=await res.json();
+      if(!res.ok){ $('ck-state').textContent=data.error||'Kaydedilemedi'; return; }
+      CK.data=data; ckRead(); ckShow(false);
+    }catch(e){ $('ck-state').textContent='Sunucuya ulaşılamadı.'; }
+  });
+  return CK.chain;
+}
+function ckMenu(e,i){
+  e.stopPropagation();
+  document.querySelectorAll('.ck-menu,.ck-lines').forEach(el=>el.remove());
+  const bids=(CK.data.segBids||[])[i]||[]; if(!bids.length) return;
+  const m=document.createElement('div'); m.className='ck-menu';
+  m.innerHTML=`${i>0?'<button data-a="join">Öncekiyle birleştir</button>':''}<button data-a="split">Böl</button><button data-a="drop">Sil</button>`;
+  m.onclick=async ev=>{
+    const a=ev.target.dataset.a; if(!a) return; m.remove();
+    if(a==='join'){ CK.edits.push({bid:bids[0],join:true}); ckSave(); }
+    else if(a==='drop'){ bids.forEach(b=>CK.edits.push({bid:b,role:'sil'})); ckSave(); }
+    else ckSplit(i);
+  };
+  $('ck-s'+i).appendChild(m);
+}
+// "böl": the segment's lines; the new segment starts at the chosen one
+async function ckSplit(i){
+  const res=await fetch('/import/'+encodeURIComponent(CK.info.pid)+'/lines?seg='+i), data=await res.json();
+  const lines=(data.lines||[]).slice(1);
+  if(!lines.length) return;
+  const box=document.createElement('div'); box.className='ck-lines';
+  box.innerHTML='<div class="t">Yeni paragraf hangi satırla başlasın?</div>'+lines.map((l,k)=>`<button data-k="${k}">${esc(l.text.slice(0,90))}</button>`).join('');
+  box.onclick=ev=>{ const k=ev.target.dataset.k; if(k==null) return; const l=lines[+k];
+    box.remove(); CK.edits.push({bid:l.bid,split:l.line}); ckSave(); };
+  $('ck-s'+i).appendChild(box);
+}
+async function ckStart(){
+  $('ck-modal').classList.add('hidden');
+  await CK.chain;
+  const info=CK.info, fd=new FormData();
+  fd.append('import_id',info.pid);fd.append('project_id',info.pid);fd.append('name',info.name);
+  fd.append('source_lang',info.source_lang);fd.append('target_lang',info.target_lang);fd.append('model',info.model);
+  $('ck-go').disabled=true; $('ck-state').innerHTML='<span class="loading">Kitap okunuyor, bağlam oluşturuluyor</span>';
+  const ok=await runSetup(fd,info);
+  $('ck-go').disabled=false;
+  if(ok){ try{localStorage.removeItem(CK_KEY);}catch(e){} }
+  else { showScreen('check'); $('ck-state').textContent=$('setup-err').textContent||'Bağlam okunamadı.'; }
+}
+$('ck-go').onclick=()=>{
+  const n=ckOpenCount();
+  if(!n) return ckStart();
+  $('ck-modal-text').textContent=`${n} soru cevapsız, içe aktarıcının tahmini kullanılacak. Devam?`;
+  $('ck-modal').classList.remove('hidden'); $('ck-modal-yes').focus();
+};
+$('ck-modal-yes').onclick=ckStart;
+$('ck-modal-no').onclick=()=>$('ck-modal').classList.add('hidden');
+$('ck-cancel').onclick=()=>{ try{localStorage.removeItem(CK_KEY);}catch(e){} $('analyze').disabled=!fileObj; showScreen('home'); };
+$('ck-prev').onclick=()=>{ CK.page--; ckPage(); };
+$('ck-next').onclick=()=>{ CK.page++; ckPage(); };
+window.addEventListener('resize',()=>{ if(!$('check').classList.contains('hidden')) ckBoxes(); });
+document.addEventListener('click',()=>document.querySelectorAll('.ck-menu').forEach(el=>el.remove()));
+document.addEventListener('keydown',e=>{
+  if($('check').classList.contains('hidden')||e.target.matches('input,textarea,select')||e.metaKey||e.ctrlKey||e.altKey) return;
+  if(!$('ck-modal').classList.contains('hidden')){
+    if(e.key==='Escape') $('ck-modal').classList.add('hidden');
+    return;
+  }
+  const q=ckQs()[CK.i];
+  if(e.key==='ArrowRight'){ e.preventDefault(); ckMove(1); }
+  else if(e.key==='ArrowLeft'){ e.preventDefault(); ckMove(-1); }
+  else if(e.key==='s'||e.key==='S'){ e.preventDefault(); ckSkip(); }
+  else if(e.key==='Escape'&&CK.other){ CK.other=false; ckShow(false); }
+  else if(q&&/^[1-4]$/.test(e.key)){
+    const k=+e.key-1, main=q.choices.slice(0,3);
+    if(k<main.length) ckAnswer(main[k].key);
+    else if(k===main.length&&q.other&&q.other.length) ckToggleOther();
+  }
+});
+// a reload during the review opens it again where it was left
+(async()=>{
+  let info=null;
+  try{ info=JSON.parse(localStorage.getItem(CK_KEY)||'null'); }catch(e){}
+  if(!info||!info.pid) return;
+  try{
+    const res=await fetch('/import/'+encodeURIComponent(info.pid));
+    if(!res.ok){ localStorage.removeItem(CK_KEY); return; }
+    ckOpen(await res.json(),info);
+  }catch(e){}
+})();
+
+// ================================================================
 // SCREENS
 // ================================================================
 function showScreen(id){
-  ['home','review','workspace','settings','spending','preferences'].forEach(s=>$(s).classList.add('hidden'));
+  ['home','review','workspace','settings','spending','preferences','check'].forEach(s=>$(s).classList.add('hidden'));
   $(id).classList.remove('hidden');window.scrollTo({top:0,behavior:'smooth'});
+  document.body.classList.toggle('check-open',id==='check');
   // The workspace has a toolbar to sit in; every other screen only has the
   // header, so the nav rides along rather than being duplicated.
   const nav=$('header-nav');
