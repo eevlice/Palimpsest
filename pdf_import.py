@@ -25,6 +25,7 @@ the document itself; there are no per-book constants. Design notes: docs/pdf_imp
 
 
 import re
+import copy
 import math
 import ctypes
 import statistics
@@ -214,7 +215,7 @@ THRESHOLDS = {
     "net_col_em": 2,              # heading net: a heading within this many body sizes of the open block's left edge - round 6, Characters
     "net_overlay_pt": 1,          # ...starting below it (overlap up to this many points) - round 6, fourth_trimester
     "net_gap_em": 0.6,            # ...with less than this many body sizes of space above - round 6, Characters
-    "index_start": 0.75,          # an index sits in the last quarter of the book - round 2
+    "index_start": 0.75,          # an index sits in the book's last quarter - round 2
     "index_min_lines": 15,        # an index page has this many lines - round 2
     "index_num_share": 0.5,       # ...this share ending in page numbers - round 2
     "index_entry_len": 50,        # ...median entry length at most this - round 2
@@ -262,6 +263,9 @@ THRESHOLDS = {
     "wrap_edge_em": 1,            # a verse line ending within this many sizes of the block's right edge reaches it (a prose wrap) - gaps 3, Characters
     "notes_label_words": 12,      # a plain line naming a group of notes has at most this many words - gaps 2
     "notes_seq_share": 0.7,       # a notes group counts when this share of its entries follow 1, 2, 3... - gaps 1
+    "notes_label_head": 0.8,      # ...or, longer, when this share of its words are in one body heading - notes round, dog
+    "orphan_share": 0.2,          # callouts left without a note above this share are a book-level problem: the review screen counts them, asks none - notes round
+    "orphan_min": 10,             # ...when there are at least this many; fewer are asked one by one - notes round, Trauma (1 of 3)
 }
 
 
@@ -310,7 +314,17 @@ def fam_of(style):
 # a book); the writer turns it into [^label] or back into the plain number
 REF_OPEN, REF_CLOSE = "\ue000", "\ue001"
 REF = re.compile(REF_OPEN + "([^" + REF_CLOSE + "]*)" + REF_CLOSE)
-NOTE_SIGNS = "*†‡§¶"
+# a note's mark is a number, a sign or a lowercase letter (a, b, ... aa); each kind is a series of its own. Signs in
+# their usual order, doubled after the last (**, ††)
+NOTE_SIGNS = "*†‡§‖¶"
+NOTE_LETTERS = re.compile(r"([a-z])\1?")
+
+
+def note_series(mark):
+    """the label part of a note mark: "3" -> "3", "a" -> "a", "*" -> "s1", "‡" -> "s3", "**" -> "s7" """
+    if mark.isdigit() or NOTE_LETTERS.fullmatch(mark):
+        return mark
+    return "s%d" % (NOTE_SIGNS.index(mark[0]) + 1 + len(NOTE_SIGNS) * (len(mark) - 1))
 WORD = re.compile(r"[A-Za-z][A-Za-z’']*[A-Za-z]|[A-Za-z]")
 
 
@@ -335,7 +349,8 @@ def unknown_words(text):
 
 
 def terminal(s):
-    return bool(re.search(r"[.!?…:;\"”’)\]»][*_]*\s*$", REF.sub("", s)))
+    """a line that closes its sentence: a stop, or a closing quote or bracket (after a stop: ." .' ?” !) .")"""
+    return bool(re.search(r"(?:[.!?…:;\"”’)\]»]|[.!?…][*_]*'+)[*_]*\s*$", REF.sub("", s)))
 
 
 def _similar_key(text):
@@ -629,7 +644,8 @@ def build_lines(chars, page_no, orn_fonts=frozenset()):
         rx0, rx1 = min(c.x0 for c in r), max(c.x1 for c in r)
         tiny = all(c.ch in "¹²³⁴⁵⁶⁷⁸⁹⁰₀₁₂₃₄₅₆₇₈₉⁄/ " for c in r)
         # a note callout at the end of a line sticks out past it
-        callout = 0 < len([c for c in r if c.ch.strip()]) <= T["ref_max_chars"] and all(c.ch.isdigit() or c.ch in NOTE_SIGNS + " " for c in r)
+        callout = 0 < len([c for c in r if c.ch.strip()]) <= T["ref_max_chars"] and (
+            all(c.ch.isdigit() or c.ch in NOTE_SIGNS + " " for c in r) or NOTE_LETTERS.fullmatch("".join(c.ch for c in r).strip()))
         best = None
         for j, n in enumerate(rows):
             if j == i or j in merged or sizes[j] <= 0 or (sizes[i] > T["script_size"] * sizes[j] and not tiny):
@@ -794,12 +810,13 @@ def inline_md(toks, bold_ok=True):
 
 
 def _mark_refs(l):
-    """Note callouts: digits or a note sign (*, †, ...) set smaller and raised, right after a word or its closing
-    punctuation. After a digit it is an exponent (10², 6′0″), after a capital a formula or a name (B12, CO2), lowered
-    a subscript: none is a callout.
+    """Note callouts: digits, a note sign (*, †, ...) or a lowercase letter (a, b, aa) set smaller and raised, right
+    after a word or its closing punctuation. After a digit it is an exponent (10², 6′0″) or an ordinal (1st), after a
+    capital a formula or a name (B12, CO2), lowered a subscript: none is a callout. A letter may follow a capital
+    ("the OECDa"), but only a letter alone or doubled (a, aa): "Mme", "Mlle" are no callouts.
     The run is wrapped in REF_OPEN/REF_CLOSE and takes the style of the word before it."""
     cs, z, base = l["chars"], l["size"], l["base"]
-    raised = lambda c: ((c.ch.isdigit() or c.ch in NOTE_SIGNS) and c.size <= T["ref_size"] * z
+    raised = lambda c: ((c.ch.isdigit() or c.ch in NOTE_SIGNS or "a" <= c.ch <= "z") and c.size <= T["ref_size"] * z
                         and c.base < base - T["ref_raise"] * z)
     i = 0
     while i < len(cs):
@@ -812,8 +829,9 @@ def _mark_refs(l):
         run = cs[i:j + 1]
         prev = next((c for c in reversed(cs[:i]) if c.ch.strip()), None)
         same = all(c.ch.isdigit() for c in run) or all(c.ch in NOTE_SIGNS for c in run)
-        if (prev is not None and (prev.ch[-1:].islower() or prev.ch[-1:] in ".,;:!?’”\")»")
-                and same and len(run) <= T["ref_max_chars"]):
+        letter = NOTE_LETTERS.fullmatch("".join(c.ch for c in run))
+        if (prev is not None and (prev.ch[-1:].islower() or prev.ch[-1:] in ".,;:!?’”\")»" or letter and prev.ch[-1:].isupper())
+                and (same and len(run) <= T["ref_max_chars"] or letter)):
             run[0].ch = REF_OPEN + run[0].ch
             run[-1].ch += REF_CLOSE       # one char may be both ends
             for c in run:
@@ -1646,7 +1664,7 @@ class _Roles:
                     prev = b
 
     def _index_pages(self):
-        """A back-of-book index: pages in the last quarter of the book whose lines are mostly short entries ending in
+        """A back-of-book index: pages in the book's last quarter whose lines are mostly short entries ending in
         page numbers, in alphabetical order. Its blocks (not its heading) leave the flow."""
         self.index_pages = []
         for p in self.pages:
@@ -1888,7 +1906,7 @@ class _ShapeRoles:
             b["flags"] = why
 
 
-FOOT_START = re.compile(r"^\s*[*_]*(\d{1,3}|[" + NOTE_SIGNS + r"]{1,3})[.)]?[*_]*\s*(?=\S)")
+FOOT_START = re.compile(r"^\s*[*_]*(\d{1,3}|[" + NOTE_SIGNS + r"]{1,3}|([a-z])\2?(?![a-z]))[.)]?[*_]*\s*(?=\S)")
 
 
 class _Notes:
@@ -2030,6 +2048,28 @@ def join_lines(texts, hy, stats, amb=None):
     return out.replace("\x02", "-")
 
 
+# a speaker's name opening a line of dialogue: "Charlie:", "Dr. Bruner:", "Susanna Kaysen:"
+SPEAKER = re.compile(r"^[*_]*(?:(?:Dr|Mr|Mrs|Ms|Prof|Sr|St)\.\s+)?[A-Z][\w’'-]*(?:\s+[A-Z][\w’'-]*){0,2}[*_]*:[*_]*\s+(\S)")
+
+
+def speaker(t, dialogue=False):
+    """t opens with a speaker's name: followed by a quote, or anywhere in a dialogue (two such lines or more)"""
+    m = SPEAKER.match(t)
+    return bool(m) and (dialogue or m.group(1) in "“\"‘'")
+
+
+def dialogue_lines(texts, hy, stats, amb=None):
+    """an epigraph or quote set as prose, where a line opening with a speaker's name starts a line of its own"""
+    two = sum(bool(SPEAKER.match(t)) for t in texts) >= 2
+    runs = [[texts[0]]]
+    for t in texts[1:]:
+        if speaker(t, two):
+            runs.append([t])
+        else:
+            runs[-1].append(t)
+    return "\\\n".join(join_lines(r, hy, stats, amb) for r in runs)
+
+
 # ====================================================================================================================
 # THE DOCUMENT: stages 4-7 in order
 #   in:  page dicts from build_blocks
@@ -2132,7 +2172,9 @@ def _named_join(md, role, text, meta, b, p, lex, stats, amb):
     inner = last[1][len(FENCE_OPEN % FENCE[role]) + 1:-len("\n:::")]
     tail = inner.split("\\\n")[-1]
     split_word = tail.rstrip().endswith("-")
-    if not split_word and (terminal(tail) or not re.match(r"[*_“\"‘(]*[a-z]", text)):
+    # a speech whose quote is still open goes on ("savants." / "There's ..."); a new speaker starts a segment
+    speech = tail.count("“") > tail.count("”") and not speaker(text, True)
+    if not split_word and not speech and (terminal(tail) or not re.match(r"[*_“\"‘(]*[a-z]", text)):
         return False
     if split_word:
         j = join_hyphen(inner, text, lex, stats, mark="-", amb=amb)
@@ -2182,6 +2224,9 @@ NOT_NOTES = re.compile(r"\b(bibliography|references|works cited|sources|further 
                        r"recommended readings?|index|appendix|glossary|acknowledgm?ents?|about the authors?|permissions|"
                        r"credits)\b", re.I)
 NOTE_ENTRY = re.compile(r"^[*_]*(\d{1,3})[.)]?[*_]*\s+(?=\S)")
+# a number inside a note that is not the next entry starting: "Vol. 2", "pp. 3", "1, 2"
+NOT_ENTRY_BEFORE = re.compile(r"(?:\b(?:chapter|ch|vol|volume|no|nos|p|pp|page|pages|part|fig|figure|table|section|issue|"
+                              r"ed|edition)\.?|(?:^|\s)[\d,–-]+)$", re.I)
 LOWER_START = re.compile(r"[*_“\"‘(]*[a-z]")
 
 
@@ -2201,10 +2246,11 @@ def _size_of(m):
 
 
 def _notes_sections(md):
-    """Endnote sections: a "Notes" heading, then numbered entries, in groups under headings (a chapter's title or
-    "Chapter N") or right under it. An unnumbered paragraph goes on with the entry before it when it starts in
-    lowercase or keeps the entry's size. The section ends at a heading with no entry under it, at a bibliography,
-    index and the like, or at text that does not go on. A group counts when it starts at 1 and its numbers mostly
+    """Endnote sections: a "Notes" heading, then numbered entries, in groups under headings or plain lines (a
+    chapter's title, as long as it is, or "Chapter N") or right under it, over as many pages as they run. An
+    unnumbered paragraph goes on with the entry before it when it starts in lowercase or keeps the entry's size;
+    entries set one after another in one block are split at the next number. The section ends at a heading with no
+    entry under it, at a bibliography, index and the like, or at text that does not go on. A group counts when it starts at 1 and its numbers mostly
     follow each other (page-keyed notes, "2 Take John ...", do not). -> [dict(head, groups=[dict(head, entries)])]"""
     def entry_at(k):
         """the number of the first entry from k on (figures skipped), or None"""
@@ -2215,10 +2261,28 @@ def _notes_sections(md):
             return int(e.group(1)) if e else None
         return None
 
+    words = lambda t: set(re.findall(r"[^\W_]+", t.lower()))
+    heads = [words(_txt(it)) for it in md if it[0] == "head"]
+
     def label(t, k):
-        """a plain line naming the next group: short, no sentence, and the group's entry 1 follows"""
-        return (len(t.split()) <= T["notes_label_words"] and (GROUP_NUMBER.match(t) or not terminal(t))
-                and not NOTE_ENTRY.match(t) and entry_at(k + 1) == 1)
+        """a plain line naming the next group: short and no sentence, or a body heading's words (a chapter's long
+        title), and the group's entry 1 follows"""
+        w = words(t)
+        return ((len(t.split()) <= T["notes_label_words"] and (GROUP_NUMBER.match(t) or not terminal(t)))
+                or len(w) >= 2 and any(len(w & h) >= T["notes_label_head"] * len(w) for h in heads)) \
+            and not NOTE_ENTRY.match(t) and entry_at(k + 1) == 1
+
+    def split_after(j, n):
+        """entries set on one after another end up in one block ("... Press. 4 In a letter ..."): the next entry,
+        n + 1, starts an item of its own after j"""
+        t = _txt(md[j])
+        for m in re.finditer(r"(?<=\S) " + str(n + 1) + r"(?= (?:[^\s\da-z.,;:%)\]]|https?:|www\.))", t):
+            if not NOT_ENTRY_BEFORE.search(t[:m.start()]):
+                kind, v, meta = md[j]
+                tail = t[m.start() + 1:]
+                _set_txt(md, j, t[:m.start()].rstrip())
+                md.insert(j + 1, (kind, dict(v, text=tail) if kind in ("p", "head", "note") else tail, copy.deepcopy(meta)))
+                return
 
     out, i = [], 0
     while i < len(md):
@@ -2246,9 +2310,11 @@ def _notes_sections(md):
                     grp = dict(head=None, entries=[])
                     sec["groups"].append(grp)
                 grp["entries"].append(dict(n=int(NOTE_ENTRY.match(t).group(1)), i=j, cont=[]))
+                split_after(j, grp["entries"][-1]["n"])
             elif t and grp and grp["entries"] and not t.startswith(("!", ":::", "|")) and (
                     LOWER_START.match(t) or _size_of(m) == _size_of(md[grp["entries"][-1]["i"]][2])):
                 grp["entries"][-1]["cont"].append(j)
+                split_after(j, grp["entries"][-1]["n"])
             elif t.startswith("!"):
                 pass                                        # a figure or table placeholder inside the notes
             else:
@@ -2338,8 +2404,7 @@ def resolve_notes(md, stats, drop_bids=frozenset()):
         if f is None:
             continue
         if f not in foot_label:
-            n = c[2] if c[2].isdigit() else "".join("abcde"[NOTE_SIGNS.index(ch)] for ch in c[2])
-            foot_label[f] = unique(f"b{max(1, chap_of[f])}-{n}", md[f][1]["page"])
+            foot_label[f] = unique(f"b{max(1, chap_of[f])}-{note_series(c[2])}", md[f][1]["page"])
         label_of[(c[0], c[1])] = foot_label[f]
     # endnotes
     runs, prev = [], None
@@ -2361,6 +2426,24 @@ def resolve_notes(md, stats, drop_bids=frozenset()):
             if e["i"] not in entry_label:
                 entry_label[e["i"]] = unique(f"b{g + 1}-{e['n']}", min(md[e["i"]][2]["pages"]))
             label_of[(c[0], c[1])] = entry_label[e["i"]]
+    # notes the user marked, to a callout still without one: the one the user named, else the only one with the
+    # note's mark (a footnote: on its page or the next one either side; an endnote: anywhere)
+    for f in feet:
+        v = md[f][1]
+        if not v.get("user") or f in foot_label:
+            continue
+        free = [c for c in calls if (c[0], c[1]) not in label_of]
+        if v.get("ref"):
+            cand = [c for c in free if c[2] == v["ref"].get("mark") and v["ref"].get("bid") in md[c[0]][2].get("_bids", ())]
+        elif v["num"]:
+            cand = [c for c in free if c[2] == v["num"] and (v["user"] == "son not" or any(
+                abs(pg - v["page"]) <= 1 for pg in md[c[0]][2]["pages"]))]
+        else:
+            cand = []
+        if len(cand[:2]) == 1:
+            c = cand[0]
+            foot_label[f] = unique(f"b{max(1, chap_of[c[0]])}-{note_series(c[2])}", v["page"])
+            label_of[(c[0], c[1])] = foot_label[f]
     # write: callouts
     ref_items = {c[0] for c in calls}
     for i, it in enumerate(md):
@@ -2372,7 +2455,7 @@ def resolve_notes(md, stats, drop_bids=frozenset()):
             label = label_of.get((i, next(k))) if i in ref_items else None
             if label:
                 return f"[^{label}]"
-            if i in ref_items:
+            if i in ref_items and not NOTE_LETTERS.fullmatch(m.group(1)):    # a raised letter with no note is no callout
                 md[i][2]["flags"].add("atif-eslesmedi")
                 if drop_bids & set(md[i][2].get("_bids", ())):
                     return ""                               # the user: the stray number goes
@@ -2381,7 +2464,7 @@ def resolve_notes(md, stats, drop_bids=frozenset()):
     # write: notes
     for f in feet:
         if f in foot_label:
-            body = FOOT_START.sub("", md[f][1]["text"], count=1)
+            body = FOOT_START.sub("", md[f][1]["text"], count=1) if md[f][1]["num"] else md[f][1]["text"]
             body = re.sub(r"^" + re.escape(md[f][1]["num"]) + r"\s+", "", body)      # "21 21 It turns out": printed twice
             md[f] = ("raw", f"[^{foot_label[f]}]: " + body, md[f][2])
         else:
@@ -2409,6 +2492,8 @@ def resolve_notes(md, stats, drop_bids=frozenset()):
             md[s["head"]] = None
             removed += 1
     matched_feet = len(foot_label)
+    stray = [c for c in calls if (c[0], c[1]) not in label_of and NOTE_LETTERS.fullmatch(c[2])]
+    calls = [c for c in calls if c not in stray]
     stats["note_refs"] += len(calls)
     stats["note_bodies"] += len(feet) + sum(len(g["entries"]) for g in groups)
     stats["note_refs_matched"] += len(label_of)
@@ -2419,6 +2504,13 @@ def resolve_notes(md, stats, drop_bids=frozenset()):
     for s in sections:
         if not any(e["i"] in entry_label for g in s["groups"] for e in g["entries"]):
             stats.setdefault("notes_unmatched_pages", []).extend(sorted(md[s["head"]][2]["pages"])[:1])
+    # for the review screen: how many callouts found their note, the ones left without (the blocks of their segment,
+    # the mark), and the user's notes left without a callout
+    return dict(refs=len(calls), matched=len([c for c in calls if (c[0], c[1]) in label_of]),
+                orphans=[dict(bids=list(md[c[0]][2].get("_bids", ())), mark=c[2], pages=sorted(md[c[0]][2]["pages"]))
+                         for c in calls if (c[0], c[1]) not in label_of],
+                loose=[dict(bids=list(md[f][2].get("_bids", ())), mark=md[f][1]["num"], page=md[f][1]["page"], role=md[f][1]["user"])
+                       for f in feet if f not in foot_label and md[f][1].get("user")])
 
 
 PAGE_REF = re.compile(r"\b(?:pp?\.|pages?)\s?(\d{1,4})(?:\s?[–—-]\s?(\d{1,4}))?\b(?!\s?(?:%|percent))")
@@ -2430,7 +2522,7 @@ AROUND_REF = re.compile(r"\b(?:see|discussed|described|mentioned|noted|shown|out
 CITATION = re.compile(r"\b(1[5-9]|20)\d\d[a-z]?\b|\bet al\b|\b(?i:eds?|trans|vol|vols|ibid|op\. cit|cit)\.|\*\w|_\w|“|"
                       r"\b[A-Z][\w’'-]+,\s*$")
 # a sentence ends at . ! ? before a capital, not after an initial or one of these abbreviations
-SENTENCE_END = re.compile(r"(\w*)[.!?][”’\")]?\s+(?=[*_“\"‘(]*[A-Z])")
+SENTENCE_END = re.compile(r"(\w*)[.!?][”’\"')\]]*\s+(?=[*_“\"‘(]*[A-Z])")
 NOT_NAMES = {"There", "Here", "This", "That", "These", "Those", "It", "See", "Above", "Below", "Earlier", "Later", "Again",
              "Chapter", "Part", "Section", "Page"}
 ABBREV = {"p", "pp", "ed", "eds", "no", "cf", "ch", "vol", "vols", "esp", "rev", "cit", "ff", "ibid", "trans", "ms", "mr",
@@ -2534,12 +2626,15 @@ def user_joins(md, lex, stats, amb):
 
 
 # roles the user can give a block (the review screen's and the editor's choices); "sil" leaves it out
-USER_ROLES = ("gövde", "bölüm", "alt başlık 1", "alt başlık 2", "epigraf", "alıntı", "şiir", "atıf", "altyazı", "kutu", "sil")
+USER_ROLES = ("gövde", "bölüm", "alt başlık 1", "alt başlık 2", "epigraf", "alıntı", "şiir", "atıf", "altyazı", "kutu",
+              "dipnot", "son not", "sil")
 
 
 def apply_overrides(doc, decisions):
     """The user's decisions on a Doc, in order. Each names a block by its id ("page.index") or a page:
-    {"bid", "role"} a role from USER_ROLES; {"bid", "join": True} goes on in the segment before; {"bid", "split": k}
+    {"bid", "role"} a role from USER_ROLES; a note's ("dipnot", "son not") may carry "ref": {"bid", "mark"}, the callout
+    it belongs to, and {"bid", "note_ref": {"bid", "mark"}} gives it one later (a note is matched in resolve_notes);
+    {"bid", "join": True} goes on in the segment before; {"bid", "split": k}
     a new segment from the block's line k (0: from the block itself, which then joins nothing before it); {"bid", "drop_refs": True} unmatched callout numbers go;
     {"bid", "line": k, "cut": bool, "keep": bool} a margin line kept or dropped (k in the lines the margin stage cut,
     or in the block's lines); {"page", "order": "rows"} a page read top to bottom, not as two columns.
@@ -2582,10 +2677,17 @@ def apply_overrides(doc, decisions):
                     _finish_block(b)
                 note(b, "at")
             continue
+        if dec.get("note_ref"):
+            b["note_ref"] = dec["note_ref"]
         if dec.get("role") in USER_ROLES:
             r = dec["role"]
             detach(p, b)
             b["role"], b["user"], b["sil"] = r, True, False
+            b.pop("user_note", None)
+            if r in ("dipnot", "son not"):                  # the block is a note: its first line's mark, if any
+                m = FOOT_START.match(b["lines"][0]["plain"]) if b["lines"] else None
+                b["role"], b["user_note"], b["foot"] = "dipnot", r, [(m.group(1) if m else "", b["lines"])]
+                b["note_ref"] = dec.get("ref") or b.get("note_ref")
             if r in ROLE_TYPE:
                 b["conf"] = 1.0
             if b.get("cut_lines") and r != "sil" and not b["lines"]:
@@ -2716,7 +2818,8 @@ def build_markdown(doc, first_idx, last_idx):
                         last_foot[1]["last"] = prev[0]
                         _meta_add(last_foot[2], _meta_of(b))
                     elif num is not None:
-                        last_foot = ("note", dict(page=p["p"], num=num, text=text, last=prev[0], first=prev[1]), _meta_of(b))
+                        last_foot = ("note", dict(page=p["p"], num=num, text=text, last=prev[0], first=prev[1],
+                                                  user=b.get("user_note"), ref=b.get("note_ref")), _meta_of(b))
                         (feet if cur else md).append(last_foot)
                 continue
             if role == "dizin":
@@ -2800,13 +2903,13 @@ def build_markdown(doc, first_idx, last_idx):
                 if not _named_join(md, role, t, _meta_of(b), b, p["p"], lex, stats, amb):
                     md.append(("raw", fenced(role, t), _meta_of(b)))
             elif role == "epigraf":
-                t = join_lines(texts, lex, stats, amb)
+                t = dialogue_lines(texts, lex, stats, amb)
                 if not _named_join(md, role, t, _meta_of(b), b, p["p"], lex, stats, amb):
                     md.append(("raw", fenced(role, t), _meta_of(b)))
             elif role == "atıf":
                 md.append(("raw", fenced(role, join_lines(texts, lex, stats, amb)), _meta_of(b)))
             elif role == "alıntı":
-                text = join_lines(texts, lex, stats, amb)
+                text = dialogue_lines(texts, lex, stats, amb)
                 last = md[-1] if md else None
                 # a quote cut by a page break goes on in the next page's quote
                 if last and last[0] == "quote" and not terminal(last[1]) and re.match(r"[*_]*[a-z]", text):
@@ -2833,7 +2936,7 @@ def build_markdown(doc, first_idx, last_idx):
     flush()
     user_joins(md, lex, stats, amb)
     md = [it for it in md if it is not None]
-    resolve_notes(md, stats, {b["bid"] for p in doc.pages for b in p["blocks"] if b.get("drop_refs")})
+    doc.notes = resolve_notes(md, stats, {b["bid"] for p in doc.pages for b in p["blocks"] if b.get("drop_refs")})
     md = [it for it in md if it is not None]
     page_refs(md, stats)
     out, meta, doc.seg_bids, kinds = [], [], [], []

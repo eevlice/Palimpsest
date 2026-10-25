@@ -494,11 +494,11 @@ check("poem: a real poem keeps every break, its longest line too",
 split = P.poem_lines([Ln(400), Ln(300)], ["Charlie trav\x02", "els with Raymond."], lambda a, b: False, collections.Counter())
 check("poem: a split word joins (the hyphen rule decides the hyphen)", split == "Charlie travels with Raymond.", split)
 M = lambda pg: dict(pages={pg}, boxes=[], style="Body 12", flags=set())
-md_ = [("raw", P.fenced("epigraf", "What we talk about on this walk: What one"), M(15))]
+md_ = [("raw", P.fenced("epigraf", "Things we find along this synthetic road: How one"), M(15))]
 blk_ = dict(bid="15.3")
-ok = P._named_join(md_, "epigraf", "man’s attempt to build a toaster.", M(15), blk_, 15, lambda a, b: False, st_, None)
+ok = P._named_join(md_, "epigraf", "small kettle came to be made.", M(15), blk_, 15, lambda a, b: False, st_, None)
 check("callout cut by a drop cap's indent: one Epigraph segment",
-      ok and len(md_) == 1 and md_[0][1] == P.fenced("epigraf", "What we talk about on this walk: What one man’s attempt to build a toaster."), md_)
+      ok and len(md_) == 1 and md_[0][1] == P.fenced("epigraf", "Things we find along this synthetic road: How one small kettle came to be made."), md_)
 md_ = [("raw", P.fenced("epigraf", "A closed sentence."), M(15))]
 check("...not after a closed sentence, nor into another role, nor over a skipped page",
       not P._named_join(md_, "epigraf", "and more", M(15), blk_, 15, lambda a, b: False, st_, None)
@@ -507,6 +507,24 @@ check("...not after a closed sentence, nor into another role, nor over a skipped
 md_ = [("raw", P.fenced("şiir", "the first line\\\nand the second"), M(15))]
 P._named_join(md_, "şiir", "and the third", M(16), blk_, 16, lambda a, b: False, st_, None)
 check("a poem going on overleaf keeps its line break", md_[0][1] == P.fenced("şiir", "the first line\\\nand the second\\\nand the third"), md_)
+
+# -- dialogue in an epigraph or quote: a closing quote after the stop ends the sentence; a speaker's name starts a line
+got = [P.terminal(t) for t in ("He said so.'", 'It ended."', "Was it late?”", "Go on!)", 'the end.")', "the students'")]
+check("sentence end: a stop followed by a closing quote or bracket (.' .\" ?” !) .\"), not a plural's apostrophe",
+      got == [True, True, True, True, True, False], got)
+dl = lambda texts: P.dialogue_lines(texts, lambda a, b: False, collections.Counter())
+got = [dl(["Ann: “Is it late?”", "Dr. Bo Lee: “Not yet.”"]), dl(["Ann: It is late now.", "Bo: Not yet, not at all,", "and more words."]),
+       dl(["Ann: “It is a synthetic", "line that wraps.” Bo: “So it does.”"]), dl(["Note: the line below", "Goes on as prose."])]
+check("speaker: a name opening a line (before a quote, or in a dialogue of two names or more) starts a line of its own",
+      got == ["Ann: “Is it late?”\\\nDr. Bo Lee: “Not yet.”", "Ann: It is late now.\\\nBo: Not yet, not at all, and more words.",
+              "Ann: “It is a synthetic line that wraps.” Bo: “So it does.”", "Note: the line below Goes on as prose."], got)
+md_ = [("raw", P.fenced("epigraf", "Dr. Ann: “He is a synthetic case. People like him are rare."), M(15))]
+ok = P._named_join(md_, "epigraf", "There are certain traits.”", M(15), blk_, 15, lambda a, b: False, st_, None)
+check("speech: a block after a closed sentence goes on while its quote is open",
+      ok and md_[0][1] == P.fenced("epigraf", "Dr. Ann: “He is a synthetic case. People like him are rare. There are certain traits.”"), md_)
+md_ = [("raw", P.fenced("epigraf", "Dr. Ann: “He is a synthetic case. People like him are rare."), M(15))]
+check("...a new speaker starts a segment of its own", not P._named_join(md_, "epigraf", "Bo: “So he is.”", M(15), blk_, 15,
+                                                                         lambda a, b: False, st_, None))
 
 
 # -- units: the paragraphs of one epigraph, quote, poem or box are one unit (seg_meta "unit")
@@ -1301,8 +1319,8 @@ d = P.Doc([foot2_page(p) for p in range(1, 9)])
 md, st = P.build_markdown(d, 0, 7)
 segs = [x for x in md.split("\n\n") if x.strip()]
 defs = [x for x in segs if x.startswith("[^")]
-check("footnote: a sign callout and its note", any("leaf 2 that carries a note.[^b1-a]" in x for x in segs)
-      and "[^b1-a]: A note marked with a sign." in defs, defs)
+check("footnote: a sign callout and its note", any("leaf 2 that carries a note.[^b1-s1]" in x for x in segs)
+      and "[^b1-s1]: A note marked with a sign." in defs, defs)
 check("footnote: numbers restarting on every page match by page and number, labels stay unique",
       any("leaf 3 that carries a note.[^b1-1]" in x for x in segs) and any("leaf 4 that carries a note.[^b1-1-4]" in x for x in segs)
       and "[^b1-1]: The first note on leaf three." in defs and "[^b1-1-4]: The first note on leaf four." in defs, defs)

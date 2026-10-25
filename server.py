@@ -645,10 +645,11 @@ def _render_review(pid, rv):
                 bids=carry_meta(raw, segs, r["doc"].seg_bids), segs=segs, state=state)
 
 
-def _review_payload(pid, rv):
-    x = _render_review(pid, rv)
+def _review_payload(pid, rv, x=None):
+    x = x or _render_review(pid, rv)
     segs, meta, bids, warnings, d = x["segs"], x["meta"], x["bids"], x["warnings"], x["state"]["doc"]
-    return dict(rv, segments=segs, segMeta=meta, segBids=bids, warnings=warnings,
+    import review
+    return dict(rv, segments=segs, segMeta=meta, segBids=bids, warnings=warnings, integrity=review.integrity(x["state"]),
                 pageSizes={p["p"]: [round(p["W"], 1), round(p["H"], 1)] for p in d.pages})
 
 
@@ -717,8 +718,22 @@ def import_answers(pid):
     d = request.get_json() or {}
     rv["answers"] = {k: v for k, v in (d.get("answers") or {}).items() if v and v.get("key") not in (None, "skip")}
     rv["edits"] = [e for e in (d.get("edits") or []) if isinstance(e, dict)]
+    x = _render_review(pid, rv)
+    # a block the user made a note that found no callout is asked "which callout?" right after the question that
+    # made it one; such a question stays while answered (its answer is a decision), goes when the block is no note
+    import review
+    notes = {b.get("bid") for p in x["state"]["doc"].pages for b in p["blocks"] if b.get("user_note")}
+    new = [q for q in review.questions(x["state"], dict(meta=x["raw_meta"], md=x["md"])) if q["type"] == "bagla"]
+    have = {q["id"] for q in rv["questions"]}
+    qs = [q for q in rv["questions"] if q["type"] != "bagla" or q["bid"] in notes and (
+        q["id"] in rv["answers"] or any(n["id"] == q["id"] for n in new))]
+    for n in (n for n in new if n["id"] not in have):
+        at = next((k + 1 for k, q in enumerate(qs) if n["bid"] in q.get("bids", []) or any(
+            n["bid"] in (t if isinstance(t, list) else [t]) for t in q["targets"])), len(qs))
+        qs.insert(at, n)
+    rv["questions"] = qs                             # no new answer among the changes: the render stands
     json.dump(rv, open(pending_file(pid, "review.json"), "w", encoding="utf-8"), ensure_ascii=False)
-    return jsonify(_review_payload(pid, rv))
+    return jsonify(_review_payload(pid, rv, x))
 
 
 @app.route("/setup", methods=["POST"])

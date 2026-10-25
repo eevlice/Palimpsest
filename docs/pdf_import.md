@@ -22,7 +22,7 @@ Each stage is a section of `pdf_import.py`; its input and output are written at 
 `analyse()` runs stages 1–7 once and returns a state that pickles; `render(state, decisions)` runs stage 8. The
 review screen keeps the state in `projects/_pending/` and renders it again after each answer; without decisions
 `render` gives byte for byte the old output. Decisions (`apply_overrides`) name blocks by a stable id
-("page.index"): a role, join to the segment before, split at a line, drop unmatched callout numbers, keep or drop a
+("page.index"): a role (`dipnot` / `son not` make the block a note, optionally tied to a named callout), join to the segment before, split at a line, drop unmatched callout numbers, keep or drop a
 margin line, read a page top to bottom; each is noted in the block's flags as `kullanici:…`.
 
 Stages 4–7 run over the whole book in `Doc.__init__`. One step runs out of order: margin lines that repeat a
@@ -40,8 +40,8 @@ requested pages are written.
 | `kutu` | `::: {custom-style="Box"}` paragraph | box |
 | `kutu-başlık` | Box fence, bold | box |
 | `liste` | `1. text` (one segment per item) | para |
-| `epigraf` | `::: {custom-style="Epigraph"}` (lines kept with `\` when set as a poem) | epigraph |
-| `alıntı` | `> text` | blockquote |
+| `epigraf` | `::: {custom-style="Epigraph"}` (lines kept with `\` when set as a poem; a line opening with a speaker's name, "Dr. Name:", starts a line of its own; a speech whose quote is still open goes on in the next block) | epigraph |
+| `alıntı` | `> text` (speaker lines as in an epigraph) | blockquote |
 | `şiir` | `::: {custom-style="Verse"}`, `\` after each line but the last | verse |
 | `atıf` | `::: {custom-style="Attribution"}` | attribution |
 | `altyazı` | `::: {custom-style="Caption"}` around its figure/table | caption |
@@ -78,8 +78,11 @@ invisible text); scanned without text (a full-page image alone).
 
 ## Notes and page references
 
-- **Callouts** (stage 2): digits or a note sign (`*†‡§¶`) set smaller and raised, right after a lowercase letter or
-  closing punctuation. After a digit they are an exponent, after a capital a formula or name (B12): not callouts.
+- **Callouts** (stage 2): digits, a note sign (`*†‡§‖¶`, doubled `**`) or a lowercase letter (`a`, `b`, `aa`) set
+  smaller and raised, right after a lowercase letter or closing punctuation. After a digit they are an exponent or
+  an ordinal, after a capital a formula or name (B12): not callouts; a lone or doubled letter may follow a capital
+  ("the OECDa"), "Mme" may not. Each kind is a series of its own, matched within the series; a raised letter that
+  finds no note is taken for no callout (not flagged).
   A row of callouts standing past a line's end, or several callouts on one baseline, fold into their own lines.
   In the line's `md` a callout sits between two private-use characters until stage 8 resolves it; `plain` keeps
   its digits, as the block rules always read them.
@@ -93,16 +96,24 @@ invisible text); scanned without text (a full-page image alone).
   note is kept as a hard break; a number printed twice ("21 21") is dropped once more. Notes carry no review flag.
 - **Endnotes** (`resolve_notes`, stage 8): a section named Notes, Note, Endnotes, End Notes, Notes and Sources, Notes
   to Chapter N (a heading or a plain line), numbered entries in groups. A group is named by a heading or a plain
-  short line (a chapter's title, "Chapter N", "N", a roman numeral) followed by its entry 1; with no name, numbering
-  that starts again at 1 starts a new group. A section none of whose notes is cited stays as it is, with a warning. A group counts when it starts at 1 and mostly runs 1, 2, 3…; page-keyed
+  short line (a chapter's title, "Chapter N", "N", a roman numeral) followed by its entry 1, or a longer line most of
+  whose words are one body heading's (`notes_label_head`; dog's "Walk 5: …" labels); with no name, numbering
+  that starts again at 1 starts a new group. The section runs over as many pages as its entries do; entries set
+  one after another in one block ("… Press. 4 In a letter …") are split at the next number in sequence (not after
+  "Vol.", "p.", a bare number). A section none of whose notes is cited stays as it is, with a warning. A group counts when it starts at 1 and mostly runs 1, 2, 3…; page-keyed
   notes (John Reveal) and unnumbered source lists (NEI) are not notes. Bibliography, references, index and the like
   end a notes section and are never notes. Callouts are split into runs where the numbering starts again and the
   runs are aligned with the groups in order (most shared numbers), then matched by number.
-- **Output**: every note gets a label unique in the book, `[^b<group or chapter>-<n>]`; the callout becomes
+- **Output**: every note gets a label unique in the book, `[^b<group or chapter>-<mark>]`, the mark kept by series
+  (`3`, `a`, `s1` for `*`, `s2` for `†` …, see `note_series`); the callout becomes
   `[^label]`, the note its own `[^label]: text` segment, which the import's `reorder_footnotes` puts after the
   first paragraph citing it. A notes heading whose entries were all matched goes. Unmatched callouts are written as
   their number and flagged `atif-eslesmedi`; unmatched notes stay as they were, flagged `not-eslesmedi`. The
-  warning gives the counts.
+  warning gives the counts. A block the user made a note (`dipnot`, `son not`) is matched after the importer's
+  own matches: to the callout the user named, else to the only free callout with its mark (a footnote: its page
+  or the next one either side; an endnote: anywhere). `doc.notes` keeps the counts, the callouts left without a
+  note and the user's notes left without a callout, for the review screen (`orphan_share`, `orphan_min`: above them the top line
+  shows "Notlar: X / Y eşleşti" in red and no callout is asked one by one).
 - **Page references** (`page_refs`, stage 8): "see p. 42", "pp. 12–14", "page 42", "(p. 42)", "see chapter 3",
   "discussed above/below", when no citation cue stands in the clause (a year, et al., ed./trans./vol., ibid., a
   title in italics or quotes, a name before the page, a three-word quotation before "(p. N)"). Bibliography and
@@ -285,7 +296,7 @@ first version of the importer; later rounds are the karne rounds, with the test 
 | `net_col_em` | 2 | heading net: a heading within this many body sizes of the open block's left edge | round 6, Characters |
 | `net_overlay_pt` | 1 | ...starting below it (overlap up to this many points) | round 6, fourth_trimester |
 | `net_gap_em` | 0.6 | ...with less than this many body sizes of space above | round 6, Characters |
-| `index_start` | 0.75 | an index sits in the last quarter of the book | round 2 |
+| `index_start` | 0.75 | an index sits in the book's last quarter | round 2 |
 | `index_min_lines` | 15 | an index page has this many lines | round 2 |
 | `index_num_share` | 0.5 | ...this share ending in page numbers | round 2 |
 | `index_entry_len` | 50 | ...median entry length at most this | round 2 |
@@ -337,6 +348,9 @@ first version of the importer; later rounds are the karne rounds, with the test 
 | `ref_gap_em` | 0.5 | a callout row past a line's end starts within this many sizes of it | gaps 1, Far Calls |
 | `foot_size` | 0.92 | a page-bottom footnote is set at most this share of the body size | gaps 1 |
 | `notes_seq_share` | 0.7 | a notes group counts when this share of its entries follow 1, 2, 3... | gaps 1 |
+| `notes_label_head` | 0.8 | ...or, longer, when this share of its words are in one body heading | notes round, dog |
+| `orphan_share` | 0.2 | callouts left without a note above this share are a book-level problem: counted on the review screen, none asked | notes round |
+| `orphan_min` | 10 | ...when there are at least this many; fewer are asked one by one | notes round, Trauma (1 of 3) |
 
 ## Line-end hyphens
 
@@ -358,7 +372,7 @@ word nor a word of the book ("self-esteem" stays, "some-thing" and, in a book th
 - Two-column layout is detected per page by side-by-side rows; more than two columns is not handled.
 - Tables are recognised only when ruled; borderless tables stay text (an appendix list in Characters becomes
   short paragraphs and stray headings).
-- The index is looked for in the last quarter of the book only.
+- The index is looked for in the book's last quarter only.
 - Inside a footnote, a one-line first paragraph followed by an indented second one is joined (it cannot be told
   from a hanging indent).
 - Notes keyed by page and phrase ("2 Take John and Grace: …"), with no callouts in the text, are left as they

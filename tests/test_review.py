@@ -61,8 +61,8 @@ pages[1]["blocks"].append(blk("2.2", "gövde", "Odd|10", "An odd block.", flags=
 pages[2]["blocks"].append(blk("3.2", "gövde", "Odd|10", "Another odd block.", flags=["stil-farkli", "smaller"]))
 pages[2]["blocks"].append(blk("3.3", "alt başlık 1", "Sub|13", "A Section Nobody Lists"))
 pages[3]["two_col"] = True
-pages[4]["blocks"].append(blk("5.2", "epigraf", "Call|10", "What we talk about on this walk:", conf=0.7, flags=["centered"]))
-pages[4]["blocks"].append(blk("5.3", "epigraf", "Call|10", "a toaster and the market.", conf=0.9, flags=["centered"]))
+pages[4]["blocks"].append(blk("5.2", "epigraf", "Call|10", "Things we find on this synthetic road:", conf=0.7, flags=["centered"]))
+pages[4]["blocks"].append(blk("5.3", "epigraf", "Call|10", "a kettle and a lamp.", conf=0.9, flags=["centered"]))
 pages[4]["blocks"].append(blk("5.4", "atıf", "Call|10", "—A Name", conf=0.9))
 D = FakeDoc()
 D.pages, D.body_styles, D.index_pages = pages, {"Body|11"}, []

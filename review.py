@@ -6,17 +6,19 @@ decisions for pdf_import.apply_overrides (decisions_for), so the import is rende
 
     questions(state, rendered) -> [question]     state: pdf_import.analyse(); rendered: pdf_import.render(state)
     decisions_for(question, key, apply_all) -> [decision]
-    integrity(state) -> dict(lost, pages, sentence)
+    integrity(state) -> dict(lost, pages, sentence, notes)
 """
 import collections
 import difflib
 import re
 
 import pdf_import as P
+import segtypes
 
 ROLE_LABEL = {"gövde": "Paragraf", "bölüm": "Başlık 1", "alt başlık 1": "Başlık 2", "alt başlık 2": "Başlık 3",
               "kısım": "Başlık 1", "epigraf": "Epigraf", "alıntı": "Alıntı", "şiir": "Şiir", "atıf": "Atıf",
-              "altyazı": "Altyazı", "kutu": "Kutu", "kutu-başlık": "Kutu", "liste": "Paragraf", "sil": "Atılsın"}
+              "altyazı": "Altyazı", "kutu": "Kutu", "kutu-başlık": "Kutu", "liste": "Paragraf", "dipnot": "Dipnot",
+              "son not": "Son not", "sil": "Atılsın"}
 # "Başka…": every role the user can give, in this order
 OTHER = [{"key": "role:" + r, "label": ROLE_LABEL[r]} for r in P.USER_ROLES]
 # the two likeliest alternatives to a guessed role
@@ -27,7 +29,8 @@ ALTERNATIVES = {"epigraf": ["gövde", "alıntı"], "alıntı": ["gövde", "şiir
 SHAPE = {"indent", "indent-right", "narrow", "centered", "right", "ragged", "italic-block", "smaller", "font", "hanging"}
 TITLES = {"rol": "İşaretli yazı ne?", "stil": "İşaretli yazı ne?", "baslik": "Bu başlık içindekilerde yok. Ne olsun?",
           "atif": "Bu atıf rakamının notu bulunamadı. Ne olsun?", "not": "Bu notun atfı bulunamadı. Ne olsun?",
-          "sutun": "Bu sayfa iki sütunlu okundu. Doğru mu?", "tekrar": "Bu tekrar eden yazı ne yapılsın?"}
+          "sutun": "Bu sayfa iki sütunlu okundu. Doğru mu?", "tekrar": "Bu tekrar eden yazı ne yapılsın?",
+          "bagla": "Hangi atıfa bağlansın?"}
 
 
 def _box(p, b):
@@ -57,20 +60,20 @@ def questions(state, rendered):
     pages = [p for p in d.pages[first - 1:last]]
     groups = collections.OrderedDict()            # signature -> question being built
 
-    def add(sig, qtype, p, b, guess=None, target=None, choices=None):
+    def add(sig, qtype, p, b, guess=None, target=None, choices=None, title=None):
         q = groups.get(sig)
         if q is None:
-            q = groups[sig] = dict(type=qtype, title=TITLES[qtype], page=p["p"], boxes=[_box(p, b)] if b else [],
+            q = groups[sig] = dict(type=qtype, title=title or TITLES[qtype], page=p["p"], boxes=[_box(p, b)] if b else [],
                                    seg=seg_of.get(b["bid"]) if b else None, targets=[], choices=choices or [],
-                                   guess=guess, other=OTHER if qtype in ("rol", "stil", "baslik") else [])
+                                   guess=guess, other=OTHER if qtype in ("rol", "stil", "baslik", "eslestir") else [])
         q["targets"].append(target if target is not None else b["bid"])
         return q
 
     # 1. named roles set with low or middling confidence, captions joined by look alone; 2. blocks flagged for review.
     # Asked per unit, the importer's seg_meta "unit" (a multi-paragraph epigraph, quote, poem or box; any other
     # segment is a unit of its own): one shaky part makes the whole unit asked, a sure part gets no exemption. An
-    # attribution closing a unit keeps its own role.
-    for unit in _units(d, rendered["meta"], first, last):
+    # attribution closing a unit keeps its own role. A note that found its callout is never asked.
+    for unit in _units(d, rendered["meta"], first, last, _segments(rendered.get("md", ""))):
         reason = None
         for p, b in unit:
             role, flags = b["role"], set(b.get("flags") or ())
@@ -102,21 +105,54 @@ def questions(state, rendered):
             for b in p["blocks"]:
                 if b.get("bid") and b["role"] in P.HEAD and not listed(b["text"]):
                     add(("baslik", b["role"], b["style"]), "baslik", p, b, "role:" + b["role"], choices=_role_choices(b["role"]))
-    # 4. unmatched notes: callouts with no note, notes with no callout
-    for i, m in enumerate(rendered["meta"]):
-        bids = d.seg_bids[i]
-        if not bids:
-            continue
+    # 4. notes: a callout with no note and a note-like block near it (its mark at the start) are one question; else
+    # callouts with no note (not asked when they are a book-level problem, see integrity), notes with no callout, and
+    # the user's notes still to be tied to a callout
+    notes = getattr(d, "notes", None) or dict(refs=0, matched=0, orphans=[], loose=[])
+    blocks = {b.get("bid"): (p, b) for p in d.pages for b in p["blocks"]}
+    orphans = [o for o in (_orphan(o, blocks) for o in notes["orphans"]) if o]
+    for o in orphans:
+        o["seg"] = seg_of.get(o["bid"])
+    book_level = _book_level(notes)
+    flagged = {i: m for i, m in enumerate(rendered["meta"]) if d.seg_bids[i] and {"atif-eslesmedi", "not-eslesmedi"} & set(m["flags"])}
+    paired = set()                                  # note block ids asked as a pair
+    for o in orphans:
+        near = [(p, b) for p, b in _note_like(d, blocks, o, first, last) if b["bid"] not in paired]
+        if len(near) == 1 and not book_level:
+            p, b = near[0]
+            paired.add(b["bid"])
+            q = add(("eslestir", b["bid"]), "eslestir", p, b, "none", target=b["bid"],
+                    title=f"Bu yazı, s. {o['page']}'teki {o['mark']} numaralı atıfın notu mu?", choices=[
+                        {"key": "link", "label": "Evet"}, {"key": "none", "label": "Hayır (şimdiki)"}])
+            q["ref"] = dict(bid=o["bid"], mark=o["mark"])
+            o["paired"] = True
+    asked = {o["seg"] for o in orphans if o.get("paired")}
+    for i, m in flagged.items():
         p = d.pages[m["pages"][0] - 1]
+        bids = d.seg_bids[i]
         b = next((x for x in p["blocks"] if x.get("bid") == bids[0]), None)
         if b is None:
             continue
-        if "atif-eslesmedi" in m["flags"]:
+        if "atif-eslesmedi" in m["flags"] and not book_level and i not in asked:
             add(("atif", b["style"]), "atif", p, b, "none", choices=[
                 {"key": "none", "label": "Rakam metinde kalsın (şimdiki)"}, {"key": "drop_refs", "label": "Rakam silinsin"}])
-        if "not-eslesmedi" in m["flags"]:
+        if "not-eslesmedi" in m["flags"] and not paired & set(bids) and not any(
+                blocks.get(x, (0, {}))[1].get("user_note") for x in bids):
             add(("not", b["style"]), "not", p, b, "none", choices=[
                 {"key": "none", "label": "Olduğu gibi kalsın (şimdiki)"}, {"key": "role:sil", "label": "Atılsın"}])
+    for n in notes["loose"]:
+        if not n["bids"] or n["bids"][0] not in blocks:
+            continue
+        p, b = blocks[n["bids"][0]]
+        cand = [o for o in orphans if o["mark"] == n["mark"]] if n["role"] == "son not" and n["mark"] else []
+        cand = cand or [o for o in orphans if abs(o["page"] - n["page"]) <= 1]
+        refs = [dict(bid=o["bid"], mark=o["mark"]) for o in cand]
+        q = add(("bagla", b["bid"]), "bagla", p, b, "none", target=b["bid"],
+                title=None if refs else "Atıfsız not: yakında notu olmayan bir atıf yok.",
+                choices=[{"key": "ref:%d" % k, "label": f"s. {o['page']} · {o['mark']}"} for k, o in enumerate(cand[:2])]
+                + [{"key": "none", "label": "Atıfsız kalsın (şimdiki)"}])
+        q["other"] = [{"key": "ref:%d" % k, "label": f"s. {o['page']} · {o['mark']}"} for k, o in enumerate(cand) if k >= 2]
+        q["refs"] = refs
     # 5. two-column pages
     for p in pages:
         if p.get("two_col") and p["p"] not in d.index_pages and p["blocks"]:
@@ -131,23 +167,66 @@ def questions(state, rendered):
     out = list(groups.values()) + _repeats(d, pages, seg_of)
     out.sort(key=lambda q: (q["page"], q["type"]))
     for k, q in enumerate(out, 1):
-        q["id"] = "q%d" % k
         q["count"] = len(q["targets"])
         t = q["targets"][0]                        # the block shown: the segment it is in, after any answer
         t = t[0] if isinstance(t, list) else t
         q.setdefault("bid", t["bid"] if isinstance(t, dict) else t if isinstance(t, str) else None)
         q.setdefault("bids", [q["bid"]] if q["bid"] else [])
+        q["id"] = "n:" + q["bid"] if q["type"] == "bagla" else "q%d" % k     # asked after an answer: a stable id
     return out
 
 
-def _units(d, meta, first, last):
+def _book_level(notes):
+    """callouts without a note as a problem of the whole book: more than T["orphan_share"] of them, and many"""
+    left = notes["refs"] - notes["matched"]
+    return left >= P.T["orphan_min"] and left > P.T["orphan_share"] * notes["refs"]
+
+
+def _segments(md):
+    """the importer's markdown in segments, one per seg_meta entry"""
+    return [x for x in re.split(r"\n\s*\n", md) if x.strip()]
+
+
+def _orphan(o, blocks):
+    """a callout left without a note, at its block: the first of its segment's blocks with a line carrying the mark"""
+    for bid in o["bids"]:
+        if bid in blocks and any(o["mark"] in l.get("refs", ()) for l in blocks[bid][1]["lines"]):
+            return dict(bid=bid, mark=o["mark"], page=blocks[bid][0]["p"])
+    return None
+
+
+def _note_like(d, blocks, o, first, last):
+    """blocks on the callout's page or the next either side that start with its mark and look like a note (set
+    smaller than the body, or a note the importer found with no callout; also when dropped as margin text, but never
+    a margin line proper, a folio or a running foot: three words at least): [(page, block)]"""
+    body = P.fam_of(d.body_style)[1] if d.body_style else None
+    out = []
+    for pg in (o["page"] - 1, o["page"], o["page"] + 1):
+        if not first <= pg <= last:
+            continue
+        p = d.pages[pg - 1]
+        for b in p["blocks"]:
+            if not b.get("bid") or not b["lines"] or b["role"] in P.HEAD or b["role"] in ("ön sayfa", "dizin") \
+                    or b.get("user_note") or b["bid"] == o["bid"]:
+                continue
+            m = P.FOOT_START.match(b["lines"][0]["plain"])
+            if m and m.group(1) == o["mark"] and len(b["lines"][0]["plain"].split()) >= 4 and (
+                    b["role"] == "dipnot" or body and b["size"] <= P.T["foot_size"] * body):
+                out.append((p, b))
+    return out
+
+
+def _units(d, meta, first, last, segs=None):
     """[(page, block)] per unit: the blocks of consecutive segments sharing seg_meta "unit" (one definition, the
     importer's), or of one segment; an attribution is a unit of its own (its role is not the unit's); blocks the
-    questions never ask about are left out"""
+    questions never ask about are left out, and so are notes that found their callout ("[^label]: ...")"""
     where = {b.get("bid"): (p, b) for p in d.pages for b in p["blocks"]}
     out, prev = [], None
     for i, m in enumerate(meta):
         if not first <= m["pages"][0] <= last if m.get("pages") else True:
+            prev = None
+            continue
+        if segs and i < len(segs) and segtypes.FOOTNOTE.match(segs[i]):
             prev = None
             continue
         u = m.get("unit")
@@ -238,6 +317,11 @@ def decisions_for(q, key, apply_all=True):
     targets = [b for t in targets for b in (t if isinstance(t, list) else [t])]     # units: all their blocks
     if key.startswith("role:"):
         return [{"bid": t, "role": key[5:]} for t in targets]
+    if key == "link":                                  # "Evet": the block is the callout's footnote
+        return [{"bid": q["bid"], "role": "dipnot", "ref": q["ref"]}]
+    if key.startswith("ref:"):
+        k = int(key[4:])
+        return [{"bid": q["bid"], "note_ref": q["refs"][k]}] if 0 <= k < len(q.get("refs", [])) else []
     if key == "drop_refs":
         return [{"bid": t, "drop_refs": True} for t in targets]
     if key == "order:rows":
@@ -248,7 +332,8 @@ def decisions_for(q, key, apply_all=True):
 def integrity(state):
     """Every character pdfium read on the requested pages is either in a block (written or dropped as margin text,
     front matter, index), inside a figure or table, set at an angle, or an ornament glyph; what is none of these is
-    lost. -> dict(lost, pages, sentence)"""
+    lost. With callouts, how many found their note: notes = dict(matched, refs, low), low when the ones without
+    are a book-level problem (then they are not asked one by one). -> dict(lost, pages, sentence, notes)"""
     d, first, last = state["doc"], state["first"], state["last"]
     ns = lambda t: sum(1 for ch in t if ch.strip())
     lost = {}
@@ -260,4 +345,6 @@ def integrity(state):
             lost[p["p"]] = p["src_chars"] - acc
     n = sum(lost.values())
     sentence = "Metin kaybı yok" if not n else f"{n} karakter kayıp, s. {P._fmt_pages(sorted(lost))}'te"
-    return dict(lost=n, pages=sorted(lost), sentence=sentence)
+    nt = getattr(d, "notes", None)
+    notes = dict(matched=nt["matched"], refs=nt["refs"], low=_book_level(nt)) if nt and nt["refs"] else None
+    return dict(lost=n, pages=sorted(lost), sentence=sentence, notes=notes)

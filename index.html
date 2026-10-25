@@ -552,6 +552,7 @@
   .ck-logo .m{color:var(--ck-hi);}
   .ck-book{font-weight:600;font-size:17px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;max-width:28ch;}
   .ck-state{flex:1;min-width:0;color:var(--ck-soft);font-size:15px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;}
+  .ck-state .ck-low{color:var(--ck-hi);}
   .ck-state b{color:var(--ck-ink);font-weight:600;}
   .ck-btn{font:600 14px/1 'Sofia Sans Condensed','Arial Narrow',sans-serif;letter-spacing:.05em;text-transform:uppercase;
     border:1px solid var(--ck-ink);background:none;color:var(--ck-ink);padding:10px 16px;cursor:pointer;white-space:nowrap;}
@@ -1276,7 +1277,9 @@ const ckOpenCount=()=>ckQs().filter(q=>!CK.answers[q.id]).length;
 function ckTop(){
   $('ck-book').textContent=CK.info.name||'';
   const n=ckOpenCount(),total=ckQs().length;
+  const nt=CK.data.integrity.notes;
   $('ck-state').innerHTML=esc(CK.data.integrity.sentence)+' · '+
+    (nt?`<span${nt.low?' class="ck-low"':''}>Notlar: ${nt.matched} / ${nt.refs} eşleşti</span> · `:'')+
     (!total?'Hiç soru yok':n?`<b>${n} yer senin kararını bekliyor</b>`:'Bütün sorular cevaplandı');
 }
 // the segments a question shows: the ones its blocks are in now (a unit may be several; answers and edits move them)
@@ -1569,7 +1572,13 @@ function wrapSeg(f,t){
   if(t==='blockquote') return f.split('\n').map(x=>'> '+x).join('\n');
   return f;
 }
-function fnNumber(label){ const m=/(\d+)$/.exec(label); return m?m[1]:label; }
+// a note's mark as printed: the importer's labels are b<group>-<mark>[-page], a sign series as s1, s2 … (* † ‡ § ‖ ¶, then doubled)
+function fnNumber(label){
+  const b=/^b\d+-([^-]+)/.exec(label), s=b&&/^s(\d+)$/.exec(b[1]);
+  if(s){ const k=+s[1]-1; return '*†‡§‖¶'[k%6].repeat(Math.floor(k/6)+1); }
+  if(b) return b[1];
+  const m=/(\d+)$/.exec(label); return m?m[1]:label;
+}
 function typeOf(i){ return segType(P.segments[i]||''); }
 function refLabels(s){ return Array.from((s||'').matchAll(SEG_REF),m=>m[1]); }
 // Matching runs on text where the marker and every [^ref] are replaced by
