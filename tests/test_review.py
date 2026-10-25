@@ -55,10 +55,10 @@ for p in range(1, 7):
         bl.append(blk(f"{p}.0", "bölüm", HEAD_STYLE, "A Synthetic Running Head", zone="top", top=20))
     bl.append(blk(f"{p}.1", "gövde", text=f"Body text of page {p}."))
     pages.append(dict(p=p, W=500, H=700, blocks=bl, two_col=False, items=[]))
-pages[0]["blocks"].append(blk("1.2", "epigraf", "Epi|10", "An opening line.", conf=0.7, flags=["centered", "narrow"]))
+pages[0]["blocks"].append(blk("1.2", "epigraf", "Epi|10", "An opening line.", conf=0.7, flags=["centered", "narrow"], size=10))
 pages[0]["blocks"].append(blk("1.3", "alıntı", "Body|11", "A quoted passage.", conf=0.9, flags=["indent"]))
-pages[1]["blocks"].append(blk("2.2", "gövde", "Odd|10", "An odd block.", flags=["stil-farkli", "smaller"]))
-pages[2]["blocks"].append(blk("3.2", "gövde", "Odd|10", "Another odd block.", flags=["stil-farkli", "smaller"]))
+pages[1]["blocks"].append(blk("2.2", "gövde", "Odd|9", "An odd block.", flags=["stil-farkli", "smaller"], size=9))
+pages[2]["blocks"].append(blk("3.2", "gövde", "Odd|9", "Another odd block.", flags=["stil-farkli", "smaller"], size=9))
 pages[2]["blocks"].append(blk("3.3", "alt başlık 1", "Sub|13", "A Section Nobody Lists"))
 pages[3]["two_col"] = True
 pages[4]["blocks"].append(blk("5.2", "epigraf", "Call|10", "Things we find on this synthetic road:", conf=0.7, flags=["centered"]))
@@ -105,6 +105,38 @@ check("repeat: keep all brings the dropped ones back in the kept ones' role", R.
       == [{"bid": f"{p}.0", "role": "bölüm"} for p in range(1, 5)])
 check("skip and the current answer decide nothing", R.decisions_for(by["rol"][0], "skip") == [] and R.decisions_for(by["atif"][0], "none") == [])
 check("two columns: read top to bottom", R.decisions_for(by["sutun"][0], "order:rows") == [{"page": 4, "order": "rows"}])
+
+# ---------------------------------------------------------------- A2. questions grouped where one answer would do
+pages = []
+for p in range(1, 13):
+    bl = [blk(f"{p}.0", "bölüm" if p in (1, 6) else "gövde", "Body|11", "Chapter Heading" if p in (1, 6) else f"Body text of page {p}.")]
+    pages.append(dict(p=p, W=500, H=700, blocks=bl, two_col=False, items=[]))
+for p, style in ((2, "Ref|8"), (3, "RefI|8"), (5, "Ref|8")):        # a reference list: styles and shapes vary, one size
+    pages[p - 1]["blocks"].append(blk(f"{p}.1", "gövde", style, "Author, A. (2001). A synthetic title.", flags=["stil-farkli", "hanging"],
+                                      size=8, nwords=6, top=200))
+pages[2]["blocks"].append(blk("3.2", "alıntı", "Ref|8", "A synthetic quoted line in the list.", conf=0.6, size=8, nwords=7, top=300))
+for p, shape in ((7, "centered"), (12, "right")):                   # one short line style in two chapters, set two ways
+    pages[p - 1]["blocks"].append(blk(f"{p}.1", "alıntı", "Lbl|9", "A short line", conf=0.6, size=9, nwords=3, flags=[shape], top=400))
+D = FakeDoc()
+D.pages, D.body_styles, D.index_pages = pages, {"Body|11"}, []
+D.seg_bids = [[b["bid"]] for p in pages for b in p["blocks"]]
+meta = [dict(pages=[int(bids[0].split(".")[0])], flags=[]) for bids in D.seg_bids]
+qs = R.questions(dict(doc=D, first=1, last=12, ctx=dict(outline=[])), dict(meta=meta))
+ref = next((q for q in qs if "2.1" in flat(q)), {})
+check("grouping: a reference list in one chapter (pages a few apart, one size) is one question",
+      sorted(flat(ref)) == ["2.1", "3.1", "3.2", "5.1"] and ref.get("count") == 4 and ref.get("detail") == "s. 2–3, 5", ref)
+check("grouping: blocks with different roles now keep them unless answered", ref.get("guess") == "none" and
+      ref.get("choices", [{}])[0] == {"key": "none", "label": "Olduğu gibi kalsın (şimdiki)"} and R.decisions_for(ref, "none") == [], ref)
+check("grouping: one answer goes to every block of the group",
+      sorted(x["bid"] for x in R.decisions_for(ref, "role:gövde")) == ["2.1", "3.1", "3.2", "5.1"])
+lbl = next((q for q in qs if "7.1" in flat(q)), {})
+check("grouping: short lines of one style are one question across chapters", sorted(flat(lbl)) == ["12.1", "7.1"]
+      and lbl.get("guess") == "role:alıntı", lbl)
+check("grouping: two questions in all", len(qs) == 2, [q["type"] for q in qs])
+asked_twice = [dict(type="icindekiler", targets=["5.1"], page=5, bids=["5.1"]),
+               dict(type="stil", targets=[["5.1"]], page=5, bids=["5.1"], guess="role:gövde")]
+check("grouping: a block the contents question asks about is not asked again",
+      [q["type"] for q in R._regions(asked_twice, D, {b["bid"]: (p, b) for p in pages for b in p["blocks"]})] == ["icindekiler"])
 
 
 # ---------------------------------------------------------------- B. render with decisions, on a synthetic PDF

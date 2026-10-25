@@ -283,6 +283,8 @@ THRESHOLDS = {
     "toc_level_share": 0.6,       # a contents level maps to the heading role most (this share) of its matched entries have - contents round
     "toc_entry_words": 25,        # a block that is a contents entry not set as a heading has at most this many words - contents round
     "orphan_min": 10,             # ...when there are at least this many; fewer are asked one by one - notes round, Trauma (1 of 3)
+    "q_region_gap": 4,            # role/style questions in one chapter at most this many pages apart are one question when on one page or at one size (a reference list, a table, a page of figure text) - grouping round
+    "q_short_words": 12,          # ...and short lines (at most this many words) of one style anywhere in the book are one question - grouping round
 }
 
 

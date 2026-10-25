@@ -204,7 +204,7 @@ def questions(state, rendered):
             p = d.pages[q["page"] - 1]
             q["boxes"] = [_box(p, b) for b in p["blocks"][:1]]
             q["seg"] = seg_of.get(p["blocks"][0]["bid"])
-    out = list(groups.values()) + _repeats(d, pages, seg_of)
+    out = _regions(list(groups.values()), d, blocks) + _repeats(d, pages, seg_of)
     out.sort(key=lambda q: (q["page"], q["type"]))
     for k, q in enumerate(out, 1):
         q["count"] = q.get("count") or len(q["targets"])
@@ -214,6 +214,62 @@ def questions(state, rendered):
         q.setdefault("bids", [q["bid"]] if q["bid"] else [])
         q["id"] = "n:" + q["bid"] if q["type"] == "bagla" else "q%d" % k     # asked after an answer: a stable id
     return out
+
+
+def _regions(qs, d, blocks):
+    """Role and style questions asked as one where one answer would do: a block the contents question already asks
+    about is not asked again; questions in one chapter at most T["q_region_gap"] pages apart, on one page or at one
+    text size (a reference list, a table, a page of figure text), are one; then, anywhere in the book, short lines of
+    one style, and questions of one style the importer gave one role. A group whose blocks have different roles now
+    keeps them unless answered ("Olduğu gibi kalsın")."""
+    in_toc = {t for q in qs if q["type"] == "icindekiler" for t in q["targets"]}
+    chapter, k = {}, 0                             # block -> the chapter (kısım/bölüm heading) it is in
+    for p in d.pages:
+        for b in p["blocks"]:
+            k += b["role"] in ("kısım", "bölüm")
+            chapter[b.get("bid")] = k
+    keep, asked = [], []
+    for q in qs:
+        if q["type"] not in ("rol", "stil"):
+            keep.append(q)
+        elif not ({t for u in q["targets"] for t in u} & in_toc):
+            asked.append(q)
+    shown = lambda q: blocks[q["bids"][0]][1]
+    runs = []
+    for q in sorted(asked, key=lambda q: (q["page"], chapter.get(q["bids"][0], 0))):
+        last = runs[-1][-1] if runs else None
+        if last and chapter.get(q["bids"][0]) == chapter.get(last["bids"][0]) and q["page"] - last["page"] <= P.T["q_region_gap"] and (
+                q["page"] == last["page"] or shown(q).get("size") == shown(last).get("size")):
+            runs[-1].append(q)
+        else:
+            runs.append([q])
+    by_style = collections.OrderedDict()
+    for run in runs:
+        b = shown(run[0])
+        if len(run) == 1 and b.get("nwords", 0) <= P.T["q_short_words"]:
+            by_style.setdefault((b.get("style"),), []).extend(run)
+        elif all(shown(q).get("style") == b.get("style") and q["guess"] == run[0]["guess"] for q in run):
+            by_style.setdefault((b.get("style"), run[0]["guess"]), []).extend(run)
+        else:
+            keep.append(_one(run, blocks))
+    keep += [_one(run, blocks) for run in by_style.values()]
+    return keep
+
+
+def _one(run, blocks):
+    """questions as one: every target, the first one shown; its current role when they share it"""
+    if len(run) == 1:
+        return run[0]
+    q = dict(run[0], targets=[t for x in run for t in x["targets"]])
+    q["boxes"] = [b for x in run if x["page"] == q["page"] for b in x["boxes"]]
+    guesses = collections.Counter(x["guess"] for x in run)
+    if len(guesses) > 1:
+        q["type"], q["guess"] = "rol", "none"
+        q["choices"] = [{"key": "none", "label": "Olduğu gibi kalsın (şimdiki)"}] + [
+            {"key": g, "label": ROLE_LABEL[g[5:]]} for g, _ in guesses.most_common(2)]
+    pages = sorted({blocks[t][0]["p"] for u in q["targets"] for t in u if t in blocks})
+    q["detail"] = f"s. {P._fmt_pages(pages)}"
+    return q
 
 
 def _book_level(notes):
