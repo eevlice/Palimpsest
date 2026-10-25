@@ -17,7 +17,13 @@ Each stage is a section of `pdf_import.py`; its input and output are written at 
 | 5 | Objects (`find_grids`, `grid_markdown`, `_Objects`) | rules, glyphs; items and roles | tables as markdown or a placeholder; blocks above/inside/below a figure or table become its captions (`altyazı`) |
 | 6 | Roles (`_Styles`, `_Roles`, `_ShapeRoles`, `_Notes`) | blocks with margins marked | style statistics → heading tiers, body, lists, boxes, front matter, index; shape → epigraph, block quote, verse, attribution; reasons in `flags`, a confidence in `conf`; page-bottom footnotes (`dipnot`) |
 | 7 | Merges (`_Merges`, `join_hyphen`, `join_lines`) | lines of the book; texts to join | hyphen lexicon; joins inside blocks, across page breaks, around objects; a hyphen kept only when the book writes the compound |
-| 8 | Writing (`build_markdown`, `resolve_notes`, `page_refs`, `_analyse`) | `Doc`, the page range | markdown, warnings (Turkish), `seg_meta` (one entry per segment); callouts matched to notes; in-book page references flagged |
+| 8 | Writing (`render`, `apply_overrides`, `build_markdown`, `resolve_notes`, `page_refs`) | `Doc`, the page range, the user's decisions | markdown, warnings (Turkish), `seg_meta` (one entry per segment) and the blocks of each segment (`doc.seg_bids`); callouts matched to notes; in-book page references flagged |
+
+`analyse()` runs stages 1–7 once and returns a state that pickles; `render(state, decisions)` runs stage 8. The
+review screen keeps the state in `projects/_pending/` and renders it again after each answer; without decisions
+`render` gives byte for byte the old output. Decisions (`apply_overrides`) name blocks by a stable id
+("page.index"): a role, join to the segment before, split at a line, drop unmatched callout numbers, keep or drop a
+margin line, read a page top to bottom; each is noted in the block's flags as `kullanici:…`.
 
 Stages 4–7 run over the whole book in `Doc.__init__`. One step runs out of order: margin lines that repeat a
 heading (stage 4) need the heading roles of stage 6 first. The whole document is always analysed; only the

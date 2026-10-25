@@ -904,6 +904,8 @@ def build_blocks(page_no, W, H, chars, boxes, orn_fonts=frozenset(), images=(), 
     # text outside the page box (facing-page copies in spreads) is not part of this page
     sl = T["page_slack"]
     chars = [c for c in chars if -sl <= (c.x0 + c.x1) / 2 <= W + sl and -sl <= (c.top + c.bot) / 2 <= H + sl]
+    src_chars = sum(1 for c in chars if c.ch.strip())     # the page's text, for the review screen's loss check
+    orn_chars = sum(1 for c in chars if c.ch.strip() and not c.rot and c.font in orn_fonts)   # ornaments: left out
     # text set at an angle is a watermark or an edge tab, never part of the reading flow
     rotated = sum(1 for c in chars if c.rot and c.ch.strip())
     chars = [c for c in chars if not c.rot]
@@ -1023,7 +1025,7 @@ def build_blocks(page_no, W, H, chars, boxes, orn_fonts=frozenset(), images=(), 
     for b in blocks:
         _finish_block(b)
     return dict(p=page_no, W=W, H=H, blocks=blocks, boxes=boxes, rotated=rotated, items=items, fig_words=fig_words,
-                fig_text=fig_text)
+                fig_text=fig_text, src_chars=src_chars, orn_chars=orn_chars)
 
 
 # ====================================================================================================================
@@ -1134,6 +1136,7 @@ class _Margins:
                 kept = [l for l in b["lines"] if not l["sil"]]
                 b["sil"] = not kept
                 if kept and len(kept) < len(b["lines"]):
+                    b["cut_lines"] = [l for l in b["lines"] if l["sil"]]     # for the review screen
                     b["lines"] = kept
                     _finish_block(b)
                 b["edge"] = all(l["zone"] for l in b["lines"])
@@ -1410,6 +1413,11 @@ class _Styles:
         return (fam_of(style)[1] + (T["score_caps"] if s["caps"] / s["blocks"] > T["caps_share"] else 0)
                 + (T["score_bold"] if s["weight"] >= T["bold_weight"] or "Bold" in style else 0))
 
+    def variant_of_body(self, k):
+        """a style of a body family that is not itself a body style (the body's italic, a size step): a method, not a
+        lambda, so a Doc pickles (the review screen keeps it between renders)"""
+        return fam_of(k) in getattr(self, "_variant_keys", ()) and k not in getattr(self, "_variant_not", ())
+
     def _suggest(self):
         S = self.S
         if not S:
@@ -1428,7 +1436,7 @@ class _Styles:
         # fonts that behave like body text are not anomalies; they do not change roles (a bold run-in font is also
         # the font of the sub-heads)
         self.body_keys = body_keys | {fam_of(k) for k in self._body_variants(body_styles)}
-        self.variant_of_body = lambda k: fam_of(k) in body_keys and k not in body_styles
+        self._variant_keys, self._variant_not = body_keys, set(body_styles)
         for k, s in S.items():
             n = s["blocks"]
             f, sz = fam_of(k)
@@ -2092,13 +2100,18 @@ def _style_name(style):
 def _meta_of(b=None, page=None, box=None):
     """where a segment comes from: pages, boxes [page, x0, y0, x1, y1] (PDF points, top-left origin), style, flags"""
     if b is not None:
-        return dict(pages={b["page_no"]}, boxes=[[b["page_no"]] + [round(v, 1) for v in (b["x0"], b["top"], b["x1"], b["bot"])]],
-                    style=_style_name(b["style"]), flags=set(b.get("flags", ())),
-                    role=ROLE_TYPE.get(b["role"]) if b.get("conf") else None, conf=b.get("conf"))
+        m = dict(pages={b["page_no"]}, boxes=[[b["page_no"]] + [round(v, 1) for v in (b["x0"], b["top"], b["x1"], b["bot"])]],
+                 style=_style_name(b["style"]), flags=set(b.get("flags", ())),
+                 role=ROLE_TYPE.get(b["role"]) if b.get("conf") else None, conf=b.get("conf"))
+        m["_bids"] = [b["bid"]] if b.get("bid") else []      # private: which blocks a segment is made of
+        if b.get("user_join"):
+            m["_join"] = True                                # private: the user joined it to the segment before
+        return m
     return dict(pages={page}, boxes=[[page] + [round(v, 1) for v in box]], style=None, flags=set(), role=None, conf=None)
 
 
 def _meta_add(m, other):
+    m.setdefault("_bids", []).extend(other.get("_bids", ()))
     m["pages"] |= other["pages"]
     m["boxes"] += other["boxes"]
     m["flags"] |= other["flags"]
@@ -2233,7 +2246,7 @@ def _align(runs, groups):
     return pairs
 
 
-def resolve_notes(md, stats):
+def resolve_notes(md, stats, drop_bids=frozenset()):
     """Callouts to their notes. Page-bottom footnotes match a callout on their page by number or sign. Endnotes:
     callouts split into runs where the numbering starts again, the runs aligned with the note groups in order, then
     matched by number. Every note gets a label unique in the book, [^b<group or chapter>-<n>]: the callout becomes
@@ -2308,6 +2321,8 @@ def resolve_notes(md, stats):
                 return f"[^{label}]"
             if i in ref_items:
                 md[i][2]["flags"].add("atif-eslesmedi")
+                if drop_bids & set(md[i][2].get("_bids", ())):
+                    return ""                               # the user: the stray number goes
             return m.group(1)
         _set_txt(md, i, re.sub(r"[ \t]*" + REF.pattern, sub, _txt(it)))
     # write: notes
@@ -2425,6 +2440,105 @@ def page_refs(md, stats):
             stats["page_refs"] += 1
 
 
+def user_joins(md, lex, stats, amb):
+    """segments the user joined to the one before ("öncekiyle birleştir"): whatever their kinds, the text goes on in
+    the segment before, hyphen-joined where the line breaks a word"""
+    for i in range(1, len(md)):
+        if md[i] is None or not md[i][2].get("_join"):
+            continue
+        k = i - 1
+        while k >= 0 and md[k] is None:
+            k -= 1
+        if k < 0:
+            continue
+        a, b = _txt(md[k]), _txt(md[i])
+        j = join_hyphen(a, b, lex, stats, mark="-", amb=amb)
+        _set_txt(md, k, j if j is not None else a + " " + b)
+        _meta_add(md[k][2], md[i][2])
+        md[i] = None
+
+
+# roles the user can give a block (the review screen's and the editor's choices); "sil" leaves it out
+USER_ROLES = ("gövde", "bölüm", "alt başlık 1", "alt başlık 2", "epigraf", "alıntı", "şiir", "atıf", "altyazı", "kutu", "sil")
+
+
+def apply_overrides(doc, decisions):
+    """The user's decisions on a Doc, in order. Each names a block by its id ("page.index") or a page:
+    {"bid", "role"} a role from USER_ROLES; {"bid", "join": True} goes on in the segment before; {"bid", "split": k}
+    a new segment from the block's line k (0: from the block itself, which then joins nothing before it); {"bid", "drop_refs": True} unmatched callout numbers go;
+    {"bid", "line": k, "cut": bool, "keep": bool} a margin line kept or dropped (k in the lines the margin stage cut,
+    or in the block's lines); {"page", "order": "rows"} a page read top to bottom, not as two columns.
+    Every decision is noted in the block's flags ("kullanici:..."), so seg_meta tells who decided."""
+    blocks = {b.get("bid"): (p, b) for p in doc.pages for b in p["blocks"]}
+
+    def note(b, what):
+        b["flags"] = sorted(set(b.get("flags") or ()) | {"kullanici:" + what})
+
+    def detach(p, b):                               # no longer one of a figure's captions
+        for it in p.get("items", []):
+            for k in ("before", "after"):
+                if k in it:
+                    it[k] = [x for x in it[k] if x is not b]
+        b.pop("obj", None)
+    for dec in decisions:
+        if "page" in dec:
+            p = doc.pages[int(dec["page"]) - 1]
+            if dec.get("order") == "rows":
+                p["blocks"].sort(key=lambda b: (round(b["top"]), b["x0"]))
+                p["two_col"] = False
+            continue
+        p, b = blocks.get(dec.get("bid"), (None, None))
+        if b is None:
+            continue
+        if "line" in dec:
+            src = b.get("cut_lines", []) if dec.get("cut") else b["lines"]
+            k = int(dec["line"])
+            if not 0 <= k < len(src):
+                continue
+            if dec.get("keep") and dec.get("cut"):          # a cut margin line goes back into its block
+                b["lines"] = sorted(b["lines"] + [src.pop(k)], key=lambda l: l["top"])
+                _finish_block(b)
+                note(b, "tut")
+            elif not dec.get("keep") and not dec.get("cut"):
+                if len(b["lines"]) == 1:
+                    b["role"] = "sil"
+                else:
+                    b.setdefault("cut_lines", []).append(b["lines"].pop(k))
+                    _finish_block(b)
+                note(b, "at")
+            continue
+        if dec.get("role") in USER_ROLES:
+            r = dec["role"]
+            detach(p, b)
+            b["role"], b["user"], b["sil"] = r, True, False
+            if r in ROLE_TYPE:
+                b["conf"] = 1.0
+            if b.get("cut_lines") and r != "sil" and not b["lines"]:
+                b["lines"] = b.pop("cut_lines")
+                _finish_block(b)
+            note(b, "sil" if r == "sil" else r)
+        if dec.get("join"):
+            b["user_join"] = True
+            note(b, "birlestir")
+        if dec.get("drop_refs"):
+            b["drop_refs"] = True
+            note(b, "atif-sil")
+        if "split" in dec:
+            k = int(dec["split"])
+            if k == 0:                                      # at the block's start: a new segment, nothing joins it
+                b["nojoin"], b["user_join"] = True, False
+                note(b, "bol")
+            elif 0 < k < len(b["lines"]):
+                tail = dict(b, lines=b["lines"][k:], bid=b["bid"] + "+", nojoin=True, user_join=False)
+                b["lines"] = b["lines"][:k]
+                _finish_block(b)
+                _finish_block(tail)
+                p["blocks"].insert(p["blocks"].index(b) + 1, tail)
+                blocks[tail["bid"]] = (p, tail)
+                note(b, "bol")
+                note(tail, "bol")
+
+
 def build_markdown(doc, first_idx, last_idx):
     """pages[first_idx..last_idx] (0-based, inclusive) -> markdown, stats. The source of every segment (pages, boxes,
     style, flags) is left in doc.seg_meta, one entry per blank-line-separated segment of the markdown."""
@@ -2494,7 +2608,10 @@ def build_markdown(doc, first_idx, last_idx):
             while items and items[0]["top"] < b["top"] - T["item_order_pt"]:
                 place(items.pop(0))
             role, ls = b["role"], b["lines"]
-            if role == "altyazı":
+            # a block the user decided on is never dropped by an automatic rule below (stray letters, stray heading):
+            # the decision is the last word; "sil" is the user's own drop
+            auto_drop = not any(f.startswith("kullanici:") for f in b.get("flags") or ())
+            if role == "altyazı" and not b.get("user"):
                 continue                                    # written with its figure or table
             if role == "dipnot":                            # a paragraph running on overleaf stays open
                 for num, nl in b["foot"]:
@@ -2541,7 +2658,7 @@ def build_markdown(doc, first_idx, last_idx):
                 stats["flag_removed"] += bool(b.get("flag_removed"))
                 continue
             toks_ = [t.strip("*") for t in b["text"].split()]
-            if role in ("gövde", "kutu") and (len(re.sub(r"[\s*]", "", b["text"])) <= T["stray_chars"]
+            if auto_drop and role in ("gövde", "kutu") and (len(re.sub(r"[\s*]", "", b["text"])) <= T["stray_chars"]
                                               or (len(toks_) <= T["stray_tokens"] and all(len(t) == 1 for t in toks_))):
                 stats["dropped_words"] += b["nwords"]       # single stray letters: ornate lettering, not text
                 continue
@@ -2555,7 +2672,7 @@ def build_markdown(doc, first_idx, last_idx):
                 text = join_lines(texts, lex, stats, amb)
                 last = md[-1] if md and cur is None else None
                 # a quote cut by a page break whose rest did not keep the quote's shape (one line, no indent)
-                if (last and last[0] == "quote" and not box_here and not terminal(last[1])
+                if (last and last[0] == "quote" and not box_here and not terminal(last[1]) and not b.get("nojoin")
                         and re.match(r"[*_]*[a-z]", text)):
                     j = join_hyphen(last[1], text, doc.hyphen_real, stats, mark="-", amb=amb)
                     md[-1] = ("quote", j if j is not None else last[1] + " " + text, last[2])
@@ -2566,7 +2683,7 @@ def build_markdown(doc, first_idx, last_idx):
                 # included), same box, no closing punctuation, lowercase start. With a figure or table in between
                 # (pending), the continuation may start with a capital ("... Even among" / "CEOs, the top ...").
                 # A heading demoted to the paragraph going on (cont) joins whatever its font.
-                if (cur and cur["page"] <= p["p"] and (fam_of(cur["style"]) == fam_of(b["style"]) or b.get("cont"))
+                if (cur and not b.get("nojoin") and cur["page"] <= p["p"] and (fam_of(cur["style"]) == fam_of(b["style"]) or b.get("cont"))
                         and cur["box"] == box_here and not terminal(cur["text"])
                         and (re.match(r"[*_]*[a-z]", text) or pending or b.get("cont"))):
                     prev_text = cur["text"]
@@ -2586,7 +2703,7 @@ def build_markdown(doc, first_idx, last_idx):
             flush()
             if role in HEAD:
                 t = join_lines([re.sub(r"(?<!\*)\*\*(?!\*)", "", x) for x in texts], lex, stats, amb)
-                if len(re.sub(r"[\s*]", "", t)) <= T["stray_chars"]:
+                if auto_drop and len(re.sub(r"[\s*]", "", t)) <= T["stray_chars"]:
                     stats["dropped_words"] += b["nwords"]
                     continue
                 lvl = HEAD[role]
@@ -2617,6 +2734,8 @@ def build_markdown(doc, first_idx, last_idx):
                     _meta_add(last[2], _meta_of(b))
                 else:
                     md.append(("quote", text, _meta_of(b)))
+            elif role == "altyazı":                          # the user's: a caption standing on its own
+                md.append(("raw", CAPTION_OPEN + "\n" + join_lines(texts, lex, stats, amb) + "\n" + CAPTION_CLOSE, _meta_of(b)))
             elif role == "liste":
                 t = join_lines(texts, lex, stats, amb)
                 # the number goes first, outside any emphasis: "**1. Lead-in.** text" -> "1. **Lead-in.** text"
@@ -2631,10 +2750,12 @@ def build_markdown(doc, first_idx, last_idx):
         for it in items:
             place(it)
     flush()
-    resolve_notes(md, stats)
+    user_joins(md, lex, stats, amb)
+    md = [it for it in md if it is not None]
+    resolve_notes(md, stats, {b["bid"] for p in doc.pages for b in p["blocks"] if b.get("drop_refs")})
     md = [it for it in md if it is not None]
     page_refs(md, stats)
-    out, meta = [], []
+    out, meta, doc.seg_bids = [], [], []
     for kind, v, m in md:
         text = (v["text"] if not v.get("box") else fenced("kutu", v["text"])) if kind == "p" else (
             "#" * MD_LEVEL[v["lvl"]] + " " + v["text"] if kind == "head" else "> " + v if kind == "quote" else
@@ -2646,6 +2767,7 @@ def build_markdown(doc, first_idx, last_idx):
                          role=m.get("role"), conf=m.get("conf")))
         if m.get("page_refs"):
             meta[-1]["page_refs"] = m["page_refs"]
+        doc.seg_bids.append(m.get("_bids", []))
     doc.seg_meta = meta
     return "\n\n".join(out) + "\n", stats
 
@@ -2690,6 +2812,13 @@ def _fmt_pages(nums):
 
 def _analyse(pdf_bytes, first_page=None, last_page=None):
     """convert() with its internals: dict(md, warnings, doc, stats, tint, orn, info)"""
+    return render(analyse(pdf_bytes, first_page, last_page))
+
+
+def analyse(pdf_bytes, first_page=None, last_page=None):
+    """The heavy half of an import: reading, lines, blocks and every book-level stage (Doc). -> state for render():
+    dict(doc, first, last, ctx). The state pickles, so a review screen can render it again with the user's
+    decisions without reading the PDF a second time."""
     try:
         doc = pdfium.PdfDocument(pdf_bytes)
     except pdfium.PdfiumError as e:
@@ -2758,12 +2887,37 @@ def _analyse(pdf_bytes, first_page=None, last_page=None):
         pages.append(build_blocks(i + 1, W, H, chars, boxes, orn, gfx["images"], gfx["hl"], gfx["vl"]))
     raw_pages = None
     d = Doc(pages)
+    info = doc.get_metadata_dict()
+    producer = " ".join(v for v in (info.get("Producer"), info.get("Creator")) if v)
+    outline = []                                    # the PDF's own bookmarks, for headings the contents do not list
+    try:
+        for x in doc.get_toc():
+            dest = x.get_dest()
+            outline.append(dict(title=x.get_title() or "", level=x.level,
+                                page=dest.get_index() + 1 if dest is not None and dest.get_index() is not None else None))
+    except Exception:
+        outline = []                                # a broken outline is no outline
+    for pg in d.pages:
+        for k, b in enumerate(pg["blocks"]):
+            b["bid"] = f"{pg['p']}.{k}"            # stable through renders: the review screen's decisions name blocks
+    return dict(doc=d, first=first, last=last,
+                ctx=dict(signals=signals, ocr=ocr, sel_ocr=sel_ocr, miner=sorted(miner), retry=sorted(retry),
+                         no_miner=no_miner, textless=textless, producer=producer, tint=tint, orn=orn, outline=outline))
+
+
+def render(state, overrides=None):
+    """The light half: the user's decisions (apply_overrides; none = the importer's own) on the Doc, then markdown,
+    warnings and seg_meta, aligned one entry per segment. dict(md, warnings, doc, stats, tint, orn, meta, info)"""
+    d, first, last, c = state["doc"], state["first"], state["last"], state["ctx"]
+    if overrides:
+        apply_overrides(d, overrides)
+    signals, ocr, sel_ocr, retry, no_miner, textless, producer, tint, orn = (
+        c["signals"], c["ocr"], c["sel_ocr"], set(c["retry"]), c["no_miner"], c["textless"], c["producer"], c["tint"], c["orn"])
+    miner = c["miner"]
     md, stats = build_markdown(d, first - 1, last - 1)
     if len(md.split()) < T["min_md_words"]:
         raise PdfImportError("Seçilen sayfalardan okunabilir metin çıkmadı (yalnızca filigran/üst-alt bilgi olabilir). "
                              "Sayfa aralığını kontrol et.")
-    meta = doc.get_metadata_dict()
-    producer = " ".join(v for v in (meta.get("Producer"), meta.get("Creator")) if v)
     scanned = is_scanned(producer, signals)
     rotated = sum(p.get("rotated", 0) for p in d.pages[first - 1:last])
     warnings = [SCANNED_WARNING] if scanned else []

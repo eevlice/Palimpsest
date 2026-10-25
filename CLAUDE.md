@@ -5,7 +5,8 @@ Local, single-user book translation tool. Flask backend + one vanilla-JS file fr
 ## Layout
 - server.py: Flask routes (port 5001 is hardcoded), segmentation, setup pass, /translate_simple
 - segtypes.py: segment type (heading/footnote/paragraph) derived from the source markdown, marker/ref stripping for the model, footnote ⟦n⟧ placeholders, footnote reorder at import. index.html's segType() mirrors it; tests/ checks both against one fixture.
-- pdf_import.py: PDF → markdown in stages, all tuned numbers in THRESHOLDS; stages, roles, thresholds, known limits and how to run the karne: docs/pdf_import.md
+- pdf_import.py: PDF → markdown in stages, all tuned numbers in THRESHOLDS; stages, roles, thresholds, known limits and how to run the karne: docs/pdf_import.md. analyse() (heavy, pickles) + render(state, decisions) (light; no decisions = byte-identical output).
+- review.py: the review screen's questions after a PDF import (from what the importer already knows) and answers → decisions. Flow: /import (free) → review screen (#check in index.html; state in projects/_pending/) → /setup (paid). User decisions are noted in segMeta flags as "kullanici:...".
 - providers.py: Anthropic/OpenAI/Google calls, model catalog + prices, cost_level (1-5, log scale across ALL models)
 - keys.py (Fernet-encrypted keys), prefs.py, spending.py (JSONL log): all store under ~/.palimpsest/
 - index.html: entire UI (CSS + JS inline). Served from disk on every request, so UI edits need no restart.

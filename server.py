@@ -21,6 +21,8 @@ import json
 import glob
 import shutil
 import datetime
+import gzip
+import pickle
 import io
 import zlib
 import struct
@@ -57,14 +59,15 @@ if os.path.isdir(_OLD_PROJECTS_DIR) and not os.listdir(PROJECTS_DIR):
 
 
 def clean_pending(max_age_hours=24):
-    """PDFs of imports whose review screen was abandoned: projects/_pending/*.pdf older than a day. Returns the count."""
+    """Imports whose review screens were abandoned: projects/_pending/* (the PDF, the analysis, the questions and
+    answers) older than a day. Returns the count of files removed."""
     d = os.path.join(PROJECTS_DIR, "_pending")
     if not os.path.isdir(d):
         return 0
     cutoff, n = datetime.datetime.now().timestamp() - max_age_hours * 3600, 0
     for name in os.listdir(d):
         path = os.path.join(d, name)
-        if name.endswith(".pdf") and os.path.isfile(path) and os.path.getmtime(path) < cutoff:
+        if name.endswith((".pdf", ".state.pkl.gz", ".review.json")) and os.path.isfile(path) and os.path.getmtime(path) < cutoff:
             os.remove(path)
             n += 1
     return n
@@ -400,6 +403,9 @@ def save_project():
         json.dump(d, f, ensure_ascii=False, indent=2)
     if os.path.exists(pdf_path(d["id"], True)) and not os.path.exists(pdf_path(d["id"])):
         os.replace(pdf_path(d["id"], True), pdf_path(d["id"]))
+    for ext in ("state.pkl.gz", "review.json"):          # the import is a project now: its review is done
+        if os.path.exists(pending_file(d["id"], ext)):
+            os.remove(pending_file(d["id"], ext))
     return jsonify({"ok": True, "updated": d["updated"]})
 
 
@@ -468,7 +474,7 @@ def page_image():
     """One page of a project's PDF copy, drawn on request at `scale` (1 = 72 dpi) - nothing is written to disk.
     The boxes in segMeta are PDF points from the top-left corner: multiply by the image width / page width."""
     pid, page = request.args.get("project", ""), request.args.get("page", "")
-    path = pdf_path(pid) if pid else ""
+    path = (pdf_path(pid) if os.path.exists(pdf_path(pid)) else pdf_path(pid, True)) if pid else ""   # a review: still pending
     if not path or not os.path.exists(path):
         return jsonify({"error": "Bu projenin PDF kopyası yok."}), 404
     try:
@@ -600,6 +606,121 @@ def export_docx():
                      mimetype="application/vnd.openxmlformats-officedocument.wordprocessingml.document")
 
 
+# --------------------------------------------------------------------------
+# PDF import, then the review screen (free), then /setup (paid)
+# --------------------------------------------------------------------------
+
+def pending_file(pid, ext):
+    safe = re.sub(r"[^a-zA-Z0-9_-]", "_", pid)[:80]
+    return os.path.join(PROJECTS_DIR, "_pending", f"{safe}.{ext}")
+
+
+def _load_review(pid):
+    try:
+        return json.load(open(pending_file(pid, "review.json"), encoding="utf-8"))
+    except (OSError, ValueError):
+        return None
+
+
+def _decisions(rv):
+    """the review's answers (in question order) and its edits, as pdf_import decisions"""
+    import review
+    out = []
+    for q in rv["questions"]:
+        a = rv["answers"].get(q["id"])
+        if a:
+            out += review.decisions_for(q, a.get("key"), a.get("all", True))
+    return out + list(rv.get("edits", []))
+
+
+def _render_review(pid, rv):
+    """the pending import rendered with the review's decisions: (markdown, warnings, seg_meta, seg_bids) as the
+    project will get them, footnotes moved behind the paragraph citing them"""
+    import pdf_import
+    state = pickle.loads(gzip.decompress(open(pending_file(pid, "state.pkl.gz"), "rb").read()))
+    r = pdf_import.render(state, _decisions(rv))
+    raw = [x.strip() for x in re.split(r"\n\s*\n", r["md"]) if x.strip()]
+    segs, _ = segment(r["md"])
+    return dict(md=r["md"], warnings=r["warnings"], raw_meta=r["meta"], meta=carry_meta(raw, segs, r["meta"]),
+                bids=carry_meta(raw, segs, r["doc"].seg_bids), segs=segs, state=state)
+
+
+def _review_payload(pid, rv):
+    x = _render_review(pid, rv)
+    segs, meta, bids, warnings, d = x["segs"], x["meta"], x["bids"], x["warnings"], x["state"]["doc"]
+    return dict(rv, segments=segs, segMeta=meta, segBids=bids, warnings=warnings,
+                pageSizes={p["p"]: [round(p["W"], 1), round(p["H"], 1)] for p in d.pages})
+
+
+@app.route("/import", methods=["POST"])
+def import_pdf():
+    """A PDF's free half: analysis, the markdown as the importer reads it, and the review screen's questions. The
+    PDF, the analysis and the review wait in projects/_pending/ until the project is saved (or a day passes)."""
+    f, pid = request.files.get("file"), request.form.get("project_id", "")
+    if not f or not pid or not f.filename.lower().endswith(".pdf"):
+        return jsonify({"error": "Kontrol ekranı için bir PDF ve proje kimliği gerekli."}), 400
+    try:
+        import pdf_import
+        import review
+    except ImportError:
+        return jsonify({"error": missing_library("PDF içe aktarma", "pypdfium2")}), 400
+    data = f.read()
+    try:
+        state = pdf_import.analyse(data, request.form.get("first_page"), request.form.get("last_page"))
+    except pdf_import.PdfImportError as e:
+        return jsonify({"error": str(e)}), 400
+    os.makedirs(os.path.dirname(pending_file(pid, "x")), exist_ok=True)
+    with open(pending_file(pid, "state.pkl.gz"), "wb") as out:
+        out.write(gzip.compress(pickle.dumps(state, protocol=pickle.HIGHEST_PROTOCOL), 3))
+    rendered = pdf_import.render(state)              # the pristine state is on disk; this copy may change
+    rv = dict(id=pid, name=request.form.get("name", ""), first=state["first"], last=state["last"],
+              pages=len(state["doc"].pages), questions=review.questions(state, rendered), answers={}, edits=[],
+              integrity=review.integrity(state))
+    json.dump(rv, open(pending_file(pid, "review.json"), "w", encoding="utf-8"), ensure_ascii=False)
+    keep_pending_pdf(pid, data)
+    return jsonify(_review_payload(pid, rv))
+
+
+@app.route("/import/<pid>", methods=["GET"])
+def import_review(pid):
+    """the review screen as it was left (a page reload)"""
+    rv = _load_review(pid)
+    if rv is None:
+        return jsonify({"error": "Bu içe aktarma bulunamadı (bir günden eski olabilir); PDF'i yeniden yükle."}), 404
+    return jsonify(_review_payload(pid, rv))
+
+
+@app.route("/import/<pid>/lines", methods=["GET"])
+def import_lines(pid):
+    """the lines of a segment's blocks, for "böl": [{bid, line, text}] (line 0 of a later block splits between blocks)"""
+    rv = _load_review(pid)
+    if rv is None:
+        return jsonify({"error": "Bu içe aktarma bulunamadı."}), 404
+    x = _render_review(pid, rv)
+    try:
+        bids = x["bids"][int(request.args.get("seg", ""))] or []
+    except (ValueError, IndexError):
+        return jsonify({"error": "Böyle bir paragraf yok."}), 400
+    blocks = {b.get("bid"): b for p in x["state"]["doc"].pages for b in p["blocks"]}
+    out = [dict(bid=bid, line=k, text=l["plain"].replace("\x02", "-").strip())
+           for bid in bids if bid in blocks for k, l in enumerate(blocks[bid]["lines"])]
+    return jsonify({"lines": out})
+
+
+@app.route("/import/<pid>/answers", methods=["POST"])
+def import_answers(pid):
+    """answers {question id: {key, all}} and edits (pdf_import decisions: join/split/drop) saved, the import rendered
+    again with them"""
+    rv = _load_review(pid)
+    if rv is None:
+        return jsonify({"error": "Bu içe aktarma bulunamadı (bir günden eski olabilir); PDF'i yeniden yükle."}), 404
+    d = request.get_json() or {}
+    rv["answers"] = {k: v for k, v in (d.get("answers") or {}).items() if v and v.get("key") not in (None, "skip")}
+    rv["edits"] = [e for e in (d.get("edits") or []) if isinstance(e, dict)]
+    json.dump(rv, open(pending_file(pid, "review.json"), "w", encoding="utf-8"), ensure_ascii=False)
+    return jsonify(_review_payload(pid, rv))
+
+
 @app.route("/setup", methods=["POST"])
 def setup():
     f = request.files.get("file")
@@ -607,11 +728,20 @@ def setup():
     tgt = request.form.get("target_lang", "Turkish")
     project_name = request.form.get("name", "")
     provider, model = parse_model_key(request.form.get("model"))
-    if not f:
+    import_id = request.form.get("import_id", "")
+    if not f and not import_id:
         return jsonify({"error": "No file received."}), 400
     pdf_warnings, pdf_scanned, pdf_meta, pdf_bytes = [], False, None, None
     try:
-        if f.filename.lower().endswith(".pdf"):
+        if import_id:                                   # a reviewed PDF: rendered with the review's decisions
+            rv = _load_review(import_id)
+            if rv is None:
+                return jsonify({"error": "Bu içe aktarma bulunamadı (bir günden eski olabilir); PDF'i yeniden yükle."}), 404
+            import pdf_import
+            x = _render_review(import_id, rv)
+            text, pdf_warnings, pdf_meta = x["md"], x["warnings"], x["raw_meta"]
+            pdf_scanned = pdf_import.SCANNED_WARNING in pdf_warnings
+        elif f.filename.lower().endswith(".pdf"):
             # imported here, not at the top: a missing pypdfium2 must only switch PDF import off,
             # never stop the server from starting
             try:
@@ -666,7 +796,8 @@ def setup():
         return jsonify({"segments": segs, "synopsis": condensed, "terms": terms,
                         "setup_cost": round(total_cost, 4), "count": len(segs),
                         "warnings": warnings, "scanned": pdf_scanned, "segMeta": seg_meta,
-                        "pdfKept": keep_pending_pdf(request.form.get("project_id"), pdf_bytes)})
+                        "pdfKept": keep_pending_pdf(request.form.get("project_id"), pdf_bytes)
+                        or bool(import_id and os.path.exists(pdf_path(import_id, True)))})
     except Exception as e:
         spent = f" ({_spent(spent_tokens, spent_cost)})" if spent_tokens else ""
         return jsonify({"error": f"Bağlam okuması başarısız: {e}{spent}"}), 500
