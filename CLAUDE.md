@@ -35,6 +35,7 @@ Local, single-user book translation tool. Flask backend + one vanilla-JS file fr
 ## Working agreements
 - Verify every UI change in a real browser (screenshot + console errors) before calling it done.
 - Ask before: commit, push, restarting the user's running server, spending API money, touching real projects.
+- Brief'te olmayan ekleme ya da kural değişikliği commit'ten ÖNCE sorulur; bir eşiği tutturmak için yapılan değişiklik ayrıca belirtilir.
 - Commit messages explain WHY. Never commit .claude/.
 - UI taste: quiet and distraction-proof. Paper/serif look, monospace uppercase labels, small line icons, no filled loud highlights, no extra buttons when position can say it. Prefer removing text over adding it.
 - Do not add features, abstractions or config that were not asked for.
