@@ -1,9 +1,29 @@
 # Değişiklikler
 
-## Yayınlanmamış
+## 1.2.0 — 2026-10-26
+
+### Yeni
+- **Kontrol ekranı.** PDF içe aktarıldıktan sonra, ücretli kurulumdan önce, içe aktarıcının emin olmadığı yerler
+  sayfa görüntüsünün yanında tek tek sorulur. Benzer yerler tek soruda toplanır (kaynakça, tablo, aynı görünen
+  satırlar); "Tek tek sor" ile grup açılıp her yer ayrı cevaplanabilir. Bir alıntı ya da övgü ile altındaki isim
+  satırı birlikte sorulur.
+- **Projede rol değiştirme.** Bir paragrafın rolü (başlık, epigraf, alıntı, şiir, atıf, kutu…) çeviri ekranında
+  değiştirilebilir.
+- **Birimler.** Birkaç paragraflık epigraf, alıntı, şiir ve kutular tek parça olarak tanınır ve birlikte değişir.
+- **Notlar.** Birkaç sayfaya yayılan son notlar ve harfli ya da simgeli (*, †) dipnotlar eşleştirilir; eşleşmeyen
+  notlar kontrol ekranında sorulur.
+- **İçindekiler** çeviriden çıkarılır, başlıkları doğrulamak için kullanılır; istenirse kontrol ekranından geri
+  alınır.
+- **Ön sayfalar.** Künye ve başlık sayfası dışındaki ön sayfa metni (ithaf, övgüler, yazar notu) korunur ve sayfa
+  başına "çevrilsin mi?" diye sorulur.
 
 ### Değişenler
-- Homebrew ile dağıtım bırakıldı; kurulum başlatıcılarla.
+- Homebrew ile dağıtım bırakıldı; kurulum yalnız başlatıcılarla.
+
+### Bilinen sınırlar
+- Başlık seviyeleri (kısım/bölüm/alt başlık) bazı kitaplarda doğru çıkmıyor.
+- Görsel kutular (renkli zeminli kutular, şekil başlıkları) her zaman tanınmıyor.
+- Windows başlatıcısı (`start.bat`) gerçek bir Windows'ta denenmedi.
 
 ## 1.1.0 — 2026-10-25
 
