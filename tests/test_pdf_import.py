@@ -1480,5 +1480,54 @@ check("citation: author and year, a title, ibid., a quoted phrase, et al., a nam
 got = refs_of(["See p. 4 of the guide."], heads=["Bibliography"])
 check("page reference: none inside a bibliography", got == [None], got)
 
+# ---------------------------------------------------------------- Marker reader: layout from Marker, text from pdfium
+import marker_reader as MR
+
+js = {"children": [{"block_type": "Page", "bbox": [0, 0, 500, 700], "children": [
+    {"block_type": "PageHeader", "bbox": [90, 30, 300, 45], "id": "/page/0/PageHeader/0"},
+    {"block_type": "ListGroup", "bbox": [0, 0, 1, 1], "children": [
+        {"block_type": "ListItem", "bbox": [1, 2, 3, 4], "id": "/page/0/ListItem/1"}]},
+    {"block_type": "Table", "bbox": [5, 6, 7, 8], "id": "/page/0/Table/2",
+     "children": [{"block_type": "Line", "bbox": [5, 6, 7, 8]}]}]}]}
+got = [(b["t"], b["bbox"]) for b in MR._compact(js)[0]["blocks"]]
+check("marker layout: groups give their children, a table's lines are no blocks",
+      got == [("PageHeader", [90, 30, 300, 45]), ("ListItem", [1, 2, 3, 4]), ("Table", [5, 6, 7, 8])], got)
+
+# Marker's page is a little larger than pdfium's (it rounds): boxes are scaled to the page
+para1 = line("First paragraph of plain text runs", 60, 120) + line("on to a second line here.", 60, 134, idx0=40)
+para2 = line("Second paragraph starts below it.", 60, 170, idx0=80)
+head = line("Running Head", 100, 40, "Head-Small", 8, idx0=120)
+stray = line("lost words", 60, 300, idx0=140)                 # in no Marker block
+row1 = line("Alpha", 60, 400, idx0=160) + line("12", 300, 400, idx0=170)
+row2 = line("Beta", 60, 414, idx0=180) + line("34", 300, 414, idx0=190)
+label = line("axis", 120, 520, "Label-Regular", 7, idx0=200)
+mpage = dict(W=500 * 1.002, H=700 * 1.002, blocks=[
+    dict(t="PageHeader", bbox=[95, 30, 200, 45]),
+    dict(t="Text", bbox=[58, 108, 300, 137]),
+    dict(t="Text", bbox=[58, 158, 300, 173]),
+    dict(t="Table", bbox=[58, 388, 320, 417]),
+    dict(t="Picture", bbox=[100, 480, 300, 560]),
+    dict(t="Text", bbox=[58, 600, 300, 620])])               # holds no glyph
+pg = P.marker_blocks(1, 500, 700, para1 + para2 + head + stray + row1 + row2 + label, [], frozenset(), [], [], [], mpage)
+txt = [(b["mk"], b["text"]) for b in pg["blocks"]]
+check("marker reader: one block per Marker block, its lines from pdfium, in Marker's order",
+      txt[:3] == [("PageHeader", "Running Head"), ("Text", "First paragraph of plain text runs on to a second line here."),
+                  ("Text", "Second paragraph starts below it.")], txt)
+check("marker reader: a line no block holds is an orphan block at its place, not lost",
+      ("lost words" in [t for _, t in txt]) and [b for b in pg["blocks"] if b["text"] == "lost words"][0].get("orphan")
+      and [t for _, t in txt].index("lost words") == 3, txt)
+check("marker reader: a table without rules is one block per row, cells left to right",
+      [t for m, t in txt if m == "Table"] == ["Alpha 12", "Beta 34"], txt)
+check("marker reader: a label inside a Marker picture is figure text, the picture an item",
+      pg["fig_text"] == ["axis"] and [it["kind"] for it in pg["items"]] == ["image"] and "axis" not in [t for _, t in txt],
+      (pg["fig_text"], pg["items"]))
+bx = lambda n, x0, top, x1, bot: dict(n=n, x0=x0, top=top, x1=x1, bot=bot)
+got = [b["n"] for b in P._top_down([bx("foot", 60, 680, 300, 690), bx("body", 60, 200, 300, 400), bx("head", 60, 100, 300, 120),
+                                     bx("right", 320, 50, 480, 300)])]
+check("marker reader: Marker's order, but a block wholly above another in its column comes first",
+      got == ["head", "body", "foot", "right"], got)
+check("marker reader: counts Marker blocks, empty ones and orphan lines",
+      pg["mk"] == dict(blocks=6, empty=1, orphan_lines=1), pg["mk"])
+
 print("FAILED %d" % failed if failed else "ALL PASS")
 sys.exit(1 if failed else 0)

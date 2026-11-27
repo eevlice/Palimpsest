@@ -188,7 +188,7 @@ THRESHOLDS = {
     "head_min_blocks": 5,         # a heading style has at least this many blocks - round 0
     "head_min_pages": 3,          # ...on this many pages - round 0
     "head_min_chars": 4,          # ...this many characters per block - round 0
-    "head_short_display": 0.8,    # ...this share of short blocks for display type - round 5, Characters
+    "head_short_display": 0.8,    # ...this share of short blocks for display type (short by characters only: a long title wraps to 4+ lines) - round 5, Characters; marker A
     "head_words": 12,             # ...at most this many words per block - round 0
     "head_words_display": 20,     # ...this many for display type - round 5, Characters
     "head_sent": 0.5,             # ...fewer than this share ending a sentence - round 0
@@ -286,6 +286,7 @@ THRESHOLDS = {
     "q_region_gap": 4,            # role/style questions in one chapter at most this many pages apart are one question when on one page or at one size (a reference list, a table, a page of figure text) - grouping round
     "q_attr_words": 15,           # a line under a quote, an epigraph or praise text read as its attribution has at most this many words - grouping round
     "q_short_words": 12,          # ...and short lines (at most this many words) of one style anywhere in the book are one question - grouping round
+    "mk_line_share": 0.5,         # Marker reader: a line goes to the Marker block holding at least this share of its box; else it is an orphan - marker A
 }
 
 
@@ -939,7 +940,8 @@ def _finish_block(b):
     b["text"] = " ".join(l["plain"] for l in ls)
 
 
-def build_blocks(page_no, W, H, chars, boxes, orn_fonts=frozenset(), images=(), hl=(), vl=()):
+def _page_text(W, H, chars, orn_fonts):
+    """the page's own glyphs: (chars, src_chars, orn_chars, rotated)"""
     # text outside the page box (facing-page copies in spreads) is not part of this page
     sl = T["page_slack"]
     chars = [c for c in chars if -sl <= (c.x0 + c.x1) / 2 <= W + sl and -sl <= (c.top + c.bot) / 2 <= H + sl]
@@ -947,9 +949,17 @@ def build_blocks(page_no, W, H, chars, boxes, orn_fonts=frozenset(), images=(), 
     orn_chars = sum(1 for c in chars if c.ch.strip() and not c.rot and c.font in orn_fonts)   # ornaments: left out
     # text set at an angle is a watermark or an edge tab, never part of the reading flow
     rotated = sum(1 for c in chars if c.rot and c.ch.strip())
-    chars = [c for c in chars if not c.rot]
+    return [c for c in chars if not c.rot], src_chars, orn_chars, rotated
+
+
+def _inside(c, b):
     bs = T["box_slack"]
-    inside = lambda c, b: b[0] - bs <= (c.x0 + c.x1) / 2 <= b[2] + bs and b[1] - bs <= (c.top + c.bot) / 2 <= b[3] + bs
+    return b[0] - bs <= (c.x0 + c.x1) / 2 <= b[2] + bs and b[1] - bs <= (c.top + c.bot) / 2 <= b[3] + bs
+
+
+def _figures(page_no, chars, images, orn_fonts):
+    """figure items, and the lettering inside them taken out of the text: (chars, items, fig_words, fig_text)"""
+    inside = _inside
     items, fig_words, fig_text = [], 0, []
     # a figure: its place in the flow, and the lettering inside it (diagram labels) belongs to the figure. Judged line
     # by line: only a line wholly inside the picture goes, and never a title or caption printed inside the picture's
@@ -980,10 +990,15 @@ def build_blocks(page_no, W, H, chars, boxes, orn_fonts=frozenset(), images=(), 
             fig_words += words
             fig_text.append(" ".join("".join(c.ch for c in l["chars"]) for l in own_lines))
         items.append(dict(kind="image", page=page_no, n=k, x0=im[0], top=im[1], x1=im[2], bot=im[3]))
-    # ruled tables: one segment each; a table with merged cells is marked like a figure
+    return chars, items, fig_words, fig_text
+
+
+def _tables(page_no, chars, hl, vl):
+    """ruled tables: one segment each; a table with merged cells is marked like a figure. (chars, items)"""
+    items = []
     for k, gr in enumerate(find_grids(hl, vl) if hl and vl else [], 1):
         box = (gr["xs"][0], gr["ys"][0], gr["xs"][-1], gr["ys"][-1])
-        own = [c for c in chars if inside(c, box)]
+        own = [c for c in chars if _inside(c, box)]
         md = None if gr["complex"] else grid_markdown(gr, own, page_no)
         if not own or (md is None and not gr["complex"]):
             continue
@@ -992,6 +1007,14 @@ def build_blocks(page_no, W, H, chars, boxes, orn_fonts=frozenset(), images=(), 
         items.append(dict(kind="table", page=page_no, n=k, x0=box[0], top=box[1], x1=box[2], bot=box[3], md=md,
                           complex=gr["complex"], words=_word_count(own, page_no),
                           text="".join(c.ch for c in sorted(own, key=lambda c: c.idx))))
+    return chars, items
+
+
+def build_blocks(page_no, W, H, chars, boxes, orn_fonts=frozenset(), images=(), hl=(), vl=()):
+    chars, src_chars, orn_chars, rotated = _page_text(W, H, chars, orn_fonts)
+    chars, items, fig_words, fig_text = _figures(page_no, chars, images, orn_fonts)
+    chars, tables = _tables(page_no, chars, hl, vl)
+    items += tables
     lines = build_lines(chars, page_no, orn_fonts)
     for l in lines:
         _prepare_line(l)
@@ -1065,6 +1088,137 @@ def build_blocks(page_no, W, H, chars, boxes, orn_fonts=frozenset(), images=(), 
         _finish_block(b)
     return dict(p=page_no, W=W, H=H, blocks=blocks, boxes=boxes, rotated=rotated, items=items, fig_words=fig_words,
                 fig_text=fig_text, src_chars=src_chars, orn_chars=orn_chars)
+
+
+# Marker's block types (marker_reader): pictures, tables, and the rest, which hold text
+MK_PICTURE = {"Picture", "Figure", "Diagram"}
+MK_TABLE = {"Table", "Form"}
+
+
+def _overlap(l, bb):
+    """share of a line's box inside a block's box"""
+    w = max(0.0, min(l["x1"], bb[2]) - max(l["x0"], bb[0]))
+    h = max(0.0, min(l["bot"], bb[3]) - max(l["top"], bb[1]))
+    area = max(1e-6, (l["x1"] - l["x0"]) * (l["bot"] - l["top"]))
+    return w * h / area
+
+
+def _top_down(blocks):
+    """Marker's reading order, except that a block wholly above another in its column comes first (Marker can put a
+    chapter opener's heading after the text under it, or a page foot first). A stable topological order: the next
+    block is the first in Marker's order with nothing still unplaced above it."""
+    sl = T["overlap_pt"]
+
+    def above(a, b):
+        return (a["bot"] <= b["top"] + sl and min(a["x1"], b["x1"]) - max(a["x0"], b["x0"]) > 0)
+    left, out = list(blocks), []
+    while left:
+        k = next((i for i, b in enumerate(left) if not any(above(a, b) for a in left if a is not b)), 0)
+        out.append(left.pop(k))
+    return out
+
+
+def marker_blocks(page_no, W, H, chars, boxes, orn_fonts, images, hl, vl, mpage):
+    """Stage 3 with Marker's layout (PALIMPSEST_READER=marker): the blocks, their order and the figures come from
+    Marker (mpage: marker_reader's page), the text from pdfium's glyphs. Lines are built from the glyphs as always
+    (stage 2) and each goes to the Marker block holding most of it; a line no block holds ("orphan") becomes a block
+    of its own at its place, so no text is lost. Ruled tables are found as before; a table Marker sees without rules is
+    kept as text, one block per row. Every block and line carries Marker's type in "mk"."""
+    chars, src_chars, orn_chars, rotated = _page_text(W, H, chars, orn_fonts)
+    sx, sy = W / (mpage["W"] or W), H / (mpage["H"] or H)
+    mbs = [dict(b, bbox=(b["bbox"][0] * sx, b["bbox"][1] * sy, b["bbox"][2] * sx, b["bbox"][3] * sy)) for b in mpage["blocks"]]
+    # figures: Marker's pictures (vector diagrams too), and pdfium's images Marker did not see; a picture covering the
+    # page is a background, not a figure
+    full = T["fullpage_image_share"] * W * H
+    pics = [b["bbox"] for b in mbs if b["t"] in MK_PICTURE and (b["bbox"][2] - b["bbox"][0]) * (b["bbox"][3] - b["bbox"][1]) < full]
+    area = lambda r: max(0.0, r[2] - r[0]) * max(0.0, r[3] - r[1])
+    inter = lambda a, b: area((max(a[0], b[0]), max(a[1], b[1]), min(a[2], b[2]), min(a[3], b[3])))
+    pics += [im for im in images if not any(inter(im, p) > 0.5 * area(im) for p in pics)]
+    chars, items, fig_words, fig_text = _figures(page_no, chars, pics, orn_fonts)
+    chars, tables = _tables(page_no, chars, hl, vl)
+    items += tables
+    lines = build_lines(chars, page_no, orn_fonts)
+    for l in lines:
+        _prepare_line(l)
+        l["box"] = _in_box(l, boxes)
+    texts = [b for b in mbs if b["t"] not in MK_PICTURE]
+    own = collections.defaultdict(list)
+    orphans = []
+    for l in lines:
+        # Marker's boxes can overlap (a list item over the paragraph before it): of the boxes holding the line, the
+        # smallest
+        held = [k for k, mb in enumerate(texts) if _overlap(l, mb["bbox"]) >= T["mk_line_share"]]
+        if held:
+            best = min(held, key=lambda k: area(texts[k]["bbox"]))
+            l["mk"] = texts[best]["t"]
+            own[best].append(l)
+        else:
+            l["mk"] = None
+            orphans.append(l)
+
+    def block(ls, mk):
+        mix = collections.Counter()
+        for l in ls:
+            mix.update(l["mix"])
+        bx = collections.Counter(l["box"] for l in ls).most_common(1)[0][0]
+        b = dict(lines=ls, style=mix.most_common(1)[0][0], box=bx, page=page_no, list=bool(ITEM.match(ls[0]["plain"])),
+                 mix=mix, mk=mk)
+        _finish_block(b)
+        return b
+
+    def split(ls):
+        """Marker sometimes holds a heading and the paragraph under it, or several list items, in one block: it is
+        split where a line's style changes (unless the change is an inline run: an italic title, a bold lead-in, a
+        sentence going on in lowercase) and where a list item starts. Gaps and indents are left to Marker."""
+        parts = [[ls[0]]]
+        for l in ls[1:]:
+            a, cur = parts[-1][-1], parts[-1]
+            style = collections.Counter(s for x in cur for s in x["mix"].elements()).most_common(1)[0][0]
+            inline = (abs(l["size"] - a["size"]) <= T["inline_size_pt"]
+                      and (style in l["mix"] or l["style"] in a["mix"]
+                           or (not terminal(a["plain"]) and bool(re.match(r"[\W\d_]*[a-z]", l["plain"])))))
+            if (l["style"] != style and not inline) or (ITEM.match(l["plain"]) and len(l["plain"].strip()) > T["item_min_chars"]):
+                parts.append([l])
+            else:
+                cur.append(l)
+        return parts
+    order = lambda l: (round(l["base"]), l["x0"])
+    blocks, empty = [], 0
+    for k, mb in enumerate(texts):
+        ls = sorted(own.get(k, ()), key=order)
+        if not ls:
+            empty += mb["t"] not in MK_TABLE
+            continue
+        if mb["t"] in MK_TABLE:
+            # a table without rules: one block per row (lines on one baseline), its cells left to right
+            rows = []
+            for l in ls:
+                if rows and abs(l["base"] - rows[-1][0]["base"]) <= max(T["row_base_pt"], T["row_base_em"] * l["size"]):
+                    rows[-1].append(l)
+                else:
+                    rows.append([l])
+            blocks += [block(sorted(r, key=lambda l: l["x0"]), mb["t"]) for r in rows]
+        else:
+            blocks += [block(part, mb["t"]) for part in split(ls)]
+    # an orphan line goes before the first block (in reading order) below it in its column, else at the end; orphan
+    # lines next to each other in one style are one block
+    for l in sorted(orphans, key=order):
+        prev = next((b for b in blocks if b.get("orphan") and b["style"] == l["style"]
+                     and 0 < l["base"] - b["lines"][-1]["base"] < T["pitch_max_em"] * l["size"]
+                     and abs(l["x0"] - b["x0"]) < T["indent_em"] * l["size"]), None)
+        if prev:
+            prev["lines"].append(l)
+            prev["mix"].update(l["mix"])
+            _finish_block(prev)
+            continue
+        b = block([l], None)
+        b["orphan"] = True
+        at = next((i for i, x in enumerate(blocks) if x["top"] >= l["bot"] and x["x0"] < l["x1"] and l["x0"] < x["x1"]), len(blocks))
+        blocks.insert(at, b)
+    blocks = _top_down(blocks)
+    return dict(p=page_no, W=W, H=H, blocks=blocks, boxes=boxes, rotated=rotated, items=items, fig_words=fig_words,
+                fig_text=fig_text, src_chars=src_chars, orn_chars=orn_chars,
+                mk=dict(blocks=len(mbs), empty=empty, orphan_lines=len(orphans)))
 
 
 # ====================================================================================================================
@@ -1166,11 +1320,16 @@ class _Margins:
                     bodylike = l["style"] == bstyle or (abs(l["size"] - bsize) <= T["body_size_pt"] and l["x1"] - l["x0"] > T["half_measure"] * bwidth)
                     band = ((l["top"] < T["band_top"] * p["H"] or l["top"] > T["band_bot"] * p["H"]) and not bodylike
                             and len(same[(l["style"], _similar_key(l["plain"]))]) >= T["repeat_pages"])
+                    # Marker reader: a line Marker reads as a page head or foot goes when it lies in the margin, unless
+                    # it starts with a callout's number on its page (a footnote, Sazima)
+                    fs = FOOT_START.match(l["plain"]) if l.get("mk") in ("PageHeader", "PageFooter") else None
+                    mk = bool(l.get("mk") in ("PageHeader", "PageFooter") and l["zone"] and not (fs and fs.group(1) in calls[p["p"]]))
                     l["sil"] = bool(
                         (l["zone"] and PAGE_NO.match(l["plain"]))
                         or (l["zone"] and l["key"] and len(rep[(l["zone"], l["key"])]) >= T["repeat_pages"] and l["size"] <= T["margin_size"] * bsize)
                         or head
-                        or (band and len(pos[(l["style"], round(l["top"] / T["pos_cell_pt"]))]) >= need))
+                        or (band and len(pos[(l["style"], round(l["top"] / T["pos_cell_pt"]))]) >= need)
+                        or mk)
                     p["running_removed"] += l["sil"] and not PAGE_NO.match(l["plain"])
                 kept = [l for l in b["lines"] if not l["sil"]]
                 b["sil"] = not kept
@@ -1420,7 +1579,7 @@ class _Styles:
                     continue
                 s = S.setdefault(b["style"], dict(words=0, pages=set(), first=p["p"], last=p["p"], blocks=0, lines=0,
                                                   chars=0, inbox=0, caps=0, short=0, ital=0, num=0, dash=0, letters=0,
-                                                  multiline=0, mlines=0, sent=0, wts=[], edge=0))
+                                                  multiline=0, mlines=0, sent=0, wts=[], edge=0, short_c=0))
                 txt = b["text"]
                 letters = [c for c in txt if c.isalpha()]
                 s["words"] += b["nwords"]
@@ -1433,6 +1592,7 @@ class _Styles:
                 s["caps"] += (sum(c.isupper() for c in letters) / max(1, len(letters)) > T["caps_share"])
                 s["letters"] += len(letters)
                 s["short"] += (len(b["lines"]) <= T["short_lines"] and len(txt) <= T["short_chars"])
+                s["short_c"] += len(txt) <= T["short_chars"]     # display type: a long title wraps to 4+ lines
                 s["ital"] += b["italic_share"] > T["italic_share"]
                 s["num"] += bool(NUM.match(b["lines"][0]["plain"]))
                 s["dash"] += bool(DASH.match(txt))
@@ -1522,7 +1682,7 @@ class _Styles:
         marginal = lambda k: S[k]["edge"] / S[k]["blocks"] >= T["marginal_share"] and fam_of(k)[1] <= T["margin_size"] * bsize
         cands = [k for k, s in S.items() if k not in sugg and s["blocks"] >= T["head_min_blocks"] and len(s["pages"]) >= T["head_min_pages"]
                  and s["chars"] / s["blocks"] >= T["head_min_chars"]
-                 and s["short"] / s["blocks"] >= (T["head_short_display"] if display(k) else T["short_share"])
+                 and (s["short_c"] if display(k) else s["short"]) / s["blocks"] >= (T["head_short_display"] if display(k) else T["short_share"])
                  and s["words"] / s["blocks"] <= (T["head_words_display"] if display(k) else T["head_words"])
                  and s["sent"] / s["blocks"] < T["head_sent"] and emph(k) and s["inbox"] / s["blocks"] < T["head_inbox"]
                  and s["words"] >= T["head_min_words"] and s["num"] / s["blocks"] < T["head_num"] and big_enough(k)
@@ -3517,8 +3677,21 @@ def analyse(pdf_bytes, first_page=None, last_page=None):
     orn = frozenset(f for f, c in font_count.items() if c < T["ornament_glyphs"] and ORNAMENT_FONT.search(f))
     tint = {i + 1: rp[3] for i, rp in enumerate(raw_pages)}
     pages = []
+    reader = os.environ.get("PALIMPSEST_READER", "eski")
+    mk = None
+    if reader == "marker":
+        import marker_reader
+        try:
+            mk = marker_reader.layout(pdf_bytes)["pages"]
+        except marker_reader.MarkerError as e:
+            raise PdfImportError(str(e))
+        if len(mk) != n:
+            raise PdfImportError(f"Marker {len(mk)} sayfa okudu, PDF'te {n} sayfa var.")
     for i, (W, H, chars, boxes, gfx) in enumerate(raw_pages):
-        pages.append(build_blocks(i + 1, W, H, chars, boxes, orn, gfx["images"], gfx["hl"], gfx["vl"]))
+        if mk is None:
+            pages.append(build_blocks(i + 1, W, H, chars, boxes, orn, gfx["images"], gfx["hl"], gfx["vl"]))
+        else:
+            pages.append(marker_blocks(i + 1, W, H, chars, boxes, orn, gfx["images"], gfx["hl"], gfx["vl"], mk[i]))
     raw_pages = None
     d = Doc(pages)
     info = doc.get_metadata_dict()
@@ -3536,7 +3709,7 @@ def analyse(pdf_bytes, first_page=None, last_page=None):
             b["bid"] = f"{pg['p']}.{k}"            # stable through renders: the review screen's decisions name blocks
     d.toc_ids()
     return dict(doc=d, first=first, last=last,
-                ctx=dict(signals=signals, ocr=ocr, sel_ocr=sel_ocr, miner=sorted(miner), retry=sorted(retry),
+                ctx=dict(reader=reader, signals=signals, ocr=ocr, sel_ocr=sel_ocr, miner=sorted(miner), retry=sorted(retry),
                          no_miner=no_miner, textless=textless, producer=producer, tint=tint, orn=orn, outline=outline))
 
 

@@ -56,6 +56,26 @@ these are fixed values in `_shape_roles`, not thresholds. A deviation no rule na
 `stil-farkli` together with its reasons (`indent`, `indent-right`, `narrow`, `centered`, `right`, `ragged`,
 `italic-block`, `smaller`, `font`, `hanging`).
 
+## Marker reader (trial, `PALIMPSEST_READER=marker`)
+
+The default reader is the one above (`eski`). With `PALIMPSEST_READER=marker`, stage 3 takes its layout from Marker
+(`marker_reader.py`: marker-pdf with OCR and LLM off, cached per PDF under `~/.palimpsest/cache/marker`, or
+`PALIMPSEST_MARKER_CACHE`; `PALIMPSEST_MARKER_PY` runs it in a separate Python). The text is still pdfium's:
+`marker_blocks` builds lines from the glyphs (stage 2) and gives each to the Marker block holding most of it (the
+smallest, where boxes overlap). Then:
+
+- A Marker block is split where a line's style changes (not an inline run) or a list item starts; gaps and indents
+  are Marker's.
+- A line no block holds is an orphan block at its place (counted in `page["mk"]`); the margin stage removes it when it
+  is a running head or folio.
+- Order is Marker's, except that a block wholly above another in its column comes first (`_top_down`).
+- Pictures are Marker's (vector diagrams too) plus pdfium images Marker missed; lettering inside goes as before.
+  Ruled tables are found as before; a table Marker sees without rules stays text, one block per row.
+- Blocks and lines carry Marker's type in `mk`. A `PageHeader`/`PageFooter` line in the margin goes, unless it starts
+  with a callout's number on its page (a footnote).
+
+Stages 4–8 are the same for both readers.
+
 ## Scanned PDFs
 
 Every page is one of three kinds (`page_kind`): digital; scanned with an OCR layer (a full-page image under mostly
@@ -293,7 +313,7 @@ first version of the importer; later rounds are the karne rounds, with the test 
 | `head_min_blocks` | 5 | a heading style has at least this many blocks | round 0 |
 | `head_min_pages` | 3 | ...on this many pages | round 0 |
 | `head_min_chars` | 4 | ...this many characters per block | round 0 |
-| `head_short_display` | 0.8 | ...this share of short blocks for display type | round 5, Characters |
+| `head_short_display` | 0.8 | ...this share of short blocks for display type (short by characters only: a long title wraps to 4+ lines) | round 5, Characters; marker A |
 | `head_words` | 12 | ...at most this many words per block | round 0 |
 | `head_words_display` | 20 | ...this many for display type | round 5, Characters |
 | `head_sent` | 0.5 | ...fewer than this share ending a sentence | round 0 |
@@ -392,6 +412,7 @@ first version of the importer; later rounds are the karne rounds, with the test 
 | `toc_similar` | 0.82 | ...or when the two are this similar | karne tur8 |
 | `toc_level_share` | 0.6 | a contents level maps to the heading role most (this share) of its matched entries have | contents round |
 | `toc_entry_words` | 25 | a block that is a contents entry not set as a heading has at most this many words | contents round |
+| `mk_line_share` | 0.5 | Marker reader: a line goes to the Marker block holding at least this share of its box; else it is an orphan | marker A |
 
 ## Line-end hyphens
 
