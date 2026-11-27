@@ -31,13 +31,15 @@ ALTERNATIVES = {"epigraf": ["gövde", "alıntı"], "alıntı": ["gövde", "şiir
 ATTRIBUTED = ("alıntı", "epigraf", "şiir", "gövde")
 KEEPS_ATTRIBUTION = ("alıntı", "epigraf", "şiir")
 DASH = re.compile(r"[—–―-]")
+# an orphan line (Marker reader) the importer already placed: a margin line, a note, front matter, contents, index
+ORPHAN_PLACED = ("sil", "dipnot", "son not", "ön sayfa", "içindekiler", "dizin")
 SHAPE = {"indent", "indent-right", "narrow", "centered", "right", "ragged", "italic-block", "smaller", "font", "hanging"}
 TITLES = {"rol": "İşaretli yazı ne?", "stil": "İşaretli yazı ne?", "baslik": "Bu başlık içindekilerde yok. Ne olsun?",
           "atif": "Bu atıf rakamının notu bulunamadı. Ne olsun?", "not": "Bu notun atfı bulunamadı. Ne olsun?",
           "sutun": "Bu sayfa iki sütunlu okundu. Doğru mu?", "tekrar": "Bu tekrar eden yazı ne yapılsın?",
           "bagla": "Hangi atıfa bağlansın?", "icindekiler": "İçindekilerde başlık, gövdede değil. Başlık olsun mu?",
           "icindekiler-yok": "İçindekilerdeki bu başlıklar gövdede bulunamadı.",
-          "onsayfa": "Bu ön sayfa yazısı çevrilsin mi?"}
+          "onsayfa": "Bu ön sayfa yazısı çevrilsin mi?", "sahipsiz": "Bu satırlar nereye ait?"}
 
 
 def _box(p, b):
@@ -118,6 +120,15 @@ def questions(state, rendered):
             q = add(("onsayfa", p["p"]), "onsayfa", p, fb[0], "none", target=[b["bid"] for b in fb], choices=[
                 {"key": "none", "label": "Çevrilsin (şimdiki)"}, {"key": "role:sil", "label": "Atılsın"}])
             q["boxes"], q["bids"] = [_box(p, b) for b in fb], [b["bid"] for b in fb]
+    # Marker reader: lines no Marker block held (orphans) are blocks of their own, asked once per page (a stretch of
+    # pages in one chapter is one question, below); margin lines and notes the importer placed are not asked
+    for p in pages:
+        ob = [b for b in p["blocks"] if b.get("orphan") and b.get("bid") and b["role"] not in ORPHAN_PLACED]
+        if ob:
+            q = add(("sahipsiz", p["p"]), "sahipsiz", p, ob[0], "none", target=[b["bid"] for b in ob], choices=[
+                {"key": "join", "label": "Üstteki bloğa ekle"}, {"key": "none", "label": "Ayrı paragraf (şimdiki)"},
+                {"key": "role:sil", "label": "Atılsın"}])
+            q["boxes"], q["bids"] = [_box(p, b) for b in ob], [b["bid"] for b in ob]
     # 3. the contents: headings they do not list (the bookmarks too, when they are a real contents), asked only at the
     # levels the contents name (sub-headings are seldom listed: only counted); entries the body sets as no heading
     toc = getattr(d, "toc", None) if getattr(d, "toc", None) and len(d.toc["entries"]) >= 3 else None
@@ -220,7 +231,9 @@ def questions(state, rendered):
             p = d.pages[q["page"] - 1]
             q["boxes"] = [_box(p, b) for b in p["blocks"][:1]]
             q["seg"] = seg_of.get(p["blocks"][0]["bid"])
-    out = _regions(list(groups.values()), d, blocks) + _repeats(d, pages, seg_of)
+    orphan_qs = [q for q in groups.values() if q["type"] == "sahipsiz"]
+    out = (_regions([q for q in groups.values() if q["type"] != "sahipsiz"], d, blocks) + _repeats(d, pages, seg_of)
+           + _stretches(orphan_qs, d, blocks))
     out.sort(key=lambda q: (q["page"], q["type"]))
     for k, q in enumerate(out, 1):
         q["count"] = q.get("count") or len(q["targets"])
@@ -236,6 +249,28 @@ def questions(state, rendered):
             x["bids"] = x.get("bids") or [x["bid"]]
             x["id"] = "%s.%d" % (q["id"], j)
     return out
+
+
+def _chapters(d):
+    """block id -> the chapter (kısım/bölüm heading) it is in"""
+    chapter, k = {}, 0
+    for p in d.pages:
+        for b in p["blocks"]:
+            k += b["role"] in ("kısım", "bölüm")
+            chapter[b.get("bid")] = k
+    return chapter
+
+
+def _stretches(qs, d, blocks):
+    """per-page questions as one where the pages are in one chapter at most T["q_region_gap"] pages apart"""
+    chapter, runs = _chapters(d), []
+    for q in sorted(qs, key=lambda q: q["page"]):
+        last = runs[-1][-1] if runs else None
+        if last and chapter.get(q["bids"][0]) == chapter.get(last["bids"][0]) and q["page"] - last["page"] <= P.T["q_region_gap"]:
+            runs[-1].append(q)
+        else:
+            runs.append([q])
+    return [_one(run, blocks, "bolge") for run in runs]
 
 
 def _regions(qs, d, blocks):
@@ -475,6 +510,8 @@ def decisions_for(q, key, apply_all=True):
     if key.startswith("ref:"):
         k = int(key[4:])
         return [{"bid": q["bid"], "note_ref": q["refs"][k]}] if 0 <= k < len(q.get("refs", [])) else []
+    if key == "join":                                  # orphan lines: on with the segment before
+        return [{"bid": t, "join": True} for t in targets]
     if key == "drop_refs":
         return [{"bid": t, "drop_refs": True} for t in targets]
     if key == "order:rows":

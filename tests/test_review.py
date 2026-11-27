@@ -155,6 +155,25 @@ asked_twice = [dict(type="icindekiler", targets=["5.1"], page=5, bids=["5.1"]),
 check("grouping: a block the contents question asks about is not asked again",
       [q["type"] for q in R._regions(asked_twice, D, {b["bid"]: (p, b) for p in pages for b in p["blocks"]})] == ["icindekiler"])
 
+# ---------------------------------------------------------------- A2b. orphan lines of the Marker reader
+pages = []
+for p in range(1, 10):
+    bl = [blk(f"{p}.0", "bölüm" if p in (1, 7) else "gövde", "Body|11", "Chapter Heading" if p in (1, 7) else f"Body text of page {p}.")]
+    pages.append(dict(p=p, W=500, H=700, blocks=bl, two_col=False, items=[]))
+for p, k, role in ((2, 1, "gövde"), (2, 2, "gövde"), (4, 1, "gövde"), (5, 1, "sil"), (8, 1, "gövde"), (9, 1, "dipnot")):
+    pages[p - 1]["blocks"].append(blk(f"{p}.{k}", role, "Body|11", "A synthetic stray line.", orphan=True, top=200 + 20 * k))
+D = FakeDoc()
+D.pages, D.body_styles, D.index_pages = pages, {"Body|11"}, []
+D.seg_bids = [[b["bid"]] for p in pages for b in p["blocks"] if b["role"] != "sil"]
+meta = [dict(pages=[int(bids[0].split(".")[0])], flags=[]) for bids in D.seg_bids]
+qs = [q for q in R.questions(dict(doc=D, first=1, last=9, ctx=dict(outline=[])), dict(meta=meta)) if q["type"] == "sahipsiz"]
+check("orphans: one question per stretch of pages in one chapter, margin lines and notes not asked",
+      [sorted(flat(q)) for q in qs] == [["2.1", "2.2", "4.1"], ["8.1"]] and qs[0].get("scope") == "bolge", [flat(q) for q in qs])
+check("orphans: Üstteki bloğa ekle / Ayrı paragraf / Atılsın",
+      qs and [c["label"] for c in qs[0]["choices"]] == ["Üstteki bloğa ekle", "Ayrı paragraf (şimdiki)", "Atılsın"], qs and qs[0]["choices"])
+check("orphans: joined to the block above, or dropped",
+      qs and R.decisions_for(qs[1], "join") == [{"bid": "8.1", "join": True}] and R.decisions_for(qs[1], "role:sil") == [{"bid": "8.1", "role": "sil"}])
+
 # ---------------------------------------------------------------- A3. a line read as the attribution of the text above it
 def units_of(*pairs):
     """one page: (text block, line block) pairs, each block a segment of its own -> {line bid: its unit's attributions}"""

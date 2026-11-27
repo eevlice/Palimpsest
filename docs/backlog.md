@@ -29,6 +29,11 @@ Agreed, not built yet. Short items; add new ones here, remove them when they shi
 - **Epigraph/verse edge cases**: a prose wrap where only one line reaches the right edge keeps its hard break; prose
   mistaken for verse (Characters' cataloguing page) keeps its line breaks.
 
+- **Marker in the app (stage C), decided**: Marker runs in a separate process (the server starts it and reads the
+  result from a file or pipe), so a crash does not take the server down and its memory goes back when it ends. Its
+  environment is the repo's .venv only; the marker-pdf 2.0.0 / torch 2.8 found in the system Python is not relied on.
+- **Marker --use_llm (Haiku) on table pages only**: chosen by the triage; with OCR off Marker gives tables no cells.
+
 ## Editor / UI
 
 - **Review screen, "örnekleri gör":** when "Kitapta aynı görünen N yere de uygula" has a large N (Sazima: 103 block
